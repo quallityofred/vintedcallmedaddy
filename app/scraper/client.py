@@ -40,7 +40,6 @@ class CloudflareFallback:
         self._block_counts: dict[str, int] = {}
         self._using_cf: dict[str, bool] = {}
         self._cf_activated_at: dict[str, float] = {}
-        self._direct_success_after_recovery: dict[str, int] = {}
 
     @property
     def is_configured(self) -> bool:
@@ -59,7 +58,6 @@ class CloudflareFallback:
                 )
                 self._using_cf[domain] = False
                 self._block_counts[domain] = 0
-                self._direct_success_after_recovery[domain] = 0
                 return False
             return True
         return False
@@ -79,7 +77,6 @@ class CloudflareFallback:
 
     def report_direct_success(self, domain: str) -> None:
         self._block_counts[domain] = 0
-        self._direct_success_after_recovery.pop(domain, None)
 
     def get_status(self) -> dict[str, bool]:
         return {d: v for d, v in self._using_cf.items() if v}

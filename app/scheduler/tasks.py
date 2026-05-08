@@ -39,11 +39,6 @@ def _is_peak_time() -> bool:
     return settings.peak_start_hour <= hour < settings.peak_end_hour
 
 
-def _is_night_time() -> bool:
-    hour = datetime.now(timezone.utc).hour
-    return hour < settings.peak_start_hour or hour >= settings.peak_end_hour
-
-
 def _get_effective_interval(base_interval: int) -> int:
     if _is_peak_time():
         return base_interval
