@@ -10,9 +10,10 @@ from app.scraper.rate_limiter import TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT_DOMAINS = 2
-DOMAIN_DELAY_MIN = 3.0
-DOMAIN_DELAY_MAX = 7.0
+DOMAIN_DELAY_MIN = 8.0
+DOMAIN_DELAY_MAX = 15.0
+WARMUP_DELAY_MIN = 3.0
+WARMUP_DELAY_MAX = 6.0
 
 WEB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -29,7 +30,6 @@ class VintedClient:
         self._sessions: dict[str, AsyncSession] = {}
         self._session_ready: dict[str, bool] = {}
         self._lock = asyncio.Lock()
-        self._domain_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOMAINS)
 
     async def _ensure_session(self, domain: str) -> AsyncSession:
         async with self._lock:
@@ -44,6 +44,7 @@ class VintedClient:
             if self._session_ready.get(domain, False):
                 return
         try:
+            await asyncio.sleep(random.uniform(WARMUP_DELAY_MIN, WARMUP_DELAY_MAX))
             response = await session.get(
                 f"https://www.{domain}/",
                 headers=WEB_HEADERS,
@@ -101,14 +102,6 @@ class VintedClient:
             self.rate_limiter.report_error(domain)
             return []
 
-    async def _search_with_semaphore(
-        self, domain: str, params: dict
-    ) -> list[VintedItem]:
-        async with self._domain_semaphore:
-            result = await self.search(domain, params)
-            await asyncio.sleep(random.uniform(DOMAIN_DELAY_MIN, DOMAIN_DELAY_MAX))
-            return result
-
     async def search_all_domains(
         self, params: dict, domains: list[str]
     ) -> list[VintedItem]:
@@ -116,22 +109,20 @@ class VintedClient:
             shuffled = list(domains)
             random.shuffle(shuffled)
 
-            tasks = [self._search_with_semaphore(domain, params) for domain in shuffled]
-            results_per_domain = await asyncio.gather(*tasks, return_exceptions=True)
+            seen_ids: set[int] = set()
+            unique_items: list[VintedItem] = []
 
-        seen_ids: set[int] = set()
-        unique_items: list[VintedItem] = []
+            for domain in shuffled:
+                try:
+                    items = await self.search(domain, params)
+                    for item in items:
+                        if item.id not in seen_ids:
+                            seen_ids.add(item.id)
+                            unique_items.append(item)
+                except Exception:
+                    logger.warning("Domain search failed for %s", domain)
 
-        for result in results_per_domain:
-            if isinstance(result, Exception):
-                logger.warning("Domain search failed: %s", result)
-                continue
-            if not isinstance(result, list):
-                continue
-            for item in result:
-                if item.id not in seen_ids:
-                    seen_ids.add(item.id)
-                    unique_items.append(item)
+                await asyncio.sleep(random.uniform(DOMAIN_DELAY_MIN, DOMAIN_DELAY_MAX))
 
         return unique_items
 
