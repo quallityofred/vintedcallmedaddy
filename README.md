@@ -10,7 +10,9 @@
 - Фильтрация promoted/showcase товаров (рекламные вставки)
 - Уведомления в Telegram с фото, ценой, ссылкой на товар
 - Веб-интерфейс на FastAPI + Jinja2 + HTMX + Tailwind CSS
-- Адаптивные интервалы проверки и ночной режим
+- Умный adaptive scheduling (пиковые часы / ночной режим / быстрая адаптация)
+- Кэширование сессий с переиспользованием OAuth токенов и cookies
+- Автоматический fallback на Cloudflare Workers при блокировках (429/403)
 - Скрытие нежелательных продавцов
 - Ротация сессий через мобильный iOS API Vinted
 
@@ -127,6 +129,61 @@ vinted_bot/
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
+```
+
+## Защита от блокировок
+
+### Adaptive Scheduling
+
+Бот автоматически регулирует интервалы проверки в зависимости от времени суток:
+
+| Период | Часы (UTC) | Множитель | Интервал (при базе 120с) |
+|--------|-----------|-----------|--------------------------|
+| Пиковые часы | 08:00–23:00 | 1× | 120с |
+| Вечер/утро | 23:00–08:00 | 2.5× | 300с |
+| Ночь | 00:00–08:00 | 5× | 600с |
+
+При пустых проверках интервал плавно увеличивается (×1.3 после 5 пустых в пиковые часы, после 15 в остальное время). При нахождении товаров — быстро уменьшается (×0.7) до базового значения.
+
+Настройки в `.env`:
+```env
+PEAK_START_HOUR=8
+PEAK_END_HOUR=23
+OFFPEAK_INTERVAL_MULTIPLIER=2.5
+NIGHT_INTERVAL_MULTIPLIER=5.0
+```
+
+### Кэширование сессий
+
+OAuth токены и cookies переиспользуются между запросами. Сессии возвращаются в пул после использования и хранятся до истечения (TTL) или лимита запросов (40–80 на сессию). Это снижает число "подозрительных" запросов авторизации.
+
+### Cloudflare Workers Fallback
+
+При получении блокировок (429/403) бот автоматически переключается на проксирование через Cloudflare Workers. Когда блокировки спадают (через `CF_WORKER_RECOVERY_MINUTES`), бот возвращается на прямой IP.
+
+Настройки в `.env`:
+```env
+CF_WORKER_URL=https://your-worker.workers.dev
+CF_WORKER_BLOCK_THRESHOLD=2
+CF_WORKER_RECOVERY_MINUTES=10
+```
+
+Пример Cloudflare Worker для проксирования:
+```javascript
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    const targetUrl = url.searchParams.get("url");
+    if (!targetUrl) return new Response("Missing url param", { status: 400 });
+    const resp = await fetch(targetUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+      },
+    });
+    return new Response(resp.body, { status: resp.status, headers: resp.headers });
+  },
+};
 ```
 
 ## Технологии

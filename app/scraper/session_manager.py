@@ -11,6 +11,8 @@ from app.scraper.domains import VINTED_DOMAINS
 
 logger = logging.getLogger(__name__)
 
+SESSION_REFRESH_MARGIN_SECONDS = 300
+
 
 @dataclass
 class VintedSession:
@@ -21,10 +23,16 @@ class VintedSession:
     proxy: str | None = None
     requests_count: int = 0
     max_requests: int = field(default_factory=lambda: random.randint(40, 80))
+    last_used_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def is_expired(self) -> bool:
         return datetime.now(timezone.utc) >= self.expires_at
+
+    @property
+    def is_near_expiry(self) -> bool:
+        margin = timedelta(seconds=SESSION_REFRESH_MARGIN_SECONDS)
+        return datetime.now(timezone.utc) >= (self.expires_at - margin)
 
     @property
     def needs_rotation(self) -> bool:
@@ -41,15 +49,27 @@ class SessionManager:
     async def get_session(self, domain: str) -> VintedSession:
         async with self._lock:
             pool = self._pools.setdefault(domain, [])
-            pool[:] = [s for s in pool if not s.is_expired and not s.needs_rotation]
+            pool[:] = [
+                s for s in pool
+                if not s.is_expired and not s.needs_rotation
+            ]
             if pool:
                 session = pool.pop(0)
                 session.requests_count += 1
+                session.last_used_at = datetime.now(timezone.utc)
                 return session
 
         session = await self._create_session(domain)
         session.requests_count += 1
         return session
+
+    async def return_session(self, session: VintedSession) -> None:
+        if session.is_expired or session.needs_rotation or not session.access_token:
+            return
+        async with self._lock:
+            pool = self._pools.setdefault(session.domain, [])
+            if session not in pool and len(pool) < self.sessions_per_domain:
+                pool.append(session)
 
     async def invalidate_session(self, session: VintedSession) -> None:
         async with self._lock:
@@ -57,6 +77,9 @@ class SessionManager:
             if session in pool:
                 pool.remove(session)
             logger.warning("Session invalidated for domain=%s", session.domain)
+
+    def get_cached_count(self) -> dict[str, int]:
+        return {domain: len(pool) for domain, pool in self._pools.items() if pool}
 
     async def _create_session(self, domain: str) -> VintedSession:
         domain_info = VINTED_DOMAINS.get(domain, {})
@@ -98,13 +121,18 @@ class SessionManager:
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
             logger.info("Created new session for domain=%s", domain)
-            return VintedSession(
+            session = VintedSession(
                 domain=domain,
                 access_token=access_token,
                 refresh_token=refresh_token,
                 expires_at=expires_at,
                 proxy=proxy,
             )
+            async with self._lock:
+                pool = self._pools.setdefault(domain, [])
+                if len(pool) < self.sessions_per_domain:
+                    pool.append(session)
+            return session
         except Exception:
             logger.exception("Failed to create session for domain=%s", domain)
             dummy_expires = datetime.now(timezone.utc) + timedelta(seconds=60)

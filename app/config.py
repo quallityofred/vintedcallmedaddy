@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     proxies: str = ""
     sessions_per_domain: int = 3
     rate_limit_per_minute: int = 8
+    cf_worker_url: str = ""
+    cf_worker_block_threshold: int = 2
+    cf_worker_recovery_minutes: int = 10
+    peak_start_hour: int = 8
+    peak_end_hour: int = 23
+    offpeak_interval_multiplier: float = 2.5
+    night_interval_multiplier: float = 5.0
 
     model_config = SettingsConfigDict(env_file=".env")
 
