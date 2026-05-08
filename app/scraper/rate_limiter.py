@@ -43,7 +43,7 @@ class TokenBucketLimiter:
 
             self.buckets[domain] = tokens - 1.0
             self.last_time[domain] = now
-            await asyncio.sleep(random.uniform(4.0, 10.0))
+            await asyncio.sleep(random.uniform(0.5, 2.0))
 
     def report_error(self, domain: str) -> None:
         self.error_counts[domain] = self.error_counts.get(domain, 0) + 1
