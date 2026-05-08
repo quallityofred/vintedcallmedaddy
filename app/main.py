@@ -5,7 +5,8 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -15,6 +16,8 @@ from app.scraper.client import CloudflareFallback, VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 from app.scheduler.tasks import MonitorScheduler, set_telegram_bot
 from app.telegram.bot import get_or_create_bot, start_polling, stop_bot, terminate_all_sessions
+from app.web.auth import RequireLoginException
+from app.web.auth_router import router as auth_router
 from app.web.dependencies import set_scheduler
 from app.web.router import router as web_router
 
@@ -68,20 +71,26 @@ async def lifespan(app: FastAPI):
     set_scheduler(scheduler)
     await scheduler.start()
 
-    await terminate_all_sessions(settings.telegram_bot_token)
-    bot, dp = get_or_create_bot(settings.telegram_bot_token)
-    set_telegram_bot(bot)
-    _bot_task = asyncio.create_task(start_polling(bot, dp))
-    logger.info("Telegram bot polling started")
+    if settings.telegram_bot_token:
+        await terminate_all_sessions(settings.telegram_bot_token)
+        bot, dp = get_or_create_bot(settings.telegram_bot_token)
+        set_telegram_bot(bot)
+        _bot_task = asyncio.create_task(start_polling(bot, dp))
+        logger.info("Telegram bot polling started")
+    else:
+        bot = None
+        dp = None
+        logger.info("No TELEGRAM_BOT_TOKEN set, bot polling disabled")
 
     app.state.templates = templates
     app.state.scheduler = scheduler
-    app.state.bot = bot
+    if bot:
+        app.state.bot = bot
 
     yield
 
     logger.info("Shutting down...")
-    if _bot_task:
+    if _bot_task and bot and dp:
         await stop_bot(bot, dp)
         _bot_task.cancel()
         try:
@@ -94,4 +103,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Vinted Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
+app.include_router(auth_router)
 app.include_router(web_router)
+
+
+@app.exception_handler(RequireLoginException)
+async def require_login_handler(request: Request, exc: RequireLoginException):
+    return RedirectResponse(url="/login", status_code=303)

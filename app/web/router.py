@@ -8,9 +8,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AppSettings, FoundItem, Monitor
+from app.models import AppSettings, FoundItem, Monitor, User
 from app.scraper.domains import VINTED_DOMAINS
 from app.scraper.url_parser import parse_vinted_url
+from app.web.auth import require_user
 from app.web.dependencies import get_db, get_scheduler
 
 logger = logging.getLogger(__name__)
@@ -23,25 +24,42 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
+async def dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
+):
     active_count_result = await db.execute(
-        select(func.count(Monitor.id)).where(Monitor.is_active == True)
+        select(func.count(Monitor.id)).where(
+            Monitor.is_active == True, Monitor.user_id == user.id
+        )
     )
     active_count = active_count_result.scalar() or 0
 
     today_start = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
+    user_monitor_ids = select(Monitor.id).where(Monitor.user_id == user.id)
     today_items_result = await db.execute(
-        select(func.count(FoundItem.id)).where(FoundItem.found_at >= today_start)
+        select(func.count(FoundItem.id)).where(
+            FoundItem.found_at >= today_start,
+            FoundItem.monitor_id.in_(user_monitor_ids),
+        )
     )
     today_items = today_items_result.scalar() or 0
 
-    total_result = await db.execute(select(func.count(FoundItem.id)))
+    total_result = await db.execute(
+        select(func.count(FoundItem.id)).where(
+            FoundItem.monitor_id.in_(user_monitor_ids)
+        )
+    )
     total_items = total_result.scalar() or 0
 
     last_item_result = await db.execute(
-        select(FoundItem.found_at).order_by(desc(FoundItem.found_at)).limit(1)
+        select(FoundItem.found_at)
+        .where(FoundItem.monitor_id.in_(user_monitor_ids))
+        .order_by(desc(FoundItem.found_at))
+        .limit(1)
     )
     last_found = last_item_result.scalar_one_or_none()
 
@@ -54,23 +72,32 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             "today_items": today_items,
             "total_items": total_items,
             "last_found": last_found,
+            "user": user,
         },
     )
 
 
 @router.get("/monitors", response_class=HTMLResponse)
-async def monitors_list(request: Request, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Monitor).order_by(desc(Monitor.created_at)))
+async def monitors_list(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    result = await db.execute(
+        select(Monitor)
+        .where(Monitor.user_id == user.id)
+        .order_by(desc(Monitor.created_at))
+    )
     monitors = result.scalars().all()
     return request.app.state.templates.TemplateResponse(
         request,
         "monitors/list.html",
-        {"request": request, "monitors": monitors},
+        {"request": request, "monitors": monitors, "user": user},
     )
 
 
 @router.get("/monitors/new", response_class=HTMLResponse)
-async def monitor_new(request: Request):
+async def monitor_new(request: Request, user: User = Depends(require_user)):
     return request.app.state.templates.TemplateResponse(
         request,
         "monitors/form.html",
@@ -79,6 +106,7 @@ async def monitor_new(request: Request):
             "monitor": None,
             "domains": VINTED_DOMAINS,
             "selected_domains": [],
+            "user": user,
         },
     )
 
@@ -87,6 +115,7 @@ async def monitor_new(request: Request):
 async def monitor_create(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
     name: str = Form(...),
     url: str = Form(...),
     interval_sec: int = Form(120),
@@ -97,6 +126,7 @@ async def monitor_create(
     api_params["_original_interval"] = interval_sec
 
     monitor = Monitor(
+        user_id=user.id,
         name=name,
         original_url=url,
         params_json=json.dumps(api_params),
@@ -122,8 +152,11 @@ async def monitor_edit(
     request: Request,
     monitor_id: int,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
 ):
-    result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
@@ -137,6 +170,7 @@ async def monitor_edit(
             "monitor": monitor,
             "domains": VINTED_DOMAINS,
             "selected_domains": selected_domains,
+            "user": user,
         },
     )
 
@@ -146,13 +180,16 @@ async def monitor_update(
     request: Request,
     monitor_id: int,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
     name: str = Form(...),
     url: str = Form(...),
     interval_sec: int = Form(120),
     is_active: bool = Form(True),
     domains: list[str] = Form(default=[]),
 ):
-    result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
@@ -182,8 +219,11 @@ async def monitor_update(
 async def monitor_delete(
     monitor_id: int,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
 ):
-    result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
@@ -205,8 +245,11 @@ async def monitor_toggle(
     request: Request,
     monitor_id: int,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
 ):
-    result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
@@ -222,7 +265,11 @@ async def monitor_toggle(
 
 
 @router.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
+async def settings_page(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
+):
     result = await db.execute(select(AppSettings))
     settings_map: dict[str, str] = {row.key: row.value for row in result.scalars().all()}
 
@@ -232,6 +279,7 @@ async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
         {
             "request": request,
             "settings": settings_map,
+            "user": user,
         },
     )
 
@@ -240,15 +288,19 @@ async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
 async def settings_save(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
     telegram_token: str = Form(""),
     telegram_chat_id: str = Form(""),
     proxies: str = Form(""),
     sessions_per_domain: int = Form(3),
     rate_limit_per_minute: int = Form(8),
 ):
+    user_in_db = await db.get(User, user.id)
+    if user_in_db:
+        user_in_db.telegram_bot_token = telegram_token
+        user_in_db.telegram_chat_id = telegram_chat_id
+
     settings_data = {
-        "telegram_bot_token": telegram_token,
-        "telegram_chat_id": telegram_chat_id,
         "proxies": proxies,
         "sessions_per_domain": str(sessions_per_domain),
         "rate_limit_per_minute": str(rate_limit_per_minute),
@@ -269,12 +321,21 @@ async def settings_save(
 async def logs_page(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
     page: int = Query(1, ge=1),
     monitor_id: int | None = Query(None),
 ):
     per_page = 50
-    query = select(FoundItem).order_by(desc(FoundItem.found_at))
-    count_query = select(func.count(FoundItem.id))
+    user_monitor_ids = select(Monitor.id).where(Monitor.user_id == user.id)
+
+    query = (
+        select(FoundItem)
+        .where(FoundItem.monitor_id.in_(user_monitor_ids))
+        .order_by(desc(FoundItem.found_at))
+    )
+    count_query = select(func.count(FoundItem.id)).where(
+        FoundItem.monitor_id.in_(user_monitor_ids)
+    )
 
     if monitor_id is not None:
         query = query.where(FoundItem.monitor_id == monitor_id)
@@ -288,7 +349,9 @@ async def logs_page(
     items_result = await db.execute(query.offset(offset).limit(per_page))
     items = items_result.scalars().all()
 
-    monitors_result = await db.execute(select(Monitor.id, Monitor.name))
+    monitors_result = await db.execute(
+        select(Monitor.id, Monitor.name).where(Monitor.user_id == user.id)
+    )
     monitors_map: dict[int, str] = {row[0]: row[1] for row in monitors_result.fetchall()}
 
     return request.app.state.templates.TemplateResponse(
@@ -302,5 +365,6 @@ async def logs_page(
             "total": total,
             "monitor_id": monitor_id,
             "monitors_map": monitors_map,
+            "user": user,
         },
     )

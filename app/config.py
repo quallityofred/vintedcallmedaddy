@@ -5,9 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    telegram_bot_token: str
-    telegram_chat_id: int
+    telegram_bot_token: str = ""
+    telegram_chat_id: int = 0
     check_interval_seconds: int = 120
+    secret_key: str = "change-me-in-production"
     database_url: str = "sqlite+aiosqlite:///data/vinted.db"
     proxies: str = ""
     sessions_per_domain: int = 3

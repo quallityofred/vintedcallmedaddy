@@ -1,4 +1,6 @@
 # app/models.py
+import hashlib
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
@@ -13,10 +15,47 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    password_salt: Mapped[str] = mapped_column(String, nullable=False)
+    telegram_bot_token: Mapped[str] = mapped_column(String, default="", nullable=False)
+    telegram_chat_id: Mapped[str] = mapped_column(String, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    def set_password(self, password: str) -> None:
+        self.password_salt = os.urandom(32).hex()
+        self.password_hash = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(self.password_salt), 100_000
+        ).hex()
+
+    def check_password(self, password: str) -> bool:
+        h = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(self.password_salt), 100_000
+        ).hex()
+        return h == self.password_hash
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        Index("ix_user_sessions_token", "token"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    token: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
 class Monitor(Base):
     __tablename__ = "monitors"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     original_url: Mapped[str] = mapped_column(String, nullable=False)
     params_json: Mapped[str] = mapped_column(String, nullable=False)

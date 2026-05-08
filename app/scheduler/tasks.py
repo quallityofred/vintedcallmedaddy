@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.models import FoundItem, HiddenSeller, Monitor
+from app.models import FoundItem, HiddenSeller, Monitor, User
 from app.scraper.client import VintedClient
 from app.scraper.parser import VintedItem
 from app.telegram.notifications import send_item_notification
@@ -125,11 +125,24 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
         monitor.last_check_at = datetime.now(timezone.utc)
         await db.commit()
 
+    bot_to_use = _telegram_bot
+    chat_id_to_use = settings.telegram_chat_id
+    if monitor.user_id:
+        async with AsyncSessionLocal() as db:
+            user_result = await db.execute(
+                select(User).where(User.id == monitor.user_id)
+            )
+            owner = user_result.scalar_one_or_none()
+            if owner and owner.telegram_bot_token and owner.telegram_chat_id:
+                from app.telegram.bot import get_or_create_bot as _get_bot
+                bot_to_use, _ = _get_bot(owner.telegram_bot_token)
+                chat_id_to_use = int(owner.telegram_chat_id)
+
     for item in new_items:
-        if not is_cold_start and _telegram_bot:
+        if not is_cold_start and bot_to_use and chat_id_to_use:
             await send_item_notification(
-                _telegram_bot,
-                settings.telegram_chat_id,
+                bot_to_use,
+                chat_id_to_use,
                 item,
             )
 
