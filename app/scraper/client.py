@@ -1,6 +1,7 @@
 # app/scraper/client.py
 import asyncio
 import logging
+import random
 
 from curl_cffi.requests import AsyncSession
 
@@ -9,11 +10,17 @@ from app.scraper.rate_limiter import TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 
+MAX_CONCURRENT_DOMAINS = 2
+DOMAIN_DELAY_MIN = 3.0
+DOMAIN_DELAY_MAX = 7.0
+
 WEB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+_global_search_lock = asyncio.Lock()
 
 
 class VintedClient:
@@ -22,6 +29,7 @@ class VintedClient:
         self._sessions: dict[str, AsyncSession] = {}
         self._session_ready: dict[str, bool] = {}
         self._lock = asyncio.Lock()
+        self._domain_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOMAINS)
 
     async def _ensure_session(self, domain: str) -> AsyncSession:
         async with self._lock:
@@ -93,11 +101,23 @@ class VintedClient:
             self.rate_limiter.report_error(domain)
             return []
 
+    async def _search_with_semaphore(
+        self, domain: str, params: dict
+    ) -> list[VintedItem]:
+        async with self._domain_semaphore:
+            result = await self.search(domain, params)
+            await asyncio.sleep(random.uniform(DOMAIN_DELAY_MIN, DOMAIN_DELAY_MAX))
+            return result
+
     async def search_all_domains(
         self, params: dict, domains: list[str]
     ) -> list[VintedItem]:
-        tasks = [self.search(domain, params) for domain in domains]
-        results_per_domain = await asyncio.gather(*tasks, return_exceptions=True)
+        async with _global_search_lock:
+            shuffled = list(domains)
+            random.shuffle(shuffled)
+
+            tasks = [self._search_with_semaphore(domain, params) for domain in shuffled]
+            results_per_domain = await asyncio.gather(*tasks, return_exceptions=True)
 
         seen_ids: set[int] = set()
         unique_items: list[VintedItem] = []
