@@ -1,0 +1,50 @@
+# app/static/css/custom.css
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: #0a0f0a;
+}
+::-webkit-scrollbar-thumb {
+    background: #1f3a1f;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #2d5a2d;
+}
+
+* {
+    transition-property: background-color, border-color, color, opacity;
+    transition-duration: 0.15s;
+    transition-timing-function: ease;
+}
+
+.toast {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 100;
+    animation: toast-slide-in 0.3s ease forwards;
+}
+@keyframes toast-slide-in {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.htmx-request {
+    opacity: 0.5;
+    pointer-events: none;
+}
+.htmx-indicator {
+    display: none;
+}
+.htmx-request .htmx-indicator {
+    display: inline-block;
+}

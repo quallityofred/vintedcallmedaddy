@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vinted Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#060b06',
+                        surface: '#0e180e',
+                        border: '#1a2f1a',
+                        primary: '#256325',
+                        accent: '#4ade80',
+                        'accent-dim': '#3b7a3b',
+                        text: '#e8ede8',
+                        muted: '#8a9e8a',
+                        error: '#ef4444',
+                        warning: '#f59e0b',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        * { font-family: 'Inter', sans-serif; }
+        body { background: #060b06; color: #e8ede8; }
+        .sidebar {
+            background: linear-gradient(180deg, #0a150a 0%, #0e180e 100%);
+            border-right: 1px solid rgba(74, 222, 128, 0.08);
+            transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        @media (max-width: 768px) {
+            .sidebar { transform: translateX(-100%); position: fixed; z-index: 50; height: 100vh; }
+            .sidebar.open { transform: translateX(0); box-shadow: 8px 0 40px rgba(0,0,0,0.6); }
+        }
+        .nav-link {
+            position: relative;
+            transition: all 0.2s ease;
+            border-radius: 10px;
+        }
+        .nav-link:hover { background: rgba(74, 222, 128, 0.06); }
+        .nav-link.active {
+            background: rgba(74, 222, 128, 0.1);
+            color: #4ade80;
+        }
+        .nav-link.active::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 50%;
+            transform: translateY(-50%);
+            width: 3px; height: 20px;
+            background: #4ade80;
+            border-radius: 0 3px 3px 0;
+        }
+        input, select, textarea {
+            background: rgba(0,0,0,0.3) !important;
+            border: 1px solid rgba(74, 222, 128, 0.12) !important;
+            color: #e8ede8 !important;
+            border-radius: 10px !important;
+            transition: all 0.2s ease;
+        }
+        input:focus, select:focus, textarea:focus {
+            border-color: #4ade80 !important;
+            box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1) !important;
+            outline: none;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #256325 0%, #1f7a1f 100%);
+            color: #fff;
+            border: 1px solid rgba(74, 222, 128, 0.2);
+            transition: all 0.25s ease;
+            border-radius: 10px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #2d7a2d 0%, #258a25 100%);
+            box-shadow: 0 4px 20px rgba(74, 222, 128, 0.2);
+            transform: translateY(-1px);
+        }
+        .btn-primary:active { transform: translateY(0); }
+        .btn-ghost {
+            background: transparent;
+            border: 1px solid rgba(74, 222, 128, 0.12);
+            color: #8a9e8a;
+            transition: all 0.2s ease;
+            border-radius: 10px;
+        }
+        .btn-ghost:hover {
+            border-color: rgba(74, 222, 128, 0.3);
+            color: #e8ede8;
+            background: rgba(74, 222, 128, 0.04);
+        }
+        .card {
+            background: linear-gradient(135deg, rgba(14, 24, 14, 0.9) 0%, rgba(10, 20, 10, 0.95) 100%);
+            border: 1px solid rgba(74, 222, 128, 0.08);
+            border-radius: 16px;
+            backdrop-filter: blur(20px);
+            transition: all 0.3s ease;
+        }
+        .card:hover {
+            border-color: rgba(74, 222, 128, 0.15);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        .stat-card {
+            background: linear-gradient(135deg, rgba(14, 24, 14, 0.95) 0%, rgba(10, 20, 10, 0.98) 100%);
+            border: 1px solid rgba(74, 222, 128, 0.06);
+            border-radius: 16px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            top: 0; right: 0;
+            width: 100px; height: 100px;
+            background: radial-gradient(circle, rgba(74,222,128,0.04) 0%, transparent 70%);
+            border-radius: 50%;
+            transform: translate(30%, -30%);
+        }
+        .stat-card:hover {
+            border-color: rgba(74, 222, 128, 0.2);
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+        }
+        .icon-badge {
+            width: 40px; height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .pulse-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.3); }
+        }
+        .table-row { transition: all 0.15s ease; }
+        .table-row:hover { background: rgba(74, 222, 128, 0.03) !important; }
+        .domain-chip {
+            background: rgba(74, 222, 128, 0.08);
+            border: 1px solid rgba(74, 222, 128, 0.12);
+            color: #4ade80;
+            font-size: 0.7rem;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+        .overlay {
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(4px);
+            display: none;
+        }
+        .overlay.show { display: block; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-in { animation: fadeIn 0.4s ease forwards; }
+        tr:nth-child(even) { background: rgba(14, 24, 14, 0.3); }
+    </style>
+</head>
+<body class="min-h-screen flex">
+    <div class="overlay fixed inset-0 z-40 md:hidden" id="overlay" onclick="document.getElementById('sidebar').classList.remove('open');this.classList.remove('show')"></div>
+    <div id="sidebar" class="sidebar w-64 flex-shrink-0 flex flex-col z-50">
+        <div class="p-5 border-b border-[rgba(74,222,128,0.08)]">
+            <div class="flex items-center gap-3">
+                <div class="icon-badge bg-[rgba(74,222,128,0.1)]">
+                    <i data-lucide="scan-search" class="w-5 h-5 text-accent"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold text-text tracking-tight">Vinted Monitor</h1>
+                    <p class="text-muted text-xs">отслеживание товаров</p>
+                </div>
+            </div>
+        </div>
+        <nav class="flex-1 p-3 space-y-1">
+            <a href="/" class="nav-link flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-text">
+                <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+                <span>Dashboard</span>
+            </a>
+            <a href="/monitors" class="nav-link flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-text">
+                <i data-lucide="radar" class="w-4 h-4"></i>
+                <span>Мониторы</span>
+            </a>
+            <a href="/settings" class="nav-link flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-text">
+                <i data-lucide="settings-2" class="w-4 h-4"></i>
+                <span>Настройки</span>
+            </a>
+            <a href="/logs" class="nav-link flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-text">
+                <i data-lucide="scroll-text" class="w-4 h-4"></i>
+                <span>Логи</span>
+            </a>
+        </nav>
+        <div class="p-4 border-t border-[rgba(74,222,128,0.08)]">
+            <div class="flex items-center gap-2 text-xs text-muted">
+                <div class="pulse-dot bg-accent"></div>
+                <span>Система активна</span>
+            </div>
+        </div>
+    </div>
+    <div class="flex-1 flex flex-col min-w-0">
+        <header class="md:hidden flex items-center justify-between p-4 bg-surface/80 backdrop-blur border-b border-[rgba(74,222,128,0.08)]">
+            <button onclick="document.getElementById('sidebar').classList.toggle('open');document.getElementById('overlay').classList.toggle('show')" class="text-text p-1">
+                <i data-lucide="menu" class="w-6 h-6"></i>
+            </button>
+            <div class="flex items-center gap-2">
+                <i data-lucide="scan-search" class="w-5 h-5 text-accent"></i>
+                <span class="text-accent font-bold text-sm">Vinted Monitor</span>
+            </div>
+            <div class="w-6"></div>
+        </header>
+        <main class="flex-1 p-4 md:p-8 overflow-auto">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+    <script>lucide.createIcons();</script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const path = window.location.pathname;
+            document.querySelectorAll('.nav-link').forEach(link => {
+                const href = link.getAttribute('href');
+                if (path === href || (path.startsWith('/monitors') && href === '/monitors') || (path.startsWith('/logs') && href === '/logs')) {
+                    link.classList.add('active');
+                }
+            });
+        });
+        document.body.addEventListener('htmx:afterSwap', function() { lucide.createIcons(); });
+    </script>
+</body>
+</html>

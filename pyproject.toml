@@ -1,0 +1,24 @@
+# pyproject.toml
+[project]
+name = "vinted-monitor"
+version = "0.1.0"
+description = "Vinted Monitor web interface and Telegram notifications service"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "jinja2>=3.1.3",
+    "python-multipart>=0.0.6",
+    "aiosqlite>=0.19.0",
+    "sqlalchemy[asyncio]>=2.0.25",
+    "httpx>=0.26.0",
+    "curl-cffi>=0.6.0",
+    "aiogram>=3.3.0",
+    "apscheduler>=3.10.4",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0"
+]
+
+[build-system]
+requires = ["setuptools>=68.0.0"]
+build-backend = "setuptools.build_meta"

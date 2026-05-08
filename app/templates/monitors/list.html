@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="animate-in">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+        <div class="flex items-center gap-3">
+            <div class="icon-badge bg-[rgba(74,222,128,0.1)]">
+                <i data-lucide="radar" class="w-5 h-5 text-accent"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-text">Мониторы</h1>
+                <p class="text-muted text-sm">{{ monitors|length if monitors else 0 }} отслеживаний</p>
+            </div>
+        </div>
+        <a href="/monitors/new" class="btn-primary px-5 py-2.5 inline-flex items-center gap-2 text-sm">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            <span>Новый монитор</span>
+        </a>
+    </div>
+
+    {% if monitors %}
+    <div class="card overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-[rgba(74,222,128,0.06)] text-muted text-left text-xs uppercase tracking-wider">
+                        <th class="p-4 font-medium">Название</th>
+                        <th class="p-4 font-medium">URL</th>
+                        <th class="p-4 font-medium">Домены</th>
+                        <th class="p-4 font-medium">Интервал</th>
+                        <th class="p-4 font-medium">Статус</th>
+                        <th class="p-4 font-medium">Проверка</th>
+                        <th class="p-4 font-medium text-center">Товаров</th>
+                        <th class="p-4 font-medium text-right"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for monitor in monitors %}
+                    {% set domains_list = monitor.domains_json | from_json %}
+                    <tr id="monitor-row-{{ monitor.id }}" class="table-row border-b border-[rgba(74,222,128,0.04)]">
+                        <td class="p-4">
+                            <p class="font-semibold text-text">{{ monitor.name }}</p>
+                        </td>
+                        <td class="p-4 text-muted max-w-[180px] truncate text-xs" title="{{ monitor.original_url }}">
+                            {{ monitor.original_url[:45] }}{% if monitor.original_url|length > 45 %}…{% endif %}
+                        </td>
+                        <td class="p-4">
+                            <div class="flex flex-wrap gap-1">
+                                {% for d in domains_list[:3] %}
+                                <span class="domain-chip">{{ d }}</span>
+                                {% endfor %}
+                                {% if domains_list|length > 3 %}
+                                <span class="text-xs text-muted">+{{ domains_list|length - 3 }}</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="p-4 text-xs">{{ monitor.interval_sec }}s</td>
+                        <td class="p-4">
+                            {% if monitor.is_active %}
+                            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-accent">
+                                <span class="pulse-dot bg-accent"></span> Активен
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 text-xs text-muted">
+                                <span class="w-2 h-2 rounded-full bg-muted inline-block"></span> Пауза
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="p-4 text-muted text-xs">
+                            {% if monitor.last_check_at %}
+                            {{ monitor.last_check_at.strftime('%d.%m %H:%M') }}
+                            {% else %}
+                            <span class="text-muted/50">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="p-4 text-center">
+                            <span class="text-accent font-bold text-sm">{{ monitor.items_found_count }}</span>
+                        </td>
+                        <td class="p-4">
+                            <div class="flex items-center justify-end gap-1">
+                                <a href="/monitors/{{ monitor.id }}/edit" class="p-1.5 rounded-lg hover:bg-[rgba(74,222,128,0.08)] transition-colors" title="Редактировать">
+                                    <i data-lucide="pencil" class="w-3.5 h-3.5 text-muted"></i>
+                                </a>
+                                <button
+                                    hx-post="/monitors/{{ monitor.id }}/toggle"
+                                    hx-target="#monitor-row-{{ monitor.id }}"
+                                    hx-swap="outerHTML"
+                                    class="p-1.5 rounded-lg hover:bg-[rgba(245,158,11,0.1)] transition-colors"
+                                    title="{{ 'Пауза' if monitor.is_active else 'Запустить' }}"
+                                >
+                                    <i data-lucide="{{ 'pause' if monitor.is_active else 'play' }}" class="w-3.5 h-3.5 text-warning"></i>
+                                </button>
+                                <button
+                                    hx-delete="/monitors/{{ monitor.id }}"
+                                    hx-target="#monitor-row-{{ monitor.id }}"
+                                    hx-swap="outerHTML"
+                                    hx-confirm="Удалить монитор «{{ monitor.name }}»?"
+                                    class="p-1.5 rounded-lg hover:bg-[rgba(239,68,68,0.1)] transition-colors"
+                                    title="Удалить"
+                                >
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5 text-error"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card p-12 text-center">
+        <div class="icon-badge bg-[rgba(74,222,128,0.06)] mx-auto mb-4" style="width:56px;height:56px;border-radius:16px;">
+            <i data-lucide="satellite" class="w-7 h-7 text-muted"></i>
+        </div>
+        <h3 class="text-lg font-semibold text-text mb-1">Нет мониторов</h3>
+        <p class="text-muted text-sm mb-6 max-w-sm mx-auto">Добавьте первый монитор, чтобы начать отслеживать новые товары на Vinted в реальном времени.</p>
+        <a href="/monitors/new" class="btn-primary px-5 py-2.5 inline-flex items-center gap-2 text-sm">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            <span>Создать монитор</span>
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
