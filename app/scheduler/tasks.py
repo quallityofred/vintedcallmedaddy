@@ -20,12 +20,11 @@ from app.telegram.notifications import send_item_notification
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-MAX_INTERVAL_SECONDS = 600
-NIGHT_MULTIPLIER = 3
-NIGHT_START_HOUR = 2
-NIGHT_END_HOUR = 6
-EMPTY_THRESHOLD = 10
-INTERVAL_MULTIPLIER = 1.5
+MAX_INTERVAL_SECONDS = 900
+EMPTY_THRESHOLD_FAST = 5
+EMPTY_THRESHOLD_SLOW = 15
+INTERVAL_STEP_UP = 1.3
+INTERVAL_STEP_DOWN_FAST = 0.7
 
 _telegram_bot: Bot | None = None
 
@@ -35,15 +34,18 @@ def set_telegram_bot(bot: Bot) -> None:
     _telegram_bot = bot
 
 
-def _is_night_time() -> bool:
+def _is_peak_time() -> bool:
     hour = datetime.now(timezone.utc).hour
-    return NIGHT_START_HOUR <= hour < NIGHT_END_HOUR
+    return settings.peak_start_hour <= hour < settings.peak_end_hour
 
 
 def _get_effective_interval(base_interval: int) -> int:
-    if _is_night_time():
-        return base_interval * NIGHT_MULTIPLIER
-    return base_interval
+    if _is_peak_time():
+        return base_interval
+    hour = datetime.now(timezone.utc).hour
+    if 0 <= hour < settings.peak_start_hour:
+        return int(base_interval * settings.night_interval_multiplier)
+    return int(base_interval * settings.offpeak_interval_multiplier)
 
 
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
@@ -101,14 +103,23 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
             db.add(found_item)
             new_items.append(item)
 
+        original_interval = _resolve_original_interval(monitor)
         if new_items:
             monitor.items_found_count += len(new_items)
             monitor.consecutive_empty = 0
-            monitor.interval_sec = _resolve_original_interval(monitor)
+            new_interval = max(
+                int(monitor.interval_sec * INTERVAL_STEP_DOWN_FAST),
+                original_interval,
+            )
+            monitor.interval_sec = new_interval
         else:
             monitor.consecutive_empty += 1
-            if monitor.consecutive_empty >= EMPTY_THRESHOLD:
-                new_interval = int(monitor.interval_sec * INTERVAL_MULTIPLIER)
+            if _is_peak_time():
+                threshold = EMPTY_THRESHOLD_FAST
+            else:
+                threshold = EMPTY_THRESHOLD_SLOW
+            if monitor.consecutive_empty >= threshold:
+                new_interval = int(monitor.interval_sec * INTERVAL_STEP_UP)
                 monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
         monitor.last_check_at = datetime.now(timezone.utc)
@@ -135,9 +146,10 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 
     if new_items:
         logger.info(
-            "Monitor %s found %d new items",
+            "Monitor %s found %d new items (interval=%ds)",
             monitor.name,
             len(new_items),
+            monitor.interval_sec,
         )
 
 
@@ -163,10 +175,11 @@ class MonitorScheduler:
             monitors = result.scalars().all()
 
         for monitor in monitors:
+            effective = _get_effective_interval(monitor.interval_sec)
             stagger = random.uniform(5.0, 30.0)
             job = self.scheduler.add_job(
                 check_monitor,
-                trigger=IntervalTrigger(seconds=monitor.interval_sec),
+                trigger=IntervalTrigger(seconds=effective),
                 args=[monitor.id, self.client],
                 id=f"monitor_{monitor.id}",
                 next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
@@ -186,10 +199,11 @@ class MonitorScheduler:
         job_id = f"monitor_{monitor_id}"
         if job_id in {j.id for j in self.scheduler.get_jobs()}:
             return
+        effective = _get_effective_interval(interval_sec)
         stagger = random.uniform(5.0, 30.0)
         job = self.scheduler.add_job(
             check_monitor,
-            trigger=IntervalTrigger(seconds=interval_sec),
+            trigger=IntervalTrigger(seconds=effective),
             args=[monitor_id, self.client],
             id=job_id,
             next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
@@ -197,7 +211,7 @@ class MonitorScheduler:
         )
         if job:
             self.job_ids[monitor_id] = job.id
-        logger.info("Added monitor_id=%d to scheduler", monitor_id)
+        logger.info("Added monitor_id=%d interval=%d (effective=%d)", monitor_id, interval_sec, effective)
 
     def remove_monitor(self, monitor_id: int) -> None:
         job_id = self.job_ids.pop(monitor_id, None)

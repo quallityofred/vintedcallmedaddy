@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
 from app.database import init_db
-from app.scraper.client import VintedClient
+from app.scraper.client import CloudflareFallback, VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 from app.scheduler.tasks import MonitorScheduler, set_telegram_bot
 from app.telegram.bot import get_or_create_bot, start_polling, stop_bot, terminate_all_sessions
@@ -52,7 +52,17 @@ async def lifespan(app: FastAPI):
         rate=float(settings.rate_limit_per_minute),
         per=60.0,
     )
-    client = VintedClient(rate_limiter=rate_limiter)
+
+    cf_fallback = None
+    if settings.cf_worker_url:
+        cf_fallback = CloudflareFallback(
+            worker_url=settings.cf_worker_url,
+            block_threshold=settings.cf_worker_block_threshold,
+            recovery_minutes=settings.cf_worker_recovery_minutes,
+        )
+        logger.info("Cloudflare Workers fallback enabled: %s", settings.cf_worker_url)
+
+    client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
 
     scheduler = MonitorScheduler(client=client)
     set_scheduler(scheduler)
