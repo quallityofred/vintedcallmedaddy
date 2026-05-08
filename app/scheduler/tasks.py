@@ -72,16 +72,21 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 
     async with AsyncSessionLocal() as db:
         monitor = await db.merge(monitor)
-        for item in items:
-            if item.seller_id in hidden_seller_ids:
-                continue
 
-            exists_result = await db.execute(
-                select(FoundItem.id).where(
-                    FoundItem.vinted_item_id == item.id,
+        filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+        if filtered_items:
+            all_item_ids = [i.id for i in filtered_items]
+            existing_result = await db.execute(
+                select(FoundItem.vinted_item_id).where(
+                    FoundItem.vinted_item_id.in_(all_item_ids)
                 )
             )
-            if exists_result.first() is not None:
+            existing_ids: set[int] = {row[0] for row in existing_result.fetchall()}
+        else:
+            existing_ids = set()
+
+        for item in filtered_items:
+            if item.id in existing_ids:
                 continue
 
             found_item = FoundItem(
@@ -146,16 +151,17 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
                 item,
             )
 
+    if new_items:
+        new_item_ids = [item.id for item in new_items]
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(FoundItem).where(
-                    FoundItem.vinted_item_id == item.id,
+                    FoundItem.vinted_item_id.in_(new_item_ids)
                 )
             )
-            fi = result.scalars().first()
-            if fi:
+            for fi in result.scalars().all():
                 fi.notified = not is_cold_start
-                await db.commit()
+            await db.commit()
 
     if new_items:
         logger.info(

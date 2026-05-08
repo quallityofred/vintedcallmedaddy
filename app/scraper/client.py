@@ -13,10 +13,11 @@ from app.scraper.rate_limiter import TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 
-DOMAIN_DELAY_MIN = 8.0
-DOMAIN_DELAY_MAX = 15.0
-WARMUP_DELAY_MIN = 3.0
-WARMUP_DELAY_MAX = 6.0
+DOMAIN_DELAY_MIN = 1.0
+DOMAIN_DELAY_MAX = 3.0
+WARMUP_DELAY_MIN = 0.5
+WARMUP_DELAY_MAX = 1.5
+MAX_CONCURRENT_DOMAINS = 3
 
 WEB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -24,7 +25,7 @@ WEB_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-_global_search_lock = asyncio.Lock()
+_domain_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOMAINS)
 
 
 class CloudflareFallback:
@@ -205,27 +206,37 @@ class VintedClient:
                 self.cf_fallback.report_block(domain)
             return []
 
+    async def _search_domain_with_semaphore(
+        self, domain: str, params: dict
+    ) -> list[VintedItem]:
+        async with _domain_semaphore:
+            try:
+                items = await self.search(domain, params)
+                await asyncio.sleep(random.uniform(DOMAIN_DELAY_MIN, DOMAIN_DELAY_MAX))
+                return items
+            except Exception:
+                logger.warning("Domain search failed for %s", domain)
+                return []
+
     async def search_all_domains(
         self, params: dict, domains: list[str]
     ) -> list[VintedItem]:
-        async with _global_search_lock:
-            shuffled = list(domains)
-            random.shuffle(shuffled)
+        shuffled = list(domains)
+        random.shuffle(shuffled)
 
-            seen_ids: set[int] = set()
-            unique_items: list[VintedItem] = []
+        tasks = [
+            self._search_domain_with_semaphore(domain, params)
+            for domain in shuffled
+        ]
+        results = await asyncio.gather(*tasks)
 
-            for domain in shuffled:
-                try:
-                    items = await self.search(domain, params)
-                    for item in items:
-                        if item.id not in seen_ids:
-                            seen_ids.add(item.id)
-                            unique_items.append(item)
-                except Exception:
-                    logger.warning("Domain search failed for %s", domain)
-
-                await asyncio.sleep(random.uniform(DOMAIN_DELAY_MIN, DOMAIN_DELAY_MAX))
+        seen_ids: set[int] = set()
+        unique_items: list[VintedItem] = []
+        for items in results:
+            for item in items:
+                if item.id not in seen_ids:
+                    seen_ids.add(item.id)
+                    unique_items.append(item)
 
         return unique_items
 

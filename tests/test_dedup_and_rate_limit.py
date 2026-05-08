@@ -239,8 +239,8 @@ class TestDeduplication:
 class TestRateLimiting:
 
     @pytest.mark.asyncio
-    async def test_sequential_domain_execution(self):
-        """Verify domains are searched one at a time (sequentially)."""
+    async def test_parallel_domain_execution_with_semaphore(self):
+        """Verify domains are searched in parallel, bounded by semaphore."""
         rate_limiter = TokenBucketLimiter(rate=100.0, per=1.0)
         client = VintedClient(rate_limiter=rate_limiter)
 
@@ -270,13 +270,12 @@ class TestRateLimiting:
                 ["vinted.fr", "vinted.de", "vinted.it"],
             )
 
-        assert max_concurrent == 1, "Domains must be searched sequentially (one at a time)"
+        assert max_concurrent <= 3, "Concurrency must be bounded by semaphore"
         assert len(call_order) == 3
 
     @pytest.mark.asyncio
-    async def test_search_all_domains_uses_global_lock(self):
-        """Verify that search_all_domains acquires the global lock, preventing
-        multiple monitors from querying simultaneously."""
+    async def test_search_all_domains_uses_semaphore(self):
+        """Verify that search_all_domains uses semaphore to bound concurrency."""
         rate_limiter = TokenBucketLimiter(rate=100.0, per=1.0)
         client = VintedClient(rate_limiter=rate_limiter)
 

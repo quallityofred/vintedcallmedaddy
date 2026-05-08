@@ -50,7 +50,7 @@ def parse_vinted_url(url: str) -> dict[str, str | dict[str, str | int]]:
             api_params[api_key] = ",".join(cleaned_values)
 
     api_params["order"] = "newest_first"
-    api_params["per_page"] = 20
+    api_params["per_page"] = 96
 
     return {"domain": domain, "params": api_params}
 
