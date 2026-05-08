@@ -1,5 +1,4 @@
 # app/main.py
-import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -14,8 +13,7 @@ from app.config import get_settings
 from app.database import init_db
 from app.scraper.client import CloudflareFallback, VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
-from app.scheduler.tasks import MonitorScheduler, set_telegram_bot
-from app.telegram.bot import get_or_create_bot, start_polling, stop_bot, terminate_all_sessions
+from app.scheduler.tasks import MonitorScheduler
 from app.web.auth import RequireLoginException
 from app.web.auth_router import router as auth_router
 from app.web.dependencies import set_scheduler
@@ -33,13 +31,12 @@ _BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 templates.env.filters["from_json"] = json.loads
 
-_bot_task: asyncio.Task | None = None
 _initialized: bool = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bot_task, _initialized
+    global _initialized
 
     if _initialized:
         logger.warning("Lifespan already executed, skipping duplicate init")
@@ -71,32 +68,15 @@ async def lifespan(app: FastAPI):
     set_scheduler(scheduler)
     await scheduler.start()
 
-    if settings.telegram_bot_token:
-        await terminate_all_sessions(settings.telegram_bot_token)
-        bot, dp = get_or_create_bot(settings.telegram_bot_token)
-        set_telegram_bot(bot)
-        _bot_task = asyncio.create_task(start_polling(bot, dp))
-        logger.info("Telegram bot polling started")
-    else:
-        bot = None
-        dp = None
-        logger.info("No TELEGRAM_BOT_TOKEN set, bot polling disabled")
-
     app.state.templates = templates
     app.state.scheduler = scheduler
-    if bot:
-        app.state.bot = bot
+    logger.info("Bot not started — use /settings to configure and start")
 
     yield
 
     logger.info("Shutting down...")
-    if _bot_task and bot and dp:
-        await stop_bot(bot, dp)
-        _bot_task.cancel()
-        try:
-            await _bot_task
-        except asyncio.CancelledError:
-            pass
+    from app.web.dependencies import stop_bot as deps_stop_bot
+    await deps_stop_bot()
     await scheduler.stop()
     logger.info("Shutdown complete")
 

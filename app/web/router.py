@@ -12,7 +12,7 @@ from app.models import AppSettings, FoundItem, Monitor, User
 from app.scraper.domains import VINTED_DOMAINS
 from app.scraper.url_parser import parse_vinted_url
 from app.web.auth import require_user
-from app.web.dependencies import get_db, get_scheduler
+from app.web.dependencies import get_db, get_scheduler, is_bot_running
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -280,6 +280,7 @@ async def settings_page(
             "request": request,
             "settings": settings_map,
             "user": user,
+            "bot_running": is_bot_running(),
         },
     )
 
@@ -315,6 +316,43 @@ async def settings_save(
     await db.commit()
 
     return RedirectResponse(url="/settings", status_code=303)
+
+
+@router.post("/settings/test-bot")
+async def settings_test_bot(
+    request: Request,
+    user: User = Depends(require_user),
+    telegram_token: str = Form(""),
+    telegram_chat_id: str = Form(""),
+):
+    if not telegram_token or not telegram_chat_id:
+        return Response(content="Заполните Bot Token и Chat ID", status_code=400)
+    from app.web.dependencies import send_test_message
+    result = await send_test_message(telegram_token, telegram_chat_id)
+    return Response(content=result, status_code=200 if "отправлено" in result else 400)
+
+
+@router.post("/settings/start-bot")
+async def settings_start_bot(
+    request: Request,
+    user: User = Depends(require_user),
+    telegram_token: str = Form(""),
+):
+    if not telegram_token:
+        return Response(content="Укажите Bot Token", status_code=400)
+    from app.web.dependencies import start_bot
+    result = await start_bot(telegram_token)
+    return Response(content=result, status_code=200 if "успешно" in result or "уже" in result else 400)
+
+
+@router.post("/settings/stop-bot")
+async def settings_stop_bot(
+    request: Request,
+    user: User = Depends(require_user),
+):
+    from app.web.dependencies import stop_bot
+    result = await stop_bot()
+    return Response(content=result)
 
 
 @router.get("/logs", response_class=HTMLResponse)
