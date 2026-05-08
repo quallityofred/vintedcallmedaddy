@@ -77,10 +77,9 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
             exists_result = await db.execute(
                 select(FoundItem.id).where(
                     FoundItem.vinted_item_id == item.id,
-                    FoundItem.domain == item.domain,
                 )
             )
-            if exists_result.scalar_one_or_none() is not None:
+            if exists_result.first() is not None:
                 continue
 
             found_item = FoundItem(
@@ -127,10 +126,9 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
             result = await db.execute(
                 select(FoundItem).where(
                     FoundItem.vinted_item_id == item.id,
-                    FoundItem.domain == item.domain,
                 )
             )
-            fi = result.scalar_one_or_none()
+            fi = result.scalars().first()
             if fi:
                 fi.notified = not is_cold_start
                 await db.commit()

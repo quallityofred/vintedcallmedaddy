@@ -22,9 +22,11 @@ class TokenBucketLimiter:
         async with self._get_lock(domain):
             error_count = self.error_counts.get(domain, 0)
             if error_count >= 3:
-                await asyncio.sleep(600.0)
+                wait = 600.0 + random.uniform(0.0, 60.0)
+                await asyncio.sleep(wait)
             elif error_count > 0:
-                await asyncio.sleep(30.0 * (2 ** (error_count - 1)))
+                base = 30.0 * (2 ** (error_count - 1))
+                await asyncio.sleep(base + random.uniform(0.0, base * 0.5))
 
             now = time.monotonic()
             tokens = self.buckets.get(domain, self.rate)
@@ -41,7 +43,7 @@ class TokenBucketLimiter:
 
             self.buckets[domain] = tokens - 1.0
             self.last_time[domain] = now
-            await asyncio.sleep(random.uniform(2.0, 6.0))
+            await asyncio.sleep(random.uniform(4.0, 10.0))
 
     def report_error(self, domain: str) -> None:
         self.error_counts[domain] = self.error_counts.get(domain, 0) + 1
