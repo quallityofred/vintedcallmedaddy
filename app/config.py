@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     telegram_chat_id: int
     check_interval_seconds: int = 120
-    database_url: str = "sqlite+aiosqlite:///data/vinted.db"
+    database_url: str = "sqlite+aiosqlite:////data/app.db"
     proxies: str = ""
     sessions_per_domain: int = 3
     rate_limit_per_minute: int = 8
