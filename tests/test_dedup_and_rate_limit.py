@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base, FoundItem, HiddenSeller, Monitor
-from app.scraper.client import VintedClient, MAX_CONCURRENT_DOMAINS
+from app.scraper.client import VintedClient
 from app.scraper.parser import VintedItem
 from app.scraper.rate_limiter import TokenBucketLimiter
 
@@ -239,12 +239,39 @@ class TestDeduplication:
 class TestRateLimiting:
 
     @pytest.mark.asyncio
-    async def test_semaphore_limits_concurrency(self):
-        """Verify that the semaphore limits concurrent domain searches."""
+    async def test_sequential_domain_execution(self):
+        """Verify domains are searched one at a time (sequentially)."""
         rate_limiter = TokenBucketLimiter(rate=100.0, per=1.0)
         client = VintedClient(rate_limiter=rate_limiter)
 
-        assert client._domain_semaphore._value == MAX_CONCURRENT_DOMAINS
+        active_count = 0
+        max_concurrent = 0
+        call_order: list[str] = []
+
+        async def mock_search(domain: str, params: dict) -> list[VintedItem]:
+            nonlocal active_count, max_concurrent
+            active_count += 1
+            max_concurrent = max(max_concurrent, active_count)
+            call_order.append(domain)
+            await asyncio.sleep(0.01)
+            active_count -= 1
+            return [_make_item(1, domain)]
+
+        client.search = mock_search  # type: ignore[assignment]
+
+        original_sleep = asyncio.sleep
+
+        async def fast_sleep(delay: float) -> None:
+            await original_sleep(min(delay, 0.01))
+
+        with patch("app.scraper.client.asyncio.sleep", side_effect=fast_sleep):
+            await client.search_all_domains(
+                {"brand_ids": "123"},
+                ["vinted.fr", "vinted.de", "vinted.it"],
+            )
+
+        assert max_concurrent == 1, "Domains must be searched sequentially (one at a time)"
+        assert len(call_order) == 3
 
     @pytest.mark.asyncio
     async def test_search_all_domains_uses_global_lock(self):

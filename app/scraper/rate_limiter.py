@@ -5,7 +5,7 @@ import time
 
 
 class TokenBucketLimiter:
-    def __init__(self, rate: float = 8.0, per: float = 60.0) -> None:
+    def __init__(self, rate: float = 3.0, per: float = 60.0) -> None:
         self.rate = rate
         self.per = per
         self.buckets: dict[str, float] = {}
