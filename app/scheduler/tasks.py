@@ -195,7 +195,6 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
                     fi.notified = not is_cold_start
                 await db.commit()
 
-        if new_items:
             logger.info(
                 "Monitor %s found %d new items (interval=%ds)",
                 monitor.name,
@@ -206,47 +205,6 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
         logger.warning("IntegrityError for monitor_id=%d: %s. This item may have been processed concurrently.", monitor_id, e.orig)
     except Exception:
         logger.exception("Unexpected error in check_monitor for monitor_id=%d", monitor_id)
-
-    bot_to_use = _telegram_bot
-    chat_id_to_use = settings.telegram_chat_id
-    if monitor.user_id:
-        async with AsyncSessionLocal() as db:
-            user_result = await db.execute(
-                select(User).where(User.id == monitor.user_id)
-            )
-            owner = user_result.scalar_one_or_none()
-            if owner and owner.telegram_bot_token and owner.telegram_chat_id:
-                from app.telegram.bot import get_or_create_bot as _get_bot
-                bot_to_use, _ = _get_bot(owner.telegram_bot_token)
-                chat_id_to_use = int(owner.telegram_chat_id)
-
-    for item in new_items:
-        if not is_cold_start and bot_to_use and chat_id_to_use:
-            await send_item_notification(
-                bot_to_use,
-                chat_id_to_use,
-                item,
-            )
-
-    if new_items:
-        new_item_ids = [item.id for item in new_items]
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(FoundItem).where(
-                    FoundItem.vinted_item_id.in_(new_item_ids)
-                )
-            )
-            for fi in result.scalars().all():
-                fi.notified = not is_cold_start
-            await db.commit()
-
-    if new_items:
-        logger.info(
-            "Monitor %s found %d new items (interval=%ds)",
-            monitor.name,
-            len(new_items),
-            monitor.interval_sec,
-        )
 
 
 def _resolve_original_interval(monitor: Monitor) -> int:
