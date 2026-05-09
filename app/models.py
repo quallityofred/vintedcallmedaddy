@@ -3,7 +3,7 @@ import hashlib
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -86,7 +86,7 @@ class FoundItem(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     monitor_id: Mapped[int] = mapped_column(ForeignKey("monitors.id"), nullable=False)
-    vinted_item_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    vinted_item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     domain: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
@@ -96,7 +96,7 @@ class FoundItem(Base):
     condition: Mapped[str] = mapped_column(String, nullable=False)
     photo_url: Mapped[str] = mapped_column(String, nullable=False)
     item_url: Mapped[str] = mapped_column(String, nullable=False)
-    seller_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    seller_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     found_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     notified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -126,7 +126,7 @@ class HiddenSeller(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    seller_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    seller_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     hidden_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 

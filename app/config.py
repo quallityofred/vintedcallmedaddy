@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     telegram_chat_id: int = 0
     check_interval_seconds: int = 120
     secret_key: str = "change-me-in-production"
-    database_url: str = "sqlite+aiosqlite:///./data/vinted.db"
+    database_url: str = "postgresql+asyncpg://user:password@localhost/vintedbot"
     proxies: str = ""
     sessions_per_domain: int = 3
     rate_limit_per_minute: int = 8
@@ -22,10 +22,13 @@ class Settings(BaseSettings):
     offpeak_interval_multiplier: float = 2.5
     night_interval_multiplier: float = 5.0
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def get_proxy_list(self) -> list[str]:
         return [proxy.strip() for proxy in self.proxies.split(",") if proxy.strip()]
+
+    def is_sqlite(self) -> bool:
+        return self.database_url.startswith("sqlite")
 
     def get_sqlite_data_dir(self) -> Path | None:
         prefix = "sqlite+aiosqlite:///"
