@@ -102,34 +102,31 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 
     try:
         async with AsyncSessionLocal() as db:
-            from app.models import FoundItem, HiddenSeller, Monitor, User, SeenItem
-            # ...
-                        # Deduplication logic using SeenItem
-                        filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
-                        if filtered_items:
-                            all_item_ids = [i.id for i in filtered_items]
-                            existing_result = await db.execute(
-                                select(SeenItem.vinted_item_id).where(
-                                    SeenItem.vinted_item_id.in_(all_item_ids)
-                                )
-                            )
-                            existing_ids: set[int] = {row[0] for row in existing_result.fetchall()}
-                        else:
-                            existing_ids = set()
+            monitor = await db.merge(monitor)
 
-                        for item in filtered_items:
-                            if item.id in existing_ids:
-                                continue
+            filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+            if filtered_items:
+                all_item_ids = [i.id for i in filtered_items]
+                existing_result = await db.execute(
+                    select(SeenItem.vinted_item_id).where(
+                        SeenItem.vinted_item_id.in_(all_item_ids)
+                    )
+                )
+                existing_ids: set[int] = {row[0] for row in existing_result.fetchall()}
+            else:
+                existing_ids = set()
 
-                            # Add to SeenItem for persistent deduplication
-                            db.add(SeenItem(vinted_item_id=item.id, domain=item.domain))
+            for item in filtered_items:
+                if item.id in existing_ids:
+                    continue
 
-                            found_item = FoundItem(
-                                # ... rest of FoundItem init ...
-                            )
-                            db.add(found_item)
-                            new_items.append(item)
+                # Add to SeenItem for persistent deduplication
+                db.add(SeenItem(vinted_item_id=item.id, domain=item.domain))
 
+                found_item = FoundItem(
+                    monitor_id=monitor_id,
+                    vinted_item_id=item.id,
+                    domain=item.domain,
                     title=item.title,
                     price=item.price,
                     currency=item.currency,
