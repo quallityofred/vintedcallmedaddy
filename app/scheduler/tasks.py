@@ -1,4 +1,3 @@
-# app/scheduler/tasks.py
 import asyncio
 import json
 import logging
@@ -8,11 +7,13 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import insert, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.models import FoundItem, HiddenSeller, Monitor, User, SeenItem
+from app.models import FoundItem, HiddenSeller, Monitor, SeenItem, User
 from app.scraper.client import VintedClient
 from app.scraper.parser import VintedItem
 from app.telegram.notifications import send_item_notification
@@ -73,11 +74,6 @@ def _reset_interval_if_scaled_from_time_window(monitor: Monitor) -> int:
     return _normalize_adaptive_interval(monitor)
 
 
-from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
-
-# ... (rest of imports)
-
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
@@ -120,8 +116,10 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
                 if item.id in existing_ids:
                     continue
 
-                # Add to SeenItem for persistent deduplication
-                db.add(SeenItem(vinted_item_id=item.id, domain=item.domain))
+                # Atomic upsert for SeenItem
+                stmt = pg_insert(SeenItem).values(vinted_item_id=item.id, domain=item.domain)
+                stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
+                await db.execute(stmt)
 
                 found_item = FoundItem(
                     monitor_id=monitor_id,
