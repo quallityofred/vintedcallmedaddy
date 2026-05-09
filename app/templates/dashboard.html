@@ -53,13 +53,27 @@
             {% endif %}
         </div>
     </div>
-    <div class="card p-6">
-        <div class="flex items-center gap-2 mb-4"><i data-lucide="clock-4" class="w-4 h-4 text-muted"></i><h2 class="text-base font-semibold text-text">Последние находки</h2></div>
-        {% if last_found %}
-        <p class="text-muted text-sm">Все товары в разделе <a href="/logs" class="text-accent hover:underline font-medium">Логи →</a></p>
-        {% else %}
-        <div class="text-center py-6"><i data-lucide="inbox" class="w-8 h-8 text-muted mx-auto mb-2"></i><p class="text-muted text-sm">Пока нет найденных товаров</p></div>
-        {% endif %}
+    <div class="card p-6 mt-6">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2"><i data-lucide="terminal" class="w-4 h-4 text-muted"></i><h2 class="text-base font-semibold text-text">Live Console</h2></div>
+        </div>
+        <div id="log-console" class="bg-black text-green-400 font-mono text-xs p-4 h-64 overflow-y-auto rounded border border-gray-800">
+            Загрузка логов...
+        </div>
     </div>
 </div>
+
+<script>
+    function fetchLogs() {
+        fetch('/api/logs')
+            .then(response => response.json())
+            .then(data => {
+                const consoleDiv = document.getElementById('log-console');
+                consoleDiv.innerHTML = data.logs.join('<br>');
+                consoleDiv.scrollTop = consoleDiv.scrollHeight;
+            });
+    }
+    setInterval(fetchLogs, 3000);
+    fetchLogs();
+</script>
 {% endblock %}
