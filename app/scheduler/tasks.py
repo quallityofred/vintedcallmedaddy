@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.models import FoundItem, HiddenSeller, Monitor, User
+from app.models import FoundItem, HiddenSeller, Monitor, User, SeenItem
 from app.scraper.client import VintedClient
 from app.scraper.parser import VintedItem
 from app.telegram.notifications import send_item_notification
