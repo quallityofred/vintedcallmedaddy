@@ -82,7 +82,7 @@ async def start_bot(
 ) -> str:
     global _bot_instance, _bot_task, _bot_token
     if is_bot_running():
-        return "Р‘РѕС‚ СѓР¶Рµ Р·Р°РїСѓС‰РµРЅ"
+        return "Бот уже запущен"
     try:
         from app.scheduler.tasks import set_telegram_bot
         from app.telegram.bot import get_or_create_bot, start_polling, terminate_all_sessions
@@ -96,12 +96,12 @@ async def start_bot(
         if persist:
             await _persist_active_bot_owner(owner_user_id)
         logger.info("Bot started via settings")
-        return "Р‘РѕС‚ СѓСЃРїРµС€РЅРѕ Р·Р°РїСѓС‰РµРЅ"
+        return "Бот успешно запущен"
     except Exception as e:
         logger.exception("Failed to start bot")
         _bot_instance = None
         _bot_token = ""
-        return f"РћС€РёР±РєР° Р·Р°РїСѓСЃРєР°: {e}"
+        return f"Ошибка запуска: {e}"
 
 
 async def stop_bot(clear_persisted_state: bool = True) -> str:
@@ -109,7 +109,7 @@ async def stop_bot(clear_persisted_state: bool = True) -> str:
     if not is_bot_running():
         if clear_persisted_state:
             await _persist_active_bot_owner(None)
-        return "Р‘РѕС‚ РЅРµ Р·Р°РїСѓС‰РµРЅ"
+        return "Бот не запущен"
     try:
         from app.scheduler.tasks import set_telegram_bot
         from app.telegram.bot import get_or_create_bot
@@ -130,10 +130,10 @@ async def stop_bot(clear_persisted_state: bool = True) -> str:
         if clear_persisted_state:
             await _persist_active_bot_owner(None)
         logger.info("Bot stopped via settings")
-        return "Р‘РѕС‚ РѕСЃС‚Р°РЅРѕРІР»РµРЅ"
+        return "Бот остановлен"
     except Exception as e:
         logger.exception("Failed to stop bot")
-        return f"РћС€РёР±РєР° РѕСЃС‚Р°РЅРѕРІРєРё: {e}"
+        return f"Ошибка остановки: {e}"
 
 
 async def send_test_message(token: str, chat_id: str) -> str:
@@ -143,10 +143,10 @@ async def send_test_message(token: str, chat_id: str) -> str:
         test_bot = Bot(token=token, default=DefaultBotProperties(parse_mode="HTML"))
         await test_bot.send_message(
             chat_id=int(chat_id),
-            text="вњ… <b>РўРµСЃС‚РѕРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ</b>\nVinted Monitor СЂР°Р±РѕС‚Р°РµС‚ РєРѕСЂСЂРµРєС‚РЅРѕ!",
+            text="✅ <b>Тестовое сообщение</b>\nVinted Monitor работает корректно!",
         )
         await test_bot.session.close()
-        return "РўРµСЃС‚РѕРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ РѕС‚РїСЂР°РІР»РµРЅРѕ"
+        return "Тестовое сообщение отправлено"
     except Exception as e:
         logger.exception("Test message failed")
-        return f"РћС€РёР±РєР°: {e}"
+        return f"Ошибка: {e}"
