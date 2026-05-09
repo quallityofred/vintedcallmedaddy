@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     telegram_chat_id: int = 0
     check_interval_seconds: int = 120
     secret_key: str = "change-me-in-production"
-    database_url: str = "postgresql+asyncpg://user:password@localhost/vintedbot"
+    database_url: str = "postgresql+asyncpg://user:password@localhost/vintedbot?ssl=require"
     proxies: str = ""
     sessions_per_domain: int = 3
     rate_limit_per_minute: int = 8
