@@ -198,10 +198,17 @@ async def monitor_update(
     api_params = parsed["params"]
     api_params["_original_interval"] = interval_sec
 
+    # Reset baseline if search parameters changed
+    new_params_json = json.dumps(api_params)
+    new_domains_json = json.dumps(domains)
+    if monitor.params_json != new_params_json or monitor.domains_json != new_domains_json:
+        monitor.last_check_at = None
+        monitor.items_found_count = 0
+
     monitor.name = name
     monitor.original_url = url
-    monitor.params_json = json.dumps(api_params)
-    monitor.domains_json = json.dumps(domains)
+    monitor.params_json = new_params_json
+    monitor.domains_json = new_domains_json
     monitor.interval_sec = interval_sec
     monitor.is_active = is_active
     await db.commit()

@@ -93,7 +93,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
         items = []
 
     new_items: list[VintedItem] = []
-    is_cold_start = monitor.last_check_at is None
+    is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
 
     async with AsyncSessionLocal() as db:
         monitor = await db.merge(monitor)
