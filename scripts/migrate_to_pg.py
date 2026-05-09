@@ -13,7 +13,7 @@ from app.config import get_settings
 async def migrate():
     settings = get_settings()
     
-    sqlite_url = "sqlite+aiosqlite:///./data/vinted.db"
+    sqlite_url = "sqlite+aiosqlite:///C:/Users/egory/Desktop/vinted_bot/vintedbot/data/vinted.db"
     pg_url = settings.database_url
     
     if "sqlite" in pg_url:
@@ -44,12 +44,10 @@ async def migrate():
                 
                 if items:
                     for item in items:
-                        # Expunge from sqlite session to avoid conflicts
-                        sqlite_session.expunge(item)
-                        # Make it transient so it can be added to new session
-                        from sqlalchemy import inspect
-                        inspect(item).session = None
-                        pg_session.add(item)
+                        # Copy data to a new instance of the model
+                        data = {k: v for k, v in item.__dict__.items() if not k.startswith('_')}
+                        new_item = model(**data)
+                        pg_session.add(new_item)
                     
                     await pg_session.commit()
                     print(f"  Migrated {len(items)} records.")
