@@ -18,7 +18,7 @@ if settings.is_sqlite():
     if data_dir is not None:
         data_dir.mkdir(parents=True, exist_ok=True)
 
-engine = create_async_engine(settings.database_url, echo=False, future=True)
+engine = create_async_engine(settings.database_url_validated, echo=False, future=True)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 

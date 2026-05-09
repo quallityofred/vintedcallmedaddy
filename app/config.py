@@ -10,7 +10,19 @@ class Settings(BaseSettings):
     telegram_chat_id: int = 0
     check_interval_seconds: int = 120
     secret_key: str = "change-me-in-production"
-    database_url: str = "postgresql+asyncpg://user:password@localhost/vintedbot?ssl=require"
+    database_url: str = "postgresql+asyncpg://postgres:password@localhost/vintedbot?ssl=require"
+
+    @property
+    def database_url_validated(self) -> str:
+        # Ensure we always use ssl=require for production cloud databases
+        url = self.database_url
+        if "supabase.co" in url or "neon.tech" in url:
+            if "?ssl=" not in url:
+                url += "?ssl=require"
+            elif "ssl=disable" in url:
+                url = url.replace("ssl=disable", "ssl=require")
+        return url
+
     proxies: str = ""
     sessions_per_domain: int = 3
     rate_limit_per_minute: int = 8
