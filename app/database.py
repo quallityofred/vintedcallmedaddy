@@ -1,10 +1,15 @@
 # app/database.py
+import asyncio
+import logging
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
 from app.models import Base
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -18,8 +23,20 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=As
 
 
 async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    max_retries = 5
+    for i in range(max_retries):
+        try:
+            logger.info(f"Attempting to connect to database (attempt {i+1}/{max_retries})...")
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database initialized successfully.")
+            return
+        except SQLAlchemyError as e:
+            logger.error(f"Database initialization failed: {e}")
+            if i < max_retries - 1:
+                await asyncio.sleep(5)
+            else:
+                raise e
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
