@@ -130,6 +130,13 @@ class HiddenSeller(Base):
     hidden_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
+class AppSettings(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class SeenItem(Base):
     __tablename__ = "seen_items"
     __table_args__ = (
