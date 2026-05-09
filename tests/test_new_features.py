@@ -6,10 +6,18 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.models import AppSettings, Base, User
 from app.scraper.client import CloudflareFallback, VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 from app.scraper.session_manager import SessionManager, VintedSession
+from app.telegram.settings_store import (
+    ACTIVE_TELEGRAM_USER_ID_KEY,
+    get_active_telegram_user_id,
+    set_active_telegram_user_id,
+    update_user_chat_id_by_bot_token,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +125,66 @@ class TestAdaptiveScheduling:
             mock_dt.now.return_value = datetime(2026, 5, 8, 23, 30, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kw: datetime(*args, **kw)
             assert _get_effective_interval(120) == 300
+
+    def test_normalize_adaptive_interval_never_below_original(self):
+        from app.models import Monitor
+        from app.scheduler.tasks import _normalize_adaptive_interval
+
+        monitor = Monitor(
+            name="test",
+            original_url="https://example.com",
+            params_json='{"_original_interval": 120}',
+            domains_json="[]",
+            interval_sec=60,
+            is_active=True,
+        )
+
+        assert _normalize_adaptive_interval(monitor) == 120
+
+    def test_night_scaled_interval_resets_to_original_base(self):
+        from app.models import Monitor
+        from app.scheduler.tasks import _reset_interval_if_scaled_from_time_window
+
+        monitor = Monitor(
+            name="test",
+            original_url="https://example.com",
+            params_json='{"_original_interval": 120}',
+            domains_json="[]",
+            interval_sec=600,
+            is_active=True,
+        )
+
+        assert _reset_interval_if_scaled_from_time_window(monitor) == 120
+
+    def test_offpeak_scaled_interval_resets_to_original_base(self):
+        from app.models import Monitor
+        from app.scheduler.tasks import _reset_interval_if_scaled_from_time_window
+
+        monitor = Monitor(
+            name="test",
+            original_url="https://example.com",
+            params_json='{"_original_interval": 120}',
+            domains_json="[]",
+            interval_sec=300,
+            is_active=True,
+        )
+
+        assert _reset_interval_if_scaled_from_time_window(monitor) == 120
+
+    def test_adaptive_interval_above_original_is_preserved(self):
+        from app.models import Monitor
+        from app.scheduler.tasks import _reset_interval_if_scaled_from_time_window
+
+        monitor = Monitor(
+            name="test",
+            original_url="https://example.com",
+            params_json='{"_original_interval": 120}',
+            domains_json="[]",
+            interval_sec=180,
+            is_active=True,
+        )
+
+        assert _reset_interval_if_scaled_from_time_window(monitor) == 180
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +305,78 @@ class TestVintedClientCFFallback:
         client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf)
         assert client.cf_fallback is not None
         assert client.cf_fallback.is_configured
+
+
+# ---------------------------------------------------------------------------
+# Telegram settings persistence tests
+# ---------------------------------------------------------------------------
+
+class TestTelegramSettingsPersistence:
+
+    @pytest.mark.asyncio
+    async def test_active_telegram_user_id_roundtrip(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as db:
+            await set_active_telegram_user_id(db, 42)
+            await db.commit()
+
+        async with session_factory() as db:
+            assert await get_active_telegram_user_id(db) == 42
+
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_clear_active_telegram_user_id_removes_setting(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as db:
+            await set_active_telegram_user_id(db, 42)
+            await db.commit()
+
+        async with session_factory() as db:
+            await set_active_telegram_user_id(db, None)
+            await db.commit()
+
+        async with session_factory() as db:
+            assert await get_active_telegram_user_id(db) is None
+            assert await db.get(AppSettings, ACTIVE_TELEGRAM_USER_ID_KEY) is None
+
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_update_user_chat_id_by_bot_token_updates_matching_user(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as db:
+            user = User(
+                username="alice",
+                password_hash="",
+                password_salt="",
+                telegram_bot_token="bot-token",
+                telegram_chat_id="",
+            )
+            user.set_password("secret123")
+            db.add(user)
+            await db.commit()
+
+        async with session_factory() as db:
+            updated = await update_user_chat_id_by_bot_token(db, "bot-token", "123456")
+            await db.commit()
+            assert updated is True
+
+        async with session_factory() as db:
+            saved_user = await db.get(User, 1)
+            assert saved_user is not None
+            assert saved_user.telegram_chat_id == "123456"
+
+        await engine.dispose()

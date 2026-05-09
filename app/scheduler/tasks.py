@@ -48,6 +48,31 @@ def _get_effective_interval(base_interval: int) -> int:
     return int(base_interval * settings.offpeak_interval_multiplier)
 
 
+def _get_time_window_multiplier() -> float:
+    if _is_peak_time():
+        return 1.0
+    hour = datetime.now(timezone.utc).hour
+    if 0 <= hour < settings.peak_start_hour:
+        return settings.night_interval_multiplier
+    return settings.offpeak_interval_multiplier
+
+
+def _normalize_adaptive_interval(monitor: Monitor) -> int:
+    original_interval = _resolve_original_interval(monitor)
+    return max(min(monitor.interval_sec, MAX_INTERVAL_SECONDS), original_interval)
+
+
+def _reset_interval_if_scaled_from_time_window(monitor: Monitor) -> int:
+    original_interval = _resolve_original_interval(monitor)
+    if monitor.interval_sec <= original_interval:
+        return original_interval
+    night_scaled = int(original_interval * settings.night_interval_multiplier)
+    offpeak_scaled = int(original_interval * settings.offpeak_interval_multiplier)
+    if monitor.interval_sec in {night_scaled, offpeak_scaled}:
+        return original_interval
+    return _normalize_adaptive_interval(monitor)
+
+
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
@@ -109,6 +134,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
             new_items.append(item)
 
         original_interval = _resolve_original_interval(monitor)
+        monitor.interval_sec = _reset_interval_if_scaled_from_time_window(monitor)
         if new_items:
             monitor.items_found_count += len(new_items)
             monitor.consecutive_empty = 0
@@ -194,7 +220,8 @@ class MonitorScheduler:
             monitors = result.scalars().all()
 
         for monitor in monitors:
-            effective = _get_effective_interval(monitor.interval_sec)
+            normalized = _normalize_adaptive_interval(monitor)
+            effective = _get_effective_interval(normalized)
             stagger = random.uniform(5.0, 30.0)
             job = self.scheduler.add_job(
                 check_monitor,

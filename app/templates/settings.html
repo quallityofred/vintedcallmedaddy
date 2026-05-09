@@ -133,13 +133,14 @@ function testBot() {
 }
 function startBot() {
     const token = document.getElementById('telegram_token').value;
+    const chatId = document.getElementById('telegram_chat_id').value;
     const resultEl = document.getElementById('bot-result');
     resultEl.textContent = 'Запуск...';
     resultEl.className = 'text-xs text-muted';
     fetch('/settings/start-bot', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'telegram_token=' + encodeURIComponent(token)
+        body: 'telegram_token=' + encodeURIComponent(token) + '&telegram_chat_id=' + encodeURIComponent(chatId)
     })
     .then(r => r.text())
     .then(msg => {

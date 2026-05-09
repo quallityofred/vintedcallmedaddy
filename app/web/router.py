@@ -296,6 +296,8 @@ async def settings_save(
     sessions_per_domain: int = Form(3),
     rate_limit_per_minute: int = Form(8),
 ):
+    telegram_token = telegram_token.strip()
+    telegram_chat_id = telegram_chat_id.strip()
     user_in_db = await db.get(User, user.id)
     if user_in_db:
         user_in_db.telegram_bot_token = telegram_token
@@ -335,13 +337,23 @@ async def settings_test_bot(
 @router.post("/settings/start-bot")
 async def settings_start_bot(
     request: Request,
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(require_user),
     telegram_token: str = Form(""),
+    telegram_chat_id: str = Form(""),
 ):
+    telegram_token = telegram_token.strip()
+    telegram_chat_id = telegram_chat_id.strip()
     if not telegram_token:
         return Response(content="Укажите Bot Token", status_code=400)
+    user_in_db = await db.get(User, user.id)
+    if user_in_db:
+        user_in_db.telegram_bot_token = telegram_token
+        if telegram_chat_id:
+            user_in_db.telegram_chat_id = telegram_chat_id
+        await db.commit()
     from app.web.dependencies import start_bot
-    result = await start_bot(telegram_token)
+    result = await start_bot(telegram_token, owner_user_id=user.id)
     return Response(content=result, status_code=200 if "успешно" in result or "уже" in result else 400)
 
 

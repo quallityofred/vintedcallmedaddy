@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from app.database import AsyncSessionLocal
 from app.models import AppSettings, FoundItem, HiddenSeller, Monitor
+from app.telegram.settings_store import update_user_chat_id_by_bot_token
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -18,6 +19,7 @@ router = Router()
 async def cmd_start(message: Message) -> None:
     chat_id = str(message.chat.id)
     async with AsyncSessionLocal() as db:
+        await update_user_chat_id_by_bot_token(db, message.bot.token, chat_id)
         setting = await db.get(AppSettings, "telegram_chat_id")
         if setting is None:
             setting = AppSettings(key="telegram_chat_id", value=chat_id)

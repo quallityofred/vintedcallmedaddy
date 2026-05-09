@@ -31,7 +31,7 @@ cp .env.example .env
 TELEGRAM_BOT_TOKEN=8605884311:AAEdjC_EcB5WHOT7JpBxi_EhOQPOwjyNa7s
 TELEGRAM_CHAT_ID=8631266527
 CHECK_INTERVAL_SECONDS=120
-DATABASE_URL=sqlite+aiosqlite:///data/vinted.db
+DATABASE_URL=sqlite+aiosqlite:///./data/vinted.db
 PROXIES=
 SESSIONS_PER_DOMAIN=3
 RATE_LIMIT_PER_MINUTE=8
@@ -41,25 +41,36 @@ RATE_LIMIT_PER_MINUTE=8
 - `TELEGRAM_CHAT_ID` — ID чата, куда будут приходить уведомления
 - `PROXIES` — список прокси через запятую (опционально)
 
-### 2. Запуск через Docker
+### 2. Локальный запуск без Docker
+
+Установите зависимости и запустите приложение напрямую:
+
+```bash
+poetry install
+poetry run uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
+База SQLite будет создана локально в `./data/vinted.db`.
+
+### 3. Запуск через Docker (опционально)
 
 ```bash
 docker-compose up --build
 ```
 
-### 3. Открыть веб-интерфейс
+### 4. Открыть веб-интерфейс
 
 Перейдите по адресу [http://localhost:8080](http://localhost:8080).
 
-### 4. Проверить настройки
+### 5. Проверить настройки
 
 Зайдите в раздел **Настройки**, проверьте что Telegram токен и Chat ID указаны верно.
 
-### 5. Подключить Telegram бота
+### 6. Подключить Telegram бота
 
-Отправьте команду `/start` вашему боту в Telegram. Chat ID сохранится автоматически.
+Отправьте команду `/start` вашему боту в Telegram. Chat ID сохранится в базе данных автоматически, а активный Telegram-бот будет подниматься после перезапуска приложения без повторного ввода токена.
 
-### 6. Добавить первый монитор
+### 7. Добавить первый монитор
 
 1. Перейдите в раздел **Мониторы** → **Добавить**
 2. Вставьте URL каталога Vinted, например:
@@ -105,7 +116,8 @@ vinted_bot/
 │   ├── telegram/            # Telegram бот
 │   │   ├── bot.py           # Создание и запуск бота
 │   │   ├── handlers.py      # Обработчики команд
-│   │   └── notifications.py # Отправка уведомлений
+│   │   ├── notifications.py # Отправка уведомлений
+│   │   └── settings_store.py # Персистентное хранение активного бота в БД
 │   ├── web/                 # Веб-интерфейс
 │   │   ├── router.py        # FastAPI маршруты
 │   │   ├── schemas.py       # Pydantic схемы
@@ -192,6 +204,6 @@ export default {
 - **База данных**: SQLite (aiosqlite) + SQLAlchemy 2.0 async
 - **Парсинг**: curl_cffi (TLS fingerprint impersonation)
 - **Планировщик**: APScheduler (AsyncIOScheduler)
-- **Telegram**: aiogram 3.x
+- **Telegram**: aiogram 3.x, настройки бота и Chat ID персистятся в SQLite
 - **Фронтенд**: Jinja2 + HTMX + Tailwind CSS
-- **Деплой**: Docker + docker-compose
+- **Деплой**: локальный запуск Python/Poetry или Docker

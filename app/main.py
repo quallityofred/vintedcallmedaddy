@@ -16,7 +16,7 @@ from app.scraper.rate_limiter import TokenBucketLimiter
 from app.scheduler.tasks import MonitorScheduler
 from app.web.auth import RequireLoginException
 from app.web.auth_router import router as auth_router
-from app.web.dependencies import set_scheduler
+from app.web.dependencies import restore_persisted_bot, set_scheduler
 from app.web.router import router as web_router
 
 logging.basicConfig(
@@ -67,16 +67,20 @@ async def lifespan(app: FastAPI):
     scheduler = MonitorScheduler(client=client)
     set_scheduler(scheduler)
     await scheduler.start()
+    restore_result = await restore_persisted_bot()
 
     app.state.templates = templates
     app.state.scheduler = scheduler
-    logger.info("Bot not started — use /settings to configure and start")
+    if restore_result:
+        logger.info("Telegram bot restore result: %s", restore_result)
+    else:
+        logger.info("Bot not started — use /settings to configure and start")
 
     yield
 
     logger.info("Shutting down...")
     from app.web.dependencies import stop_bot as deps_stop_bot
-    await deps_stop_bot()
+    await deps_stop_bot(clear_persisted_state=False)
     await scheduler.stop()
     logger.info("Shutdown complete")
 
