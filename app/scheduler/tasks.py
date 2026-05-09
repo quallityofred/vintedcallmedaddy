@@ -79,17 +79,129 @@ from sqlalchemy.exc import IntegrityError
 # ... (rest of imports)
 
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
-    # ... (session handling)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+        monitor = result.scalar_one_or_none()
+        if monitor is None or not monitor.is_active:
+            return
+
+        params: dict = json.loads(monitor.params_json)
+        domains: list[str] = json.loads(monitor.domains_json)
+
+        hidden_result = await db.execute(select(HiddenSeller.seller_id))
+        hidden_seller_ids: set[int] = {row[0] for row in hidden_result.fetchall()}
+
     try:
         items = await client.search_all_domains(params, domains)
     except Exception:
         logger.exception("search_all_domains failed for monitor_id=%d", monitor_id)
         items = []
 
+    new_items: list[VintedItem] = []
+    is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
+
     try:
         async with AsyncSessionLocal() as db:
-            # ... (monitor processing logic)
+            monitor = await db.merge(monitor)
+
+            filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+            if filtered_items:
+                all_item_ids = [i.id for i in filtered_items]
+                existing_result = await db.execute(
+                    select(FoundItem.vinted_item_id).where(
+                        FoundItem.vinted_item_id.in_(all_item_ids)
+                    )
+                )
+                existing_ids: set[int] = {row[0] for row in existing_result.fetchall()}
+            else:
+                existing_ids = set()
+
+            for item in filtered_items:
+                if item.id in existing_ids:
+                    continue
+
+                found_item = FoundItem(
+                    monitor_id=monitor_id,
+                    vinted_item_id=item.id,
+                    domain=item.domain,
+                    title=item.title,
+                    price=item.price,
+                    currency=item.currency,
+                    brand=item.brand,
+                    size=item.size,
+                    condition=item.condition,
+                    photo_url=item.photo_url,
+                    item_url=item.item_url,
+                    seller_id=item.seller_id,
+                    found_at=datetime.now(timezone.utc),
+                    notified=False,
+                )
+                db.add(found_item)
+                new_items.append(item)
+
+            original_interval = _resolve_original_interval(monitor)
+            monitor.interval_sec = _reset_interval_if_scaled_from_time_window(monitor)
+            if new_items:
+                monitor.items_found_count += len(new_items)
+                monitor.consecutive_empty = 0
+                new_interval = max(
+                    int(monitor.interval_sec * INTERVAL_STEP_DOWN_FAST),
+                    original_interval,
+                )
+                monitor.interval_sec = new_interval
+            else:
+                monitor.consecutive_empty += 1
+                if _is_peak_time():
+                    threshold = EMPTY_THRESHOLD_FAST
+                else:
+                    threshold = EMPTY_THRESHOLD_SLOW
+                if monitor.consecutive_empty >= threshold:
+                    new_interval = int(monitor.interval_sec * INTERVAL_STEP_UP)
+                    monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
+
+            monitor.last_check_at = datetime.now(timezone.utc)
             await db.commit()
+
+        bot_to_use = _telegram_bot
+        chat_id_to_use = settings.telegram_chat_id
+        if monitor.user_id:
+            async with AsyncSessionLocal() as db:
+                user_result = await db.execute(
+                    select(User).where(User.id == monitor.user_id)
+                )
+                owner = user_result.scalar_one_or_none()
+                if owner and owner.telegram_bot_token and owner.telegram_chat_id:
+                    from app.telegram.bot import get_or_create_bot as _get_bot
+                    bot_to_use, _ = _get_bot(owner.telegram_bot_token)
+                    chat_id_to_use = int(owner.telegram_chat_id)
+
+        for item in new_items:
+            if not is_cold_start and bot_to_use and chat_id_to_use:
+                await send_item_notification(
+                    bot_to_use,
+                    chat_id_to_use,
+                    item,
+                )
+
+        if new_items:
+            new_item_ids = [item.id for item in new_items]
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(FoundItem).where(
+                        FoundItem.vinted_item_id.in_(new_item_ids)
+                    )
+                )
+                for fi in result.scalars().all():
+                    fi.notified = not is_cold_start
+                await db.commit()
+
+        if new_items:
+            logger.info(
+                "Monitor %s found %d new items (interval=%ds)",
+                monitor.name,
+                len(new_items),
+                monitor.interval_sec,
+            )
     except IntegrityError as e:
         logger.warning("IntegrityError for monitor_id=%d: %s. This item may have been processed concurrently.", monitor_id, e.orig)
     except Exception:
