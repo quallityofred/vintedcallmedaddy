@@ -50,6 +50,8 @@ def _build_keyboard(item: VintedItem) -> InlineKeyboardMarkup:
 
 
 async def send_item_notification(bot: Bot, chat_id: int, item: VintedItem) -> None:
+    from aiogram.exceptions import TelegramRetryAfter
+    
     flag = COUNTRY_FLAGS.get(item.domain, "🌍")
     caption = (
         f"🆕 <b>Новый товар!</b>\n"
@@ -62,25 +64,35 @@ async def send_item_notification(bot: Bot, chat_id: int, item: VintedItem) -> No
     )
     keyboard = _build_keyboard(item)
 
-    try:
-        if item.photo_url:
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=item.photo_url,
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
-        else:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=caption,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-                disable_web_page_preview=False,
-            )
-    except Exception:
-        logger.exception("Failed to send notification for item_id=%d", item.id)
+    # Retry logic for Telegram Flood Limits
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if item.photo_url:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=item.photo_url,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+            else:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=caption,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                    disable_web_page_preview=False,
+                )
+            # Success, add a tiny delay to be nice to TG
+            await asyncio.sleep(0.3)
+            return
+        except TelegramRetryAfter as e:
+            logger.warning("Flood control exceeded, waiting %d seconds", e.retry_after)
+            await asyncio.sleep(e.retry_after)
+        except Exception:
+            logger.exception("Failed to send notification for item_id=%d", item.id)
+            break
 
 
 async def send_batch(
