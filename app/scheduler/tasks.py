@@ -74,6 +74,26 @@ def _reset_interval_if_scaled_from_time_window(monitor: Monitor) -> int:
     return _normalize_adaptive_interval(monitor)
 
 
+async def _update_monitor_interval(db: AsyncSessionLocal, monitor: Monitor, found_new: bool, count: int = 0) -> None:
+    original_interval = _resolve_original_interval(monitor)
+    monitor.interval_sec = _reset_interval_if_scaled_from_time_window(monitor)
+    
+    if found_new:
+        monitor.items_found_count += count
+        monitor.consecutive_empty = 0
+        new_interval = max(
+            int(monitor.interval_sec * INTERVAL_STEP_DOWN_FAST),
+            original_interval,
+        )
+        monitor.interval_sec = new_interval
+    else:
+        monitor.consecutive_empty += 1
+        threshold = EMPTY_THRESHOLD_FAST if _is_peak_time() else EMPTY_THRESHOLD_SLOW
+        if monitor.consecutive_empty >= threshold:
+            new_interval = int(monitor.interval_sec * INTERVAL_STEP_UP)
+            monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
+
+
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
     # 1. Fetch monitor and hidden sellers, then release connection
     async with AsyncSessionLocal() as db:
