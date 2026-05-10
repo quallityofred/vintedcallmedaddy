@@ -228,6 +228,7 @@ async def monitor_delete(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_user),
 ):
+    from sqlalchemy import delete
     result = await db.execute(
         select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
     )
@@ -235,6 +236,7 @@ async def monitor_delete(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
 
+    await db.execute(delete(FoundItem).where(FoundItem.monitor_id == monitor_id))
     await db.delete(monitor)
     await db.commit()
 
@@ -244,7 +246,8 @@ async def monitor_delete(
     except RuntimeError:
         logger.warning("Scheduler not available, monitor job not removed")
 
-    return Response(status_code=200)
+    return Response(status_code=204)
+
 
 
 @router.post("/monitors/{monitor_id}/toggle", response_class=HTMLResponse)
