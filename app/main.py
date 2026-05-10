@@ -46,6 +46,15 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting Vinted Monitor...")
     await init_db()
+    
+    # Run admin and schema setup
+    from scripts.setup_admin import setup_admin
+    try:
+        await setup_admin()
+        logger.info("Admin setup and schema verification complete")
+    except Exception:
+        logger.exception("Failed to run admin setup")
+
     logger.info("Database initialized")
 
     rate_limiter = TokenBucketLimiter(

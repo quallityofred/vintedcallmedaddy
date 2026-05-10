@@ -44,6 +44,16 @@ async def require_user(
     return user
 
 
+async def require_admin(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> User:
+    user = await require_user(request, db)
+    if not user.is_admin:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Доступ запрещен: требуются права администратора")
+    return user
+
+
 class RequireLoginException(Exception):
     pass
 

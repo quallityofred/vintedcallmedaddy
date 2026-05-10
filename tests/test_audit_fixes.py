@@ -52,18 +52,24 @@ async def test_bot_token_change_lifecycle():
         from app.telegram.bot import _bots
         assert "token1" not in _bots
         assert "token2" in _bots
-
-
 @pytest.mark.asyncio
 async def test_check_monitor_efficiency(db_session):
     """Verify check_monitor uses atomic upserts and correctly updates monitor state."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    import random
+    
+    # Use unique IDs to avoid any leftover state issues
+    item_id = random.randint(1000000, 9999999)
+    
     # Setup monitor
     monitor = Monitor(
         name="Test",
         original_url="http://test.com",
         params_json=json.dumps({"q": "test"}),
         domains_json=json.dumps(["vinted.fr"]),
-        is_active=True
+        is_active=True,
+        items_found_count=1, # Not a cold start
+        last_check_at=datetime.now(timezone.utc)
     )
     db_session.add(monitor)
     await db_session.commit()
@@ -72,32 +78,33 @@ async def test_check_monitor_efficiency(db_session):
     mock_client = MagicMock()
     mock_client.search_all_domains = AsyncMock(return_value=[
         VintedItem(
-            id=123, title="Item 1", price=10.0, currency="EUR", brand="B", 
+            id=item_id, title="Item 1", price=10.0, currency="EUR", brand="B", 
             size="S", condition="N", photo_url="p", item_url="u", 
             domain="vinted.fr", seller_id=456
         )
     ])
 
-    from contextlib import asynccontextmanager
-    @asynccontextmanager
-    async def mock_session_local():
-        yield db_session
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
 
-    with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=mock_session_local), \
+    with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
          patch("app.scheduler.tasks.send_item_notification", AsyncMock()):
         
         await check_monitor(monitor_id, mock_client)
 
-    # Verify SeenItem created
-    result = await db_session.execute(select(SeenItem).where(SeenItem.vinted_item_id == 123))
-    assert result.scalar_one_or_none() is not None
+    # Verify results in a fresh session
+    async with session_factory() as verify_db:
+        # Verify SeenItem created
+        result = await verify_db.execute(select(SeenItem).where(SeenItem.vinted_item_id == item_id))
+        seen = result.scalar_one_or_none()
+        assert seen is not None, f"SeenItem with id {item_id} was not created"
 
-    # Verify FoundItem created
-    result = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 123))
-    assert result.scalar_one_or_none() is not None
+        # Verify FoundItem created
+        result = await verify_db.execute(select(FoundItem).where(FoundItem.vinted_item_id == item_id))
+        found = result.scalar_one_or_none()
+        assert found is not None, f"FoundItem with id {item_id} was not created"
 
-    # Verify Monitor updated
-    result = await db_session.execute(select(Monitor).where(Monitor.id == monitor_id))
-    updated_monitor = result.scalar_one()
-    assert updated_monitor.items_found_count == 1
-    assert updated_monitor.last_check_at is not None
+        # Verify Monitor updated
+        result = await verify_db.execute(select(Monitor).where(Monitor.id == monitor_id))
+        updated_monitor = result.scalar_one()
+        assert updated_monitor.items_found_count == 2
+

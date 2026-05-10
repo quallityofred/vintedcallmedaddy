@@ -203,6 +203,15 @@
                 <i data-lucide="scroll-text" class="w-4 h-4"></i>
                 <span>Логи</span>
             </a>
+            {% if user.is_admin %}
+            <div class="px-3 pt-4 pb-1">
+                <p class="text-[10px] font-bold text-muted uppercase tracking-widest">Администрирование</p>
+            </div>
+            <a href="/admin/invites" class="nav-link flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-text">
+                <i data-lucide="key" class="w-4 h-4"></i>
+                <span>Инвайт-коды</span>
+            </a>
+            {% endif %}
         </nav>
         <div class="p-4 border-t border-[rgba(74,222,128,0.08)]">
             <div class="flex items-center justify-between">

@@ -118,67 +118,67 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
         logger.exception("search_all_domains failed for monitor_id=%d", monitor_id)
         items = []
 
-        # 3. Save results in a new session
-        new_items_to_notify: list[VintedItem] = []
-        async with AsyncSessionLocal() as db:
-            # Re-fetch or merge monitor to the new session
-            result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-            monitor = result.scalar_one_or_none()
-            if monitor is None or not monitor.is_active:
-                return
+    # 3. Save results in a new session
+    new_items_to_notify: list[VintedItem] = []
+    async with AsyncSessionLocal() as db:
+        # Re-fetch or merge monitor to the new session
+        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+        monitor = result.scalar_one_or_none()
+        if monitor is None or not monitor.is_active:
+            return
 
-            if not items:
-                await _update_monitor_interval(db, monitor, False)
-                await db.commit()
-                return
-
-            filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
-            
-            for item in filtered_items:
-                # Atomic upsert for SeenItem
-                stmt = pg_insert(SeenItem).values(
-                    vinted_item_id=item.id, 
-                    domain=item.domain,
-                    seen_at=datetime.now(timezone.utc)
-                )
-                stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-                res = await db.execute(stmt)
-                
-                if res.rowcount == 0:
-                    continue
-
-                # If cold start, we mark as notified=True to SILENCE
-                # If normal run, we mark as notified=False to QUEUE for sending
-                notified_status = True if is_cold_start else False
-                
-                found_stmt = pg_insert(FoundItem).values(
-                    monitor_id=monitor_id,
-                    vinted_item_id=item.id,
-                    domain=item.domain,
-                    title=item.title,
-                    price=item.price,
-                    currency=item.currency,
-                    brand=item.brand,
-                    size=item.size,
-                    condition=item.condition,
-                    photo_url=item.photo_url,
-                    item_url=item.item_url,
-                    seller_id=item.seller_id,
-                    found_at=datetime.now(timezone.utc),
-                    notified=notified_status,
-                )
-                found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-                found_res = await db.execute(found_stmt)
-                
-                if found_res.rowcount > 0 and not notified_status:
-                    new_items_to_notify.append(item)
-
-            await _update_monitor_interval(db, monitor, (len(new_items_to_notify) > 0 or not is_cold_start), count=len(new_items_to_notify))
-            monitor.last_check_at = datetime.now(timezone.utc)
+        if not items:
+            await _update_monitor_interval(db, monitor, False)
             await db.commit()
+            return
 
-        # 4. Process Pending Notifications (including any backlog)
-        await process_pending_notifications()
+        filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+        
+        for item in filtered_items:
+            # Atomic upsert for SeenItem
+            stmt = pg_insert(SeenItem).values(
+                vinted_item_id=item.id, 
+                domain=item.domain,
+                seen_at=datetime.now(timezone.utc)
+            )
+            stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
+            res = await db.execute(stmt)
+            
+            if res.rowcount == 0:
+                continue
+
+            # If cold start, we mark as notified=True to SILENCE
+            # If normal run, we mark as notified=False to QUEUE for sending
+            notified_status = True if is_cold_start else False
+            
+            found_stmt = pg_insert(FoundItem).values(
+                monitor_id=monitor_id,
+                vinted_item_id=item.id,
+                domain=item.domain,
+                title=item.title,
+                price=item.price,
+                currency=item.currency,
+                brand=item.brand,
+                size=item.size,
+                condition=item.condition,
+                photo_url=item.photo_url,
+                item_url=item.item_url,
+                seller_id=item.seller_id,
+                found_at=datetime.now(timezone.utc),
+                notified=notified_status,
+            )
+            found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
+            found_res = await db.execute(found_stmt)
+            
+            if found_res.rowcount > 0 and not notified_status:
+                new_items_to_notify.append(item)
+
+        await _update_monitor_interval(db, monitor, (len(new_items_to_notify) > 0 or not is_cold_start), count=len(new_items_to_notify))
+        monitor.last_check_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    # 4. Process Pending Notifications (including any backlog)
+    await process_pending_notifications()
 
 
 async def process_pending_notifications() -> None:

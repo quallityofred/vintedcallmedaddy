@@ -71,6 +71,7 @@ async def register_submit(
     username: str = Form(...),
     password: str = Form(...),
     password_confirm: str = Form(...),
+    invite_code: str = Form(...),
 ):
     if len(username) < 3:
         return request.app.state.templates.TemplateResponse(
@@ -93,6 +94,18 @@ async def register_submit(
             {"request": request, "error": "Пароли не совпадают"},
         )
 
+    # Validate Invite Code
+    from app.models import InviteCode
+    code_result = await db.execute(select(InviteCode).where(InviteCode.code == invite_code.strip()))
+    code_obj = code_result.scalar_one_or_none()
+    
+    if not code_obj or not code_obj.is_valid:
+        return request.app.state.templates.TemplateResponse(
+            request,
+            "auth/register.html",
+            {"request": request, "error": "Неверный или использованный инвайт-код"},
+        )
+
     existing = await db.execute(select(User).where(User.username == username))
     if existing.scalar_one_or_none() is not None:
         return request.app.state.templates.TemplateResponse(
@@ -101,9 +114,18 @@ async def register_submit(
             {"request": request, "error": "Это имя уже занято"},
         )
 
-    user = User(username=username, password_hash="", password_salt="")
+    user = User(
+        username=username, 
+        password_hash="", 
+        password_salt="",
+        invite_code_id=code_obj.id
+    )
     user.set_password(password)
     db.add(user)
+    
+    # Mark code as used
+    code_obj.used_count += 1
+    
     await db.commit()
     await db.refresh(user)
 

@@ -8,10 +8,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AppSettings, FoundItem, Monitor, User
+from app.models import AppSettings, FoundItem, InviteCode, Monitor, User
 from app.scraper.domains import VINTED_DOMAINS
 from app.scraper.url_parser import parse_vinted_url
-from app.web.auth import require_user
+from app.web.auth import require_admin, require_user
 from app.web.dependencies import get_db, get_scheduler, is_bot_running
 
 logger = logging.getLogger(__name__)
@@ -547,3 +547,78 @@ async def import_monitors(
             
     await db.commit()
     return RedirectResponse(url=f"/monitors?success=Imported+{added_count}+monitors", status_code=303)
+
+
+# --- Admin: Invite Code Management ---
+
+@router.get("/admin/invites", response_class=HTMLResponse)
+async def admin_invites_list(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    result = await db.execute(
+        select(InviteCode).order_by(desc(InviteCode.created_at))
+    )
+    invites = result.scalars().all()
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "admin/invites.html",
+        {"request": request, "invites": invites, "user": user},
+    )
+
+
+@router.post("/admin/invites")
+async def admin_invite_create(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+    code: str = Form(None),
+    max_uses: int = Form(1),
+):
+    import secrets
+    if not code:
+        code = f"INV-{secrets.token_hex(4).upper()}"
+    
+    new_invite = InviteCode(
+        code=code.strip(),
+        max_uses=max_uses,
+        created_by_id=user.id
+    )
+    db.add(new_invite)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Код уже существует")
+        
+    return RedirectResponse(url="/admin/invites", status_code=303)
+
+
+@router.post("/admin/invites/{invite_id}/toggle")
+async def admin_invite_toggle(
+    invite_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    invite = await db.get(InviteCode, invite_id)
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    
+    invite.is_active = not invite.is_active
+    await db.commit()
+    return RedirectResponse(url="/admin/invites", status_code=303)
+
+
+@router.delete("/admin/invites/{invite_id}")
+async def admin_invite_delete(
+    invite_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    invite = await db.get(InviteCode, invite_id)
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    
+    await db.delete(invite)
+    await db.commit()
+    return Response(status_code=204)
