@@ -14,11 +14,20 @@ class Settings(BaseSettings):
 
     @property
     def database_url_validated(self) -> str:
-        # Ensure we always use ssl=require for production cloud databases
         url = self.database_url
-        if "supabase.co" in url or "neon.tech" in url:
+        
+        # 1. Ensure driver prefix for asyncpg if not SQLite
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        
+        # 2. Ensure we always use ssl=require for production cloud databases
+        if any(cloud in url for cloud in ["supabase.co", "supabase.com", "neon.tech"]):
             if "?ssl=" not in url:
-                url += "?ssl=require"
+                # Handle existing query params
+                if "?" in url:
+                    url += "&ssl=require"
+                else:
+                    url += "?ssl=require"
             elif "ssl=disable" in url:
                 url = url.replace("ssl=disable", "ssl=require")
         return url
