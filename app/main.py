@@ -86,10 +86,9 @@ async def lifespan(app: FastAPI):
 
 
 from app.logger import log_buffer
-from app.config import get_settings
-from app.database import init_db
-from app.scraper.client import CloudflareFallback, VintedClient
+
 # ... (rest of imports)
+
 app = FastAPI(title="Vinted Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 
