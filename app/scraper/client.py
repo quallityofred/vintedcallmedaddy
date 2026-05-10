@@ -10,8 +10,10 @@ import httpx
 
 from app.scraper.parser import VintedItem, parse_response
 from app.scraper.rate_limiter import TokenBucketLimiter
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 DOMAIN_DELAY_MIN = 1.0
 DOMAIN_DELAY_MAX = 3.0
@@ -19,11 +21,12 @@ WARMUP_DELAY_MIN = 0.5
 WARMUP_DELAY_MAX = 1.5
 MAX_CONCURRENT_DOMAINS = 3
 
-WEB_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+]
 
 _domain_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOMAINS)
 
@@ -95,11 +98,28 @@ class VintedClient:
         self._session_ready: dict[str, bool] = {}
         self._lock = asyncio.Lock()
 
-    async def _ensure_session(self, domain: str) -> AsyncSession:
+    async def _ensure_session(self, domain: str, force_new: bool = False) -> AsyncSession:
         async with self._lock:
-            if domain not in self._sessions:
-                self._sessions[domain] = AsyncSession(impersonate="chrome124")
+            if domain not in self._sessions or force_new:
+                if domain in self._sessions:
+                    try:
+                        await self._sessions[domain].close()
+                    except Exception:
+                        pass
+                
+                proxies = settings.get_proxy_list()
+                proxy = random.choice(proxies) if proxies else None
+                
+                self._sessions[domain] = AsyncSession(
+                    impersonate="chrome124",
+                    proxy=proxy,
+                    verify=False if proxy else True
+                )
                 self._session_ready[domain] = False
+                if proxy:
+                    logger.info("Created new session for domain=%s with proxy", domain)
+                else:
+                    logger.info("Created new session for domain=%s without proxy", domain)
             return self._sessions[domain]
 
     async def _warmup_session(self, domain: str) -> None:
@@ -109,15 +129,22 @@ class VintedClient:
                 return
         try:
             await asyncio.sleep(random.uniform(WARMUP_DELAY_MIN, WARMUP_DELAY_MAX))
+            headers = {
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
             response = await session.get(
                 f"https://www.{domain}/",
-                headers=WEB_HEADERS,
+                headers=headers,
                 timeout=30.0,
             )
             if response.status_code == 200:
                 async with self._lock:
                     self._session_ready[domain] = True
                 logger.info("Session warmed up for domain=%s", domain)
+            else:
+                logger.warning("Warmup returned status=%d for domain=%s", response.status_code, domain)
         except Exception:
             logger.exception("Warmup error for domain=%s", domain)
 
@@ -159,15 +186,19 @@ class VintedClient:
         session = await self._ensure_session(domain)
         url = f"https://www.{domain}/api/v2/catalog/items"
 
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": f"https://www.{domain}/",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
         try:
             response = await session.get(
                 url,
                 params=params,
-                headers={
-                    **WEB_HEADERS,
-                    "Referer": f"https://www.{domain}/",
-                    "X-Requested-With": "XMLHttpRequest",
-                },
+                headers=headers,
                 timeout=30.0,
             )
 
@@ -183,8 +214,10 @@ class VintedClient:
                 self.rate_limiter.report_error(domain)
                 if self.cf_fallback:
                     self.cf_fallback.report_block(domain)
-                async with self._lock:
-                    self._session_ready[domain] = False
+                
+                # Reset session to try with a new proxy next time
+                await self._ensure_session(domain, force_new=True)
+                
                 if self.cf_fallback and self.cf_fallback.should_use_cf(domain):
                     logger.info("Retrying via CF Worker for domain=%s", domain)
                     return await self._search_via_cf(domain, params)

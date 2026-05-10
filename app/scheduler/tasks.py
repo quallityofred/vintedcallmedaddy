@@ -76,6 +76,7 @@ def _reset_interval_if_scaled_from_time_window(monitor: Monitor) -> int:
 
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
     async with AsyncSessionLocal() as db:
+        # 1. Fetch monitor and hidden sellers in one go (well, separate queries but same session)
         result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
         monitor = result.scalar_one_or_none()
         if monitor is None or not monitor.is_active:
@@ -87,125 +88,111 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
         hidden_result = await db.execute(select(HiddenSeller.seller_id))
         hidden_seller_ids: set[int] = {row[0] for row in hidden_result.fetchall()}
 
-    try:
-        items = await client.search_all_domains(params, domains)
-    except Exception:
-        logger.exception("search_all_domains failed for monitor_id=%d", monitor_id)
-        items = []
+        # 2. Perform search
+        try:
+            items = await client.search_all_domains(params, domains)
+        except Exception:
+            logger.exception("search_all_domains failed for monitor_id=%d", monitor_id)
+            items = []
 
-    new_items: list[VintedItem] = []
-    is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
+        if not items:
+            await _update_monitor_interval(db, monitor, False)
+            await db.commit()
+            return
 
-    try:
-        async with AsyncSessionLocal() as db:
-            monitor = await db.merge(monitor)
+        # 3. Process items
+        new_items: list[VintedItem] = []
+        is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
 
-            filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
-            if filtered_items:
-                all_item_ids = [i.id for i in filtered_items]
-                existing_result = await db.execute(
-                    select(SeenItem.vinted_item_id).where(
-                        SeenItem.vinted_item_id.in_(all_item_ids)
-                    )
-                )
-                existing_ids: set[int] = {row[0] for row in existing_result.fetchall()}
-            else:
-                existing_ids = set()
+        filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+        
+        for item in filtered_items:
+            # Atomic upsert for SeenItem to check if we've EVER seen it
+            stmt = pg_insert(SeenItem).values(
+                vinted_item_id=item.id, 
+                domain=item.domain,
+                seen_at=datetime.now(timezone.utc)
+            )
+            stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
+            res = await db.execute(stmt)
+            
+            if res.rowcount == 0:
+                # Already seen
+                continue
 
-            for item in filtered_items:
-                if item.id in existing_ids:
-                    continue
-
-                # Atomic upsert for SeenItem
-                stmt = pg_insert(SeenItem).values(vinted_item_id=item.id, domain=item.domain)
-                stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-                await db.execute(stmt)
-
-                found_item = FoundItem(
-                    monitor_id=monitor_id,
-                    vinted_item_id=item.id,
-                    domain=item.domain,
-                    title=item.title,
-                    price=item.price,
-                    currency=item.currency,
-                    brand=item.brand,
-                    size=item.size,
-                    condition=item.condition,
-                    photo_url=item.photo_url,
-                    item_url=item.item_url,
-                    seller_id=item.seller_id,
-                    found_at=datetime.now(timezone.utc),
-                    notified=False,
-                )
-                db.add(found_item)
+            # Atomic upsert for FoundItem
+            found_stmt = pg_insert(FoundItem).values(
+                monitor_id=monitor_id,
+                vinted_item_id=item.id,
+                domain=item.domain,
+                title=item.title,
+                price=item.price,
+                currency=item.currency,
+                brand=item.brand,
+                size=item.size,
+                condition=item.condition,
+                photo_url=item.photo_url,
+                item_url=item.item_url,
+                seller_id=item.seller_id,
+                found_at=datetime.now(timezone.utc),
+                notified=not is_cold_start if _telegram_bot or monitor.user_id else False,
+            )
+            found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
+            found_res = await db.execute(found_stmt)
+            
+            if found_res.rowcount > 0:
                 new_items.append(item)
 
-            original_interval = _resolve_original_interval(monitor)
-            monitor.interval_sec = _reset_interval_if_scaled_from_time_window(monitor)
-            if new_items:
-                monitor.items_found_count += len(new_items)
-                monitor.consecutive_empty = 0
-                new_interval = max(
-                    int(monitor.interval_sec * INTERVAL_STEP_DOWN_FAST),
-                    original_interval,
-                )
-                monitor.interval_sec = new_interval
-            else:
-                monitor.consecutive_empty += 1
-                if _is_peak_time():
-                    threshold = EMPTY_THRESHOLD_FAST
-                else:
-                    threshold = EMPTY_THRESHOLD_SLOW
-                if monitor.consecutive_empty >= threshold:
-                    new_interval = int(monitor.interval_sec * INTERVAL_STEP_UP)
-                    monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
+        # 4. Update monitor stats and interval
+        await _update_monitor_interval(db, monitor, len(new_items) > 0, count=len(new_items))
+        monitor.last_check_at = datetime.now(timezone.utc)
+        await db.commit()
 
-            monitor.last_check_at = datetime.now(timezone.utc)
-            await db.commit()
+        # 5. Send notifications
+        if new_items and not is_cold_start:
+            await _send_notifications(monitor, new_items)
 
-        bot_to_use = _telegram_bot
-        chat_id_to_use = settings.telegram_chat_id
-        if monitor.user_id:
-            async with AsyncSessionLocal() as db:
-                user_result = await db.execute(
-                    select(User).where(User.id == monitor.user_id)
-                )
-                owner = user_result.scalar_one_or_none()
-                if owner and owner.telegram_bot_token and owner.telegram_chat_id:
-                    from app.telegram.bot import get_or_create_bot as _get_bot
-                    bot_to_use, _ = _get_bot(owner.telegram_bot_token)
-                    chat_id_to_use = int(owner.telegram_chat_id)
 
-        for item in new_items:
-            if not is_cold_start and bot_to_use and chat_id_to_use:
-                await send_item_notification(
-                    bot_to_use,
-                    chat_id_to_use,
-                    item,
-                )
+async def _update_monitor_interval(db: AsyncSessionLocal, monitor: Monitor, found_new: bool, count: int = 0) -> None:
+    original_interval = _resolve_original_interval(monitor)
+    monitor.interval_sec = _reset_interval_if_scaled_from_time_window(monitor)
+    
+    if found_new:
+        monitor.items_found_count += count
+        monitor.consecutive_empty = 0
+        new_interval = max(
+            int(monitor.interval_sec * INTERVAL_STEP_DOWN_FAST),
+            original_interval,
+        )
+        monitor.interval_sec = new_interval
+    else:
+        monitor.consecutive_empty += 1
+        threshold = EMPTY_THRESHOLD_FAST if _is_peak_time() else EMPTY_THRESHOLD_SLOW
+        if monitor.consecutive_empty >= threshold:
+            new_interval = int(monitor.interval_sec * INTERVAL_STEP_UP)
+            monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
-        if new_items:
-            new_item_ids = [item.id for item in new_items]
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(FoundItem).where(
-                        FoundItem.vinted_item_id.in_(new_item_ids)
-                    )
-                )
-                for fi in result.scalars().all():
-                    fi.notified = not is_cold_start
-                await db.commit()
 
-            logger.info(
-                "Monitor %s found %d new items (interval=%ds)",
-                monitor.name,
-                len(new_items),
-                monitor.interval_sec,
-            )
-    except IntegrityError as e:
-        logger.warning("IntegrityError for monitor_id=%d: %s. This item may have been processed concurrently.", monitor_id, e.orig)
-    except Exception:
-        logger.exception("Unexpected error in check_monitor for monitor_id=%d", monitor_id)
+async def _send_notifications(monitor: Monitor, items: list[VintedItem]) -> None:
+    bot_to_use = _telegram_bot
+    chat_id_to_use = settings.telegram_chat_id
+    
+    if monitor.user_id:
+        async with AsyncSessionLocal() as db:
+            user = await db.get(User, monitor.user_id)
+            if user and user.telegram_bot_token and user.telegram_chat_id:
+                from app.telegram.bot import get_or_create_bot as _get_bot
+                bot_to_use, _ = _get_bot(user.telegram_bot_token)
+                chat_id_to_use = int(user.telegram_chat_id)
+
+    if not bot_to_use or not chat_id_to_use:
+        return
+
+    for item in items:
+        try:
+            await send_item_notification(bot_to_use, chat_id_to_use, item)
+        except Exception:
+            logger.exception("Failed to send notification for item_id=%d", item.id)
 
 
 def _resolve_original_interval(monitor: Monitor) -> int:

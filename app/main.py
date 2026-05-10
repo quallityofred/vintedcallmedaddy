@@ -71,6 +71,7 @@ async def lifespan(app: FastAPI):
 
     app.state.templates = templates
     app.state.scheduler = scheduler
+    app.state.client = client
     if restore_result:
         logger.info("Telegram bot restore result: %s", restore_result)
     else:
@@ -82,6 +83,7 @@ async def lifespan(app: FastAPI):
     from app.web.dependencies import stop_bot as deps_stop_bot
     await deps_stop_bot(clear_persisted_state=False)
     await scheduler.stop()
+    await client.close()
     logger.info("Shutdown complete")
 
 

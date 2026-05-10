@@ -19,8 +19,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _scheduler: "MonitorScheduler | None" = None
-_bot_instance: Bot | None = None
-_bot_task: asyncio.Task | None = None
 _bot_token: str = ""
 
 settings = get_settings()
@@ -46,11 +44,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 def get_bot() -> Bot | None:
-    return _bot_instance
+    if not _bot_token:
+        return None
+    from app.telegram.bot import _bots
+    return _bots.get(_bot_token)
 
 
 def is_bot_running() -> bool:
-    return _bot_task is not None and not _bot_task.done()
+    if not _bot_token:
+        return False
+    from app.telegram.bot import _polling_tasks
+    task = _polling_tasks.get(_bot_token)
+    return task is not None and not task.done()
 
 
 async def _persist_active_bot_owner(user_id: int | None) -> None:
@@ -80,32 +85,35 @@ async def start_bot(
     owner_user_id: int | None = None,
     persist: bool = True,
 ) -> str:
-    global _bot_instance, _bot_task, _bot_token
+    global _bot_token
     if is_bot_running():
-        return "Бот уже запущен"
+        if _bot_token == token:
+            return "Бот уже запущен"
+        else:
+            logger.info("Token changed, stopping old bot session...")
+            await stop_bot(clear_persisted_state=False)
+
     try:
         from app.scheduler.tasks import set_telegram_bot
         from app.telegram.bot import get_or_create_bot, start_polling, terminate_all_sessions
 
         await terminate_all_sessions(token)
         bot, dp = get_or_create_bot(token)
-        _bot_instance = bot
         _bot_token = token
         set_telegram_bot(bot)
-        _bot_task = asyncio.create_task(start_polling(bot, dp))
+        asyncio.create_task(start_polling(bot, dp))
         if persist:
             await _persist_active_bot_owner(owner_user_id)
         logger.info("Bot started via settings")
         return "Бот успешно запущен"
     except Exception as e:
         logger.exception("Failed to start bot")
-        _bot_instance = None
         _bot_token = ""
         return f"Ошибка запуска: {e}"
 
 
 async def stop_bot(clear_persisted_state: bool = True) -> str:
-    global _bot_instance, _bot_task, _bot_token
+    global _bot_token
     if not is_bot_running():
         if clear_persisted_state:
             await _persist_active_bot_owner(None)
@@ -117,14 +125,6 @@ async def stop_bot(clear_persisted_state: bool = True) -> str:
 
         bot, dp = get_or_create_bot(_bot_token)
         await telegram_stop_bot(bot, dp)
-        if _bot_task:
-            _bot_task.cancel()
-            try:
-                await _bot_task
-            except asyncio.CancelledError:
-                pass
-        _bot_instance = None
-        _bot_task = None
         _bot_token = ""
         set_telegram_bot(None)
         if clear_persisted_state:

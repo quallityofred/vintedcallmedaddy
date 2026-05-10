@@ -9,61 +9,75 @@ from app.telegram.handlers import router
 
 logger = logging.getLogger(__name__)
 
-_bot_instance: Bot | None = None
-_dp_instance: Dispatcher | None = None
-_polling_started: bool = False
+_bots: dict[str, Bot] = {}
+_dispatchers: dict[str, Dispatcher] = {}
+_polling_tasks: dict[str, asyncio.Task] = {}
 
 
 async def terminate_all_sessions(token: str) -> None:
     """Kill ALL bot sessions on Telegram servers before starting a new one."""
     try:
-        temp_bot = Bot(token=token)
-        await temp_bot.delete_webhook(drop_pending_updates=True)
-        await temp_bot.session.close()
-        await asyncio.sleep(2.0)
+        async with Bot(token=token).context() as temp_bot:
+            await temp_bot.delete_webhook(drop_pending_updates=True)
+        await asyncio.sleep(1.0)
         logger.info("All previous bot sessions terminated")
     except Exception:
         logger.exception("Failed to terminate previous bot sessions")
 
 
 def get_or_create_bot(token: str) -> tuple[Bot, Dispatcher]:
-    """Singleton: returns the same Bot + Dispatcher on every call."""
-    global _bot_instance, _dp_instance
-    if _bot_instance is not None and _dp_instance is not None:
-        return _bot_instance, _dp_instance
-    _bot_instance = Bot(token=token, default=DefaultBotProperties(parse_mode="HTML"))
-    _dp_instance = Dispatcher()
-    _dp_instance.include_router(router)
-    return _bot_instance, _dp_instance
+    """Returns the Bot + Dispatcher for a specific token."""
+    global _bots, _dispatchers
+    if token in _bots and token in _dispatchers:
+        return _bots[token], _dispatchers[token]
+    
+    bot = Bot(token=token, default=DefaultBotProperties(parse_mode="HTML"))
+    dp = Dispatcher()
+    dp.include_router(router)
+    
+    _bots[token] = bot
+    _dispatchers[token] = dp
+    return bot, dp
 
 
 async def start_polling(bot: Bot, dp: Dispatcher) -> None:
-    """Start polling exactly once. Idempotent — safe to call multiple times."""
-    global _polling_started
-    if _polling_started:
-        logger.warning("Polling already running, skipping duplicate start")
+    """Start polling for a specific bot."""
+    token = bot.token
+    if token in _polling_tasks and not _polling_tasks[token].done():
+        logger.warning("Polling already running for this token, skipping")
         return
-    _polling_started = True
+
+    task = asyncio.create_task(dp.start_polling(bot))
+    _polling_tasks[token] = task
     try:
-        await dp.start_polling(bot)
+        await task
     except Exception:
-        _polling_started = False
-        logger.exception("Telegram polling crashed")
-        raise
+        logger.exception("Telegram polling crashed for bot")
+    finally:
+        _polling_tasks.pop(token, None)
 
 
 async def stop_bot(bot: Bot, dp: Dispatcher) -> None:
-    """Gracefully stop polling and close session. Resets singletons."""
-    global _polling_started, _bot_instance, _dp_instance
+    """Gracefully stop polling and close session for a specific bot."""
+    token = bot.token
     try:
-        if _polling_started:
+        if token in _polling_tasks:
             await dp.stop_polling()
-            _polling_started = False
+            task = _polling_tasks.get(token)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
     except Exception:
         logger.exception("Error stopping polling")
+    
     try:
         await bot.session.close()
     except Exception:
         logger.exception("Error closing bot session")
-    _bot_instance = None
-    _dp_instance = None
+    
+    _bots.pop(token, None)
+    _dispatchers.pop(token, None)
+    _polling_tasks.pop(token, None)
