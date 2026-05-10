@@ -10,7 +10,7 @@ class LogBuffer(logging.Handler):
 
     def emit(self, record):
         # Filter out noisy or technical logs
-        if record.name.startswith("sqlalchemy") or record.name.startswith("apscheduler"):
+        if record.name.startswith("sqlalchemy") or record.name.startswith("apscheduler") or record.name.startswith("uvicorn"):
             return
         
         # Only log INFO and higher, skip debug/trace
@@ -18,6 +18,7 @@ class LogBuffer(logging.Handler):
             return
 
         msg = self.format(record)
+        # Clean up timestamp if redundant
         self.buffer.append(msg)
 
     def get_logs(self):
