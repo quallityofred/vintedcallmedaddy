@@ -20,8 +20,13 @@ _BRAND_PATH_RE = re.compile(r"^/brand/(\d+)")
 
 
 def parse_vinted_url(url: str) -> dict[str, str | dict[str, str | int]]:
-    parsed_url = urlparse(url.strip())
+    # 0. Pre-clean URL for common artifacts like newest_first=
+    clean_url = url.strip().replace("newest_first=", "newest_first")
+    
+    parsed_url = urlparse(clean_url)
     domain = parsed_url.netloc.lower().removeprefix("www.")
+    
+    # Use keep_blank_values=False to ignore things like ?param=
     query_params = parse_qs(parsed_url.query, keep_blank_values=False)
     api_params: dict[str, str | int] = {}
 
@@ -37,7 +42,13 @@ def parse_vinted_url(url: str) -> dict[str, str | dict[str, str | int]]:
         if api_key is None:
             continue
 
-        cleaned_values = [value.strip() for value in values if value.strip()]
+        # Clean values and filter out empty ones
+        cleaned_values = []
+        for v in values:
+            v_clean = v.strip().rstrip('=') # Remove trailing =
+            if v_clean:
+                cleaned_values.append(v_clean)
+        
         if not cleaned_values:
             continue
 
@@ -49,6 +60,7 @@ def parse_vinted_url(url: str) -> dict[str, str | dict[str, str | int]]:
         else:
             api_params[api_key] = ",".join(cleaned_values)
 
+    # STRICTLY ENFORCE sorting by newest
     api_params["order"] = "newest_first"
     api_params["per_page"] = 96
 
