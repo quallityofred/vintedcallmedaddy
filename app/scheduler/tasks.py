@@ -148,6 +148,10 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
                 continue
 
             # Atomic upsert for FoundItem
+            # notified=True if it's a cold start to prevent sending old items
+            # notified=False if it's a normal run and we want to send it later
+            should_notify = not is_cold_start
+            
             found_stmt = pg_insert(FoundItem).values(
                 monitor_id=monitor_id,
                 vinted_item_id=item.id,
@@ -162,7 +166,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
                 item_url=item.item_url,
                 seller_id=item.seller_id,
                 found_at=datetime.now(timezone.utc),
-                notified=not is_cold_start if _telegram_bot or monitor.user_id else False,
+                notified=not should_notify, # If we don't want to notify, mark as already "notified" (silenced)
             )
             found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
             found_res = await db.execute(found_stmt)
