@@ -87,8 +87,6 @@ async def lifespan(app: FastAPI):
 
 from app.logger import log_buffer
 
-# ... (rest of imports)
-
 app = FastAPI(title="Vinted Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 
