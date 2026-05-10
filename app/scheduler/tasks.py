@@ -118,85 +118,121 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
         logger.exception("search_all_domains failed for monitor_id=%d", monitor_id)
         items = []
 
-    # 3. Save results in a new session
-    async with AsyncSessionLocal() as db:
-        # Re-fetch or merge monitor to the new session
-        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-        monitor = result.scalar_one_or_none()
-        if monitor is None or not monitor.is_active:
-            return
+        # 3. Save results in a new session
+        new_items_to_notify: list[VintedItem] = []
+        async with AsyncSessionLocal() as db:
+            # Re-fetch or merge monitor to the new session
+            result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+            monitor = result.scalar_one_or_none()
+            if monitor is None or not monitor.is_active:
+                return
 
-        if not items:
-            await _update_monitor_interval(db, monitor, False)
+            if not items:
+                await _update_monitor_interval(db, monitor, False)
+                await db.commit()
+                return
+
+            filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+            
+            for item in filtered_items:
+                # Atomic upsert for SeenItem
+                stmt = pg_insert(SeenItem).values(
+                    vinted_item_id=item.id, 
+                    domain=item.domain,
+                    seen_at=datetime.now(timezone.utc)
+                )
+                stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
+                res = await db.execute(stmt)
+                
+                if res.rowcount == 0:
+                    continue
+
+                # If cold start, we mark as notified=True to SILENCE
+                # If normal run, we mark as notified=False to QUEUE for sending
+                notified_status = True if is_cold_start else False
+                
+                found_stmt = pg_insert(FoundItem).values(
+                    monitor_id=monitor_id,
+                    vinted_item_id=item.id,
+                    domain=item.domain,
+                    title=item.title,
+                    price=item.price,
+                    currency=item.currency,
+                    brand=item.brand,
+                    size=item.size,
+                    condition=item.condition,
+                    photo_url=item.photo_url,
+                    item_url=item.item_url,
+                    seller_id=item.seller_id,
+                    found_at=datetime.now(timezone.utc),
+                    notified=notified_status,
+                )
+                found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
+                found_res = await db.execute(found_stmt)
+                
+                if found_res.rowcount > 0 and not notified_status:
+                    new_items_to_notify.append(item)
+
+            await _update_monitor_interval(db, monitor, (len(new_items_to_notify) > 0 or not is_cold_start), count=len(new_items_to_notify))
+            monitor.last_check_at = datetime.now(timezone.utc)
             await db.commit()
+
+        # 4. Process Pending Notifications (including any backlog)
+        await process_pending_notifications()
+
+
+async def process_pending_notifications() -> None:
+    """Finds all FoundItems with notified=False and attempts to send them."""
+    async with AsyncSessionLocal() as db:
+        # Get items that haven't been notified yet, oldest first
+        result = await db.execute(
+            select(FoundItem)
+            .where(FoundItem.notified == False)
+            .order_by(FoundItem.found_at.asc())
+            .limit(50) # Process in batches to avoid new flood
+        )
+        pending_items = result.scalars().all()
+        
+        if not pending_items:
             return
 
-        new_items: list[VintedItem] = []
-        filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+        logger.info("Processing %d pending notifications", len(pending_items))
         
-        for item in filtered_items:
-            # Atomic upsert for SeenItem
-            stmt = pg_insert(SeenItem).values(
-                vinted_item_id=item.id, 
-                domain=item.domain,
-                seen_at=datetime.now(timezone.utc)
+        # Group by monitor to reuse bot/chat_id
+        for fi in pending_items:
+            # We need VintedItem object for the notification function
+            item = VintedItem(
+                id=fi.vinted_item_id,
+                title=fi.title,
+                price=fi.price,
+                currency=fi.currency,
+                brand=fi.brand,
+                size=fi.size,
+                condition=fi.condition,
+                photo_url=fi.photo_url,
+                item_url=fi.item_url,
+                domain=fi.domain,
+                seller_id=fi.seller_id
             )
-            stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-            res = await db.execute(stmt)
             
-            if res.rowcount == 0:
-                continue
-
-            # Atomic upsert for FoundItem
-            # notified=True if it's a cold start to prevent sending old items
-            # notified=False if it's a normal run and we want to send it later
-            should_notify = not is_cold_start
-            
-            found_stmt = pg_insert(FoundItem).values(
-                monitor_id=monitor_id,
-                vinted_item_id=item.id,
-                domain=item.domain,
-                title=item.title,
-                price=item.price,
-                currency=item.currency,
-                brand=item.brand,
-                size=item.size,
-                condition=item.condition,
-                photo_url=item.photo_url,
-                item_url=item.item_url,
-                seller_id=item.seller_id,
-                found_at=datetime.now(timezone.utc),
-                notified=not should_notify, # If we don't want to notify, mark as already "notified" (silenced)
-            )
-            found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-            found_res = await db.execute(found_stmt)
-            
-            if found_res.rowcount > 0:
-                new_items.append(item)
-
-        await _update_monitor_interval(db, monitor, len(new_items) > 0, count=len(new_items))
-        monitor.last_check_at = datetime.now(timezone.utc)
-        await db.commit()
-
-        if new_items and not is_cold_start:
-            # Notifications can also be outside, but let's keep them here for now 
-            # or move to ensure we don't hold connection during TG sending
-            pass
-
-    # 4. Send notifications (OUTSIDE DB session)
-    if new_items and not is_cold_start:
-        await _send_notifications(monitor_id, new_items)
+            success = await _send_single_notification(fi.monitor_id, item)
+            if success:
+                fi.notified = True
+                await db.commit() # Commit each one to avoid re-sending on crash
+            else:
+                # If failed (e.g. Flood limit), stop processing the rest of the batch
+                logger.warning("Stopping notification batch processing due to failure/limit")
+                break
 
 
-async def _send_notifications(monitor_id: int, items: list[VintedItem]) -> None:
+async def _send_single_notification(monitor_id: int, item: VintedItem) -> bool:
+    """Sends a single notification and returns True if successful."""
     bot_to_use = _telegram_bot
     chat_id_to_use = settings.telegram_chat_id
     
     async with AsyncSessionLocal() as db:
-        monitor_result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-        monitor = monitor_result.scalar_one_or_none()
-        if not monitor:
-            return
+        monitor = await db.get(Monitor, monitor_id)
+        if not monitor: return True # Monitor deleted, skip
             
         if monitor.user_id:
             user = await db.get(User, monitor.user_id)
@@ -206,13 +242,16 @@ async def _send_notifications(monitor_id: int, items: list[VintedItem]) -> None:
                 chat_id_to_use = int(user.telegram_chat_id)
 
     if not bot_to_use or not chat_id_to_use:
-        return
+        return True # Can't notify, mark as done to avoid stuck queue
 
-    for item in items:
-        try:
-            await send_item_notification(bot_to_use, chat_id_to_use, item)
-        except Exception:
-            logger.exception("Failed to send notification for item_id=%d", item.id)
+    try:
+        from app.telegram.notifications import send_item_notification
+        await send_item_notification(bot_to_use, chat_id_to_use, item)
+        return True
+    except Exception:
+        # If it's a TelegramRetryAfter, the send_item_notification already waited,
+        # but if we are still hitting limits, we return False to pause the queue.
+        return False
 
 
 def _resolve_original_interval(monitor: Monitor) -> int:
