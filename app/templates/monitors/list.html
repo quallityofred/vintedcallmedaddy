@@ -11,10 +11,71 @@
                 <p class="text-muted text-sm">{{ monitors|length if monitors else 0 }} отслеживаний</p>
             </div>
         </div>
-        <a href="/monitors/new" class="btn-primary px-5 py-2.5 inline-flex items-center gap-2 text-sm">
-            <i data-lucide="plus" class="w-4 h-4"></i>
-            <span>Новый монитор</span>
-        </a>
+        <div class="flex flex-wrap gap-2">
+            <div class="relative group">
+                <button class="btn-secondary px-5 py-2.5 inline-flex items-center gap-2 text-sm" onclick="document.getElementById('import-modal').classList.remove('hidden')">
+                    <i data-lucide="upload" class="w-4 h-4"></i>
+                    <span>Импорт</span>
+                </button>
+            </div>
+            <div class="relative group">
+                <button class="btn-secondary px-5 py-2.5 inline-flex items-center gap-2 text-sm">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    <span>Экспорт</span>
+                    <i data-lucide="chevron-down" class="w-3 h-3 ml-1"></i>
+                </button>
+                <div class="absolute right-0 mt-2 w-48 bg-card border border-[rgba(74,222,128,0.1)] rounded-xl shadow-2xl hidden group-hover:block z-50 overflow-hidden">
+                    <a href="/export?format=json" class="block px-4 py-2 text-sm text-text hover:bg-[rgba(74,222,128,0.08)] transition-colors">В формате JSON</a>
+                    <a href="/export?format=txt" class="block px-4 py-2 text-sm text-text hover:bg-[rgba(74,222,128,0.08)] transition-colors">Списком ссылок (.txt)</a>
+                </div>
+            </div>
+            <a href="/monitors/new" class="btn-primary px-5 py-2.5 inline-flex items-center gap-2 text-sm">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                <span>Новый монитор</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div id="import-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center hidden p-4">
+        <div class="card w-full max-w-lg animate-in" onclick="event.stopPropagation()">
+            <div class="p-6 border-b border-[rgba(74,222,128,0.06)] flex items-center justify-between">
+                <h2 class="text-xl font-bold text-text flex items-center gap-2">
+                    <i data-lucide="upload-cloud" class="w-5 h-5 text-accent"></i>
+                    Импорт мониторов
+                </h2>
+                <button onclick="document.getElementById('import-modal').classList.add('hidden')" class="text-muted hover:text-text">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <form action="/import" method="POST" enctype="multipart/form-data" class="p-6 space-y-6">
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-text">Загрузить файл (.json или .txt)</label>
+                    <input type="file" name="file" accept=".json,.txt" class="w-full bg-background border border-[rgba(74,222,128,0.1)] rounded-xl p-3 text-sm focus:outline-none focus:border-accent transition-all file:mr-4 file:py-1 file:px-4 file:rounded-full file:border-0 file:text-xs file:bg-accent file:text-background file:font-semibold">
+                    <p class="text-[10px] text-muted uppercase tracking-wider">Поддерживаются JSON (с именами/интервалами) или простой список ссылок в TXT.</p>
+                </div>
+                
+                <div class="relative">
+                    <div class="absolute inset-0 flex items-center" aria-hidden="true">
+                        <div class="w-full border-t border-[rgba(74,222,128,0.06)]"></div>
+                    </div>
+                    <div class="relative flex justify-center text-xs uppercase">
+                        <span class="bg-card px-2 text-muted">Или вставьте текст</span>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-text">Список ссылок</label>
+                    <textarea name="raw_text" rows="5" class="w-full bg-background border border-[rgba(74,222,128,0.1)] rounded-xl p-4 text-sm focus:outline-none focus:border-accent transition-all resize-none font-mono" placeholder="https://www.vinted.pl/catalog...&#10;https://www.vinted.fr/catalog..."></textarea>
+                    <p class="text-[10px] text-muted uppercase tracking-wider">Одна ссылка на строку</p>
+                </div>
+
+                <div class="flex gap-3 justify-end pt-2">
+                    <button type="button" onclick="document.getElementById('import-modal').classList.add('hidden')" class="btn-secondary px-6 py-2.5 text-sm">Отмена</button>
+                    <button type="submit" class="btn-primary px-6 py-2.5 text-sm font-bold">Начать импорт</button>
+                </div>
+            </form>
+        </div>
     </div>
 
     {% if monitors %}

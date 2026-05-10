@@ -428,3 +428,122 @@ async def logs_page(
             "user": user,
         },
     )
+
+
+@router.get("/export", response_class=Response)
+async def export_monitors(
+    format: str = Query("json"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    result = await db.execute(
+        select(Monitor).where(Monitor.user_id == user.id)
+    )
+    monitors = result.scalars().all()
+    
+    if format == "json":
+        data = [
+            {
+                "name": m.name,
+                "url": m.original_url,
+                "interval": m.interval_sec,
+                "domains": json.loads(m.domains_json)
+            }
+            for m in monitors
+        ]
+        content = json.dumps(data, indent=2, ensure_ascii=False)
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=monitors.json"}
+        )
+    else:
+        lines = [m.original_url for m in monitors]
+        content = "\n".join(lines)
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": "attachment; filename=monitors.txt"}
+        )
+
+
+@router.post("/import")
+async def import_monitors(
+    request: Request,
+    raw_text: str = Form(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    import_data = []
+    
+    # Check if a file was uploaded
+    form = await request.form()
+    file = form.get("file")
+    
+    if file and hasattr(file, "filename") and file.filename:
+        content = await file.read()
+        text_content = content.decode("utf-8")
+        if file.filename.endswith(".json"):
+            try:
+                import_data = json.loads(text_content)
+            except json.JSONDecodeError:
+                return RedirectResponse(url="/monitors?error=Invalid+JSON", status_code=303)
+        else:
+            import_data = [{"url": line.strip()} for line in text_content.splitlines() if line.strip()]
+    elif raw_text:
+        import_data = [{"url": line.strip()} for line in raw_text.splitlines() if line.strip()]
+
+    if not import_data:
+        return RedirectResponse(url="/monitors?error=No+data+to+import", status_code=303)
+
+    from app.scraper.url_parser import parse_vinted_url
+    
+    scheduler = get_scheduler()
+    added_count = 0
+    for entry in import_data:
+        if isinstance(entry, str):
+            url = entry.strip()
+            name = None
+            interval = settings.check_interval_seconds
+        else:
+            url = entry.get("url")
+            name = entry.get("name")
+            interval = int(entry.get("interval") or settings.check_interval_seconds)
+
+        if not url: continue
+        
+        try:
+            parsed = parse_vinted_url(url)
+            final_name = name or f"Imported {datetime.now().strftime('%H:%M:%S')}"
+            
+            # Prevent duplicates for the same user
+            exists = await db.execute(
+                select(Monitor).where(Monitor.user_id == user.id, Monitor.original_url == url)
+            )
+            if exists.scalar_one_or_none():
+                continue
+
+            new_monitor = Monitor(
+                user_id=user.id,
+                name=final_name,
+                original_url=url,
+                params_json=json.dumps(parsed["params"]),
+                domains_json=json.dumps([parsed["domain"]]),
+                interval_sec=interval,
+                is_active=True,
+            )
+            db.add(new_monitor)
+            await db.flush() # Get ID
+            
+            try:
+                scheduler.add_monitor(new_monitor.id, new_monitor.interval_sec)
+            except Exception:
+                logger.warning("Failed to add imported monitor to scheduler")
+                
+            added_count += 1
+        except Exception:
+            logger.exception("Failed to import URL: %s", url)
+            continue
+            
+    await db.commit()
+    return RedirectResponse(url=f"/monitors?success=Imported+{added_count}+monitors", status_code=303)
