@@ -1,25 +1,25 @@
 # Vinted Monitor Bot 🤖
 
-Профессиональный инструмент для мониторинга товаров на Vinted с Telegram-уведомлениями и веб-дашбордом.
+Professional tool for monitoring Vinted listings with Telegram notifications and a web dashboard.
 
-## Основные возможности
-- **Live Monitoring**: Мониторинг множества ссылок с адаптивными интервалами.
-- **Deduplication**: Атомарная дедупликация на уровне БД (защита от дублей).
-- **Dashboard**: Веб-интерфейс на FastAPI с лайв-консолью и статистикой в реальном времени.
-- **Cloud-Ready**: Полная поддержка облачных баз данных (Supabase PostgreSQL), SSL и Transaction Mode.
+## Key Features
+- **Live Monitoring**: Track multiple search links with adaptive intervals.
+- **Deduplication**: Atomic database-level deduplication (protection against duplicates).
+- **Dashboard**: FastAPI-based web interface with live logs console and real-time statistics.
+- **Cloud-Ready**: Fully optimized for cloud environments (Railway, Render) with PostgreSQL (Supabase/Neon) support, using SSL and Transaction Mode.
 
-## Быстрый старт
-1. Клонируй репозиторий: 
+## Quick Start
+1. Clone the repository: 
    ```bash
    git clone https://github.com/tellaboutme/vintedbot
    cd vintedbot
    ```
-2. Скопируй пример конфигурации: `cp .env.example .env`
-3. Установи зависимости: `poetry install`
-4. Запусти приложение: `poetry run uvicorn app.main:app`
+2. Set up your configuration: `cp .env.example .env`
+3. Install dependencies: `poetry install`
+4. Run the application: `poetry run uvicorn app.main:app`
 
 ## Production
-Проект оптимизирован для работы в Docker-контейнерах (поддерживает Railway, Render). Для работы с облачными БД (Supabase/Neon) требуется использование порта 6543 и SSL.
+The project is optimized for Docker containers. For cloud databases (Supabase/Neon), ensure you use port 6543 and enable SSL in your connection string.
 
-## Лицензия
+## License
 MIT
