@@ -513,7 +513,8 @@ async def import_monitors(
     from app.scraper.url_parser import parse_vinted_url
     
     scheduler = get_scheduler()
-    added_count = 0
+    results = {"added": [], "duplicates": [], "errors": []}
+    
     for entry in import_data:
         if isinstance(entry, str):
             url = entry.strip()
@@ -535,6 +536,7 @@ async def import_monitors(
                 select(Monitor).where(Monitor.user_id == user.id, Monitor.original_url == url)
             )
             if exists.scalar_one_or_none():
+                results["duplicates"].append(url)
                 continue
 
             new_monitor = Monitor(
@@ -554,13 +556,18 @@ async def import_monitors(
             except Exception:
                 logger.warning("Failed to add imported monitor to scheduler")
                 
-            added_count += 1
+            results["added"].append({"name": final_name, "url": url})
         except Exception:
             logger.exception("Failed to import URL: %s", url)
+            results["errors"].append(url)
             continue
             
     await db.commit()
-    return RedirectResponse(url=f"/monitors?success=Imported+{added_count}+monitors", status_code=303)
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "admin/import_summary.html",
+        {"request": request, "results": results, "user": user}
+    )
 
 
 # --- Admin: Invite Code Management ---

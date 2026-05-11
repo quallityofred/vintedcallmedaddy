@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="animate-in max-w-2xl mx-auto">
+    <div class="card p-8">
+        <h2 class="text-2xl font-bold text-text mb-6">Результаты импорта</h2>
+        
+        {% if results.added %}
+        <div class="mb-6">
+            <h3 class="text-accent font-semibold mb-2">✅ Добавлено: {{ results.added|length }}</h3>
+            <ul class="bg-surface rounded-lg p-4 space-y-1">
+                {% for item in results.added %}
+                <li class="text-sm text-text font-mono truncate">{{ item.name }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if results.duplicates %}
+        <div class="mb-6">
+            <h3 class="text-warning font-semibold mb-2">⚠️ Дубликаты (уже есть): {{ results.duplicates|length }}</h3>
+            <ul class="bg-surface rounded-lg p-4 space-y-1">
+                {% for url in results.duplicates %}
+                <li class="text-sm text-muted font-mono truncate">{{ url }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if results.errors %}
+        <div class="mb-6">
+            <h3 class="text-error font-semibold mb-2">❌ Ошибки: {{ results.errors|length }}</h3>
+            <ul class="bg-surface rounded-lg p-4 space-y-1">
+                {% for url in results.errors %}
+                <li class="text-sm text-error font-mono truncate">{{ url }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <div class="mt-8 flex justify-end">
+            <a href="/monitors" class="btn-primary px-6 py-2.5">Вернуться к мониторам</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
