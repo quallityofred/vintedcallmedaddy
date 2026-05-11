@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utc_now() -> datetime:
@@ -97,6 +97,7 @@ class Monitor(Base):
         onupdate=utc_now,
         nullable=False,
     )
+    found_items = relationship("FoundItem", back_populates="monitor", cascade="all, delete-orphan")
 
 
 class FoundItem(Base):
@@ -110,7 +111,8 @@ class FoundItem(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    monitor_id: Mapped[int] = mapped_column(ForeignKey("monitors.id"), nullable=False)
+    monitor_id: Mapped[int] = mapped_column(ForeignKey("monitors.id", ondelete="CASCADE"), nullable=False)
+    monitor = relationship("Monitor", back_populates="found_items")
     vinted_item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     domain: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
