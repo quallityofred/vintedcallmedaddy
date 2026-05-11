@@ -248,6 +248,32 @@
     </div>
     <script>lucide.createIcons();</script>
     <script>
+        window.openExportModal = async function(format) {
+            const response = await fetch('/export?format=' + format);
+            const data = await response.text();
+            document.getElementById('json-export-area').value = data;
+            document.getElementById('export-modal').classList.remove('hidden');
+        };
+
+        window.copyJson = function() {
+            const area = document.getElementById('json-export-area');
+            area.select();
+            document.execCommand('copy');
+            alert('Скопировано в буфер обмена!');
+        };
+
+        window.downloadTxt = async function() {
+            const response = await fetch('/export?format=txt');
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'monitors.txt';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        };
+
         document.addEventListener('DOMContentLoaded', function() {
             const path = window.location.pathname;
             document.querySelectorAll('.nav-link').forEach(link => {
