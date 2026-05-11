@@ -60,11 +60,11 @@
 
     {% if monitors %}
     <div class="card overflow-hidden">
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
+        <div class="overflow-x-auto min-h-[300px]">
+            <table class="w-full text-sm border-collapse">
+                <thead class="bg-[rgba(74,222,128,0.02)]">
                     <tr class="border-b border-[rgba(74,222,128,0.06)] text-muted text-left text-xs uppercase tracking-wider">
-                        <th class="p-4"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="rounded border-[rgba(74,222,128,0.2)] bg-surface text-accent focus:ring-accent"></th>
+                        <th class="p-4 w-12"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="custom-checkbox"></th>
                         <th class="p-4 font-medium">Название</th>
                         <th class="p-4 font-medium">URL</th>
                         <th class="p-4 font-medium">Домены</th>
@@ -73,8 +73,8 @@
                         <th class="p-4 font-medium">Проверка</th>
                         <th class="p-4 font-medium text-center">Товаров</th>
                         <th class="p-4 font-medium text-right">
-                            <button id="bulk-delete-btn" onclick="openBulkDeleteModal()" class="hidden text-error hover:text-red-400 text-xs font-bold uppercase transition-colors">
-                                Удалить выбранные
+                            <button id="bulk-delete-btn" onclick="openBulkDeleteModal()" class="hidden text-error hover:text-red-400 text-xs font-bold uppercase transition-all duration-200">
+                                Удалить (<span id="selected-count">0</span>)
                             </button>
                         </th>
                     </tr>
@@ -82,8 +82,8 @@
                 <tbody id="monitor-table-body" hx-trigger="every 10s" hx-get="/monitors" hx-select="tbody" hx-swap="innerHTML">
                     {% for monitor in monitors %}
                     {% set domains_list = monitor.domains_json | from_json %}
-                    <tr id="monitor-row-{{ monitor.id }}" class="table-row border-b border-[rgba(74,222,128,0.04)]">
-                        <td class="p-4"><input type="checkbox" name="monitor_id" value="{{ monitor.id }}" class="monitor-checkbox rounded border-[rgba(74,222,128,0.2)] bg-surface text-accent focus:ring-accent" onchange="updateBulkDeleteBtn()"></td>
+                    <tr id="monitor-row-{{ monitor.id }}" class="group border-b border-[rgba(74,222,128,0.04)] hover:bg-[rgba(74,222,128,0.02)]">
+                        <td class="p-4"><input type="checkbox" name="monitor_id" value="{{ monitor.id }}" class="monitor-checkbox custom-checkbox" onchange="updateBulkDeleteBtn()"></td>
                         <td class="p-4">
                             <p class="font-semibold text-text">{{ monitor.name }}</p>
                         </td>
@@ -123,7 +123,7 @@
                             <span class="text-accent font-bold text-sm">{{ monitor.items_found_count }}</span>
                         </td>
                         <td class="p-4">
-                            <div class="flex items-center justify-end gap-1">
+                            <div class="flex items-center justify-end gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
                                 <a href="/monitors/{{ monitor.id }}/edit" class="p-1.5 rounded-lg hover:bg-[rgba(74,222,128,0.08)] transition-colors" title="Редактировать">
                                     <i data-lucide="pencil" class="w-3.5 h-3.5 text-muted"></i>
                                 </a>
@@ -230,7 +230,13 @@
 
     function updateBulkDeleteBtn() {
         const selected = document.querySelectorAll('.monitor-checkbox:checked');
-        document.getElementById('bulk-delete-btn').classList.toggle('hidden', selected.length === 0);
+        const bulkBtn = document.getElementById('bulk-delete-btn');
+        if (selected.length > 0) {
+            document.getElementById('selected-count').innerText = selected.length;
+            bulkBtn.classList.remove('hidden');
+        } else {
+            bulkBtn.classList.add('hidden');
+        }
     }
 
     function openDeleteModal(id, name) {

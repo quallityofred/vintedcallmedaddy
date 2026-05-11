@@ -317,12 +317,11 @@ async def settings_save(
 ):
     telegram_token = telegram_token.strip()
     telegram_chat_id = telegram_chat_id.strip()
-    user_in_db = await db.get(User, user.id)
-    if user_in_db:
-        user_in_db.telegram_bot_token = telegram_token
-        user_in_db.telegram_chat_id = telegram_chat_id
-
+    
+    # Store bot config in AppSettings, not User
     settings_data = {
+        "telegram_bot_token": telegram_token,
+        "telegram_chat_id": telegram_chat_id,
         "proxies": proxies,
         "sessions_per_domain": str(sessions_per_domain),
         "rate_limit_per_minute": str(rate_limit_per_minute),
@@ -342,14 +341,18 @@ async def settings_save(
 @router.post("/settings/test-bot")
 async def settings_test_bot(
     request: Request,
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(require_user),
-    telegram_token: str = Form(""),
-    telegram_chat_id: str = Form(""),
 ):
-    if not telegram_token or not telegram_chat_id:
+    result = await db.execute(select(AppSettings))
+    settings_map = {row.key: row.value for row in result.scalars().all()}
+    token = settings_map.get("telegram_bot_token", "")
+    chat_id = settings_map.get("telegram_chat_id", "")
+    
+    if not token or not chat_id:
         return Response(content="Заполните Bot Token и Chat ID", status_code=400)
     from app.web.dependencies import send_test_message
-    result = await send_test_message(telegram_token, telegram_chat_id)
+    result = await send_test_message(token, chat_id)
     return Response(content=result, status_code=200 if "отправлено" in result else 400)
 
 
@@ -358,22 +361,19 @@ async def settings_start_bot(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_user),
-    telegram_token: str = Form(""),
-    telegram_chat_id: str = Form(""),
 ):
-    telegram_token = telegram_token.strip()
-    telegram_chat_id = telegram_chat_id.strip()
-    if not telegram_token:
+    result = await db.execute(select(AppSettings))
+    settings_map = {row.key: row.value for row in result.scalars().all()}
+    token = settings_map.get("telegram_bot_token", "").strip()
+    chat_id = settings_map.get("telegram_chat_id", "").strip()
+    
+    if not token:
         return Response(content="Укажите Bot Token", status_code=400)
-    user_in_db = await db.get(User, user.id)
-    if user_in_db:
-        user_in_db.telegram_bot_token = telegram_token
-        if telegram_chat_id:
-            user_in_db.telegram_chat_id = telegram_chat_id
-        await db.commit()
+    
     from app.web.dependencies import start_bot
-    result = await start_bot(telegram_token, owner_user_id=user.id)
+    result = await start_bot(token)
     return Response(content=result, status_code=200 if "успешно" in result or "уже" in result else 400)
+
 
 
 @router.post("/settings/stop-bot")
