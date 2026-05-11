@@ -108,14 +108,17 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
         hidden_result = await db.execute(select(HiddenSeller.seller_id))
         hidden_seller_ids: set[int] = {row[0] for row in hidden_result.fetchall()}
         
-        # Capture monitor state needed for scraping
+        user_id = monitor.user_id
         is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
 
+    # Prepare contextual logger
+    log_extra = {"user_id": user_id}
+    
     # 2. Perform search (OUTSIDE DB session)
     try:
         items = await client.search_all_domains(params, domains)
     except Exception:
-        logger.exception("search_all_domains failed for monitor_id=%d", monitor_id)
+        logger.exception("search_all_domains failed for monitor_id=%d", monitor_id, extra=log_extra)
         items = []
 
     # 3. Save results in a new session

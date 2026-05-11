@@ -96,14 +96,16 @@ async def lifespan(app: FastAPI):
     logger.info("Shutdown complete")
 
 
-from app.logger import log_buffer
+from app.logger import log_manager
+from app.web.auth import require_user
+from app.models import User
 
 app = FastAPI(title="Vinted Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 
 @app.get("/api/logs")
-async def get_logs():
-    return {"logs": log_buffer.get_logs()}
+async def get_logs(user: User = Depends(require_user)):
+    return {"logs": log_manager.get_user_logs(user.id)}
 
 app.include_router(auth_router)
 app.include_router(web_router)
