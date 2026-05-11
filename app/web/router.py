@@ -231,7 +231,7 @@ async def monitor_update(
     return RedirectResponse(url="/monitors", status_code=303)
 
 
-@router.delete("/monitors/{monitor_id}")
+@router.post("/monitors/{monitor_id}/delete", response_class=Response)
 async def monitor_delete(
     monitor_id: int,
     db: AsyncSession = Depends(get_db),
