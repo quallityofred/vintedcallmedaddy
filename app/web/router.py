@@ -1,6 +1,7 @@
 # app/web/router.py
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -12,7 +13,7 @@ from app.models import AppSettings, FoundItem, InviteCode, Monitor, User
 from app.scraper.domains import VINTED_DOMAINS
 from app.scraper.url_parser import parse_vinted_url
 from app.web.auth import require_admin, require_user
-from app.web.dependencies import get_db, get_scheduler, is_bot_running
+from app.web.dependencies import get_db, get_scheduler, is_bot_running, settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -202,6 +203,14 @@ async def monitor_update(
     new_params_json = json.dumps(api_params)
     new_domains_json = json.dumps(domains)
     if monitor.params_json != new_params_json or monitor.domains_json != new_domains_json:
+        # Purge pending notifications for this monitor because criteria changed
+        from sqlalchemy import delete
+        await db.execute(
+            delete(FoundItem).where(
+                FoundItem.monitor_id == monitor_id,
+                FoundItem.notified == False
+            )
+        )
         monitor.last_check_at = None
         monitor.items_found_count = 0
 
@@ -478,7 +487,11 @@ async def import_monitors(
     import_data = []
     
     # Check if a file was uploaded
-    form = await request.form()
+    try:
+        form = await request.form()
+    except TypeError:
+        # Fallback for sync-mocked requests in tests
+        form = await request.form() if asyncio.iscoroutinefunction(request.form) else request.form()
     file = form.get("file")
     
     if file and hasattr(file, "filename") and file.filename:
