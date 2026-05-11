@@ -124,7 +124,6 @@
         </div>
     </div>
     {% else %}
-    {% else %}
     <div class="card p-12 text-center">
         <div class="icon-badge bg-[rgba(74,222,128,0.06)] mx-auto mb-4" style="width:56px;height:56px;border-radius:16px;">
             <i data-lucide="satellite" class="w-7 h-7 text-muted"></i>
@@ -137,10 +136,10 @@
         </a>
     </div>
     {% endif %}
-    </div>
+</div>
 
-    <!-- Import Modal - Moved outside to prevent removal -->
-    <div id="import-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center hidden p-4">
+<!-- Import Modal - Moved outside to prevent removal -->
+<div id="import-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center hidden p-4">
     <div class="card w-full max-w-lg animate-in" onclick="event.stopPropagation()">
         <div class="p-6 border-b border-[rgba(74,222,128,0.06)] flex items-center justify-between">
             <h2 class="text-xl font-bold text-text flex items-center gap-2">
@@ -176,6 +175,5 @@
             </div>
         </form>
     </div>
-    </div>
-    {% endblock %}
-
+</div>
+{% endblock %}
