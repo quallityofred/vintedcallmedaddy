@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     
     # Run admin and schema setup
-    from scripts.setup_admin import setup_admin
+    from app.scripts.setup_admin import setup_admin
     try:
         await setup_admin()
         logger.info("Admin setup and schema verification complete")
