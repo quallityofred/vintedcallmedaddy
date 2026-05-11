@@ -11,7 +11,7 @@
                 <p class="text-muted text-sm">{{ monitors|length if monitors else 0 }} отслеживаний</p>
             </div>
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex flex-wrap gap-2" hx-boost="true">
             <div class="relative group">
                 <button class="btn-secondary px-5 py-2.5 inline-flex items-center gap-2 text-sm" onclick="document.getElementById('import-modal').classList.remove('hidden')">
                     <i data-lucide="upload" class="w-4 h-4"></i>
@@ -36,139 +36,98 @@
         </div>
     </div>
 
-    <!-- Import Modal -->
-    <div id="import-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center hidden p-4">
-        <div class="card w-full max-w-lg animate-in" onclick="event.stopPropagation()">
-            <div class="p-6 border-b border-[rgba(74,222,128,0.06)] flex items-center justify-between">
-                <h2 class="text-xl font-bold text-text flex items-center gap-2">
-                    <i data-lucide="upload-cloud" class="w-5 h-5 text-accent"></i>
-                    Импорт мониторов
-                </h2>
-                <button onclick="document.getElementById('import-modal').classList.add('hidden')" class="text-muted hover:text-text">
-                    <i data-lucide="x" class="w-5 h-5"></i>
-                </button>
-            </div>
-            <form action="/import" method="POST" enctype="multipart/form-data" class="p-6 space-y-6">
-                <div class="space-y-2">
-                    <label class="text-sm font-medium text-text">Загрузить файл (.json или .txt)</label>
-                    <input type="file" name="file" accept=".json,.txt" class="w-full bg-background border border-[rgba(74,222,128,0.1)] rounded-xl p-3 text-sm focus:outline-none focus:border-accent transition-all file:mr-4 file:py-1 file:px-4 file:rounded-full file:border-0 file:text-xs file:bg-accent file:text-background file:font-semibold">
-                    <p class="text-[10px] text-muted uppercase tracking-wider">Поддерживаются JSON (с именами/интервалами) или простой список ссылок в TXT.</p>
-                </div>
-                
-                <div class="relative">
-                    <div class="absolute inset-0 flex items-center" aria-hidden="true">
-                        <div class="w-full border-t border-[rgba(74,222,128,0.06)]"></div>
-                    </div>
-                    <div class="relative flex justify-center text-xs uppercase">
-                        <span class="bg-card px-2 text-muted">Или вставьте текст</span>
-                    </div>
-                </div>
-
-                <div class="space-y-2">
-                    <label class="text-sm font-medium text-text">Список ссылок</label>
-                    <textarea name="raw_text" rows="5" class="w-full bg-background border border-[rgba(74,222,128,0.1)] rounded-xl p-4 text-sm focus:outline-none focus:border-accent transition-all resize-none font-mono" placeholder="https://www.vinted.pl/catalog...&#10;https://www.vinted.fr/catalog..."></textarea>
-                    <p class="text-[10px] text-muted uppercase tracking-wider">Одна ссылка на строку</p>
-                </div>
-
-                <div class="flex gap-3 justify-end pt-2">
-                    <button type="button" onclick="document.getElementById('import-modal').classList.add('hidden')" class="btn-secondary px-6 py-2.5 text-sm">Отмена</button>
-                    <button type="submit" class="btn-primary px-6 py-2.5 text-sm font-bold">Начать импорт</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    {% if monitors %}
-    <div class="card overflow-hidden">
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="border-b border-[rgba(74,222,128,0.06)] text-muted text-left text-xs uppercase tracking-wider">
-                        <th class="p-4 font-medium">Название</th>
-                        <th class="p-4 font-medium">URL</th>
-                        <th class="p-4 font-medium">Домены</th>
-                        <th class="p-4 font-medium">Интервал</th>
-                        <th class="p-4 font-medium">Статус</th>
-                        <th class="p-4 font-medium">Проверка</th>
-                        <th class="p-4 font-medium text-center">Товаров</th>
-                        <th class="p-4 font-medium text-right"></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for monitor in monitors %}
-                    {% set domains_list = monitor.domains_json | from_json %}
-                    <tr id="monitor-row-{{ monitor.id }}" class="table-row border-b border-[rgba(74,222,128,0.04)]">
-                        <td class="p-4">
-                            <p class="font-semibold text-text">{{ monitor.name }}</p>
-                        </td>
-                        <td class="p-4 text-muted max-w-[180px] truncate text-xs" title="{{ monitor.original_url }}">
-                            {{ monitor.original_url[:45] }}{% if monitor.original_url|length > 45 %}…{% endif %}
-                        </td>
-                        <td class="p-4">
-                            <div class="flex flex-wrap gap-1">
-                                {% for d in domains_list[:3] %}
-                                <span class="domain-chip">{{ d }}</span>
-                                {% endfor %}
-                                {% if domains_list|length > 3 %}
-                                <span class="text-xs text-muted">+{{ domains_list|length - 3 }}</span>
+    <div id="monitor-table" hx-trigger="every 10s" hx-get="/monitors" hx-select="tbody" hx-swap="innerHTML">
+        {% if monitors %}
+        <div class="card overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-[rgba(74,222,128,0.06)] text-muted text-left text-xs uppercase tracking-wider">
+                            <th class="p-4 font-medium">Название</th>
+                            <th class="p-4 font-medium">URL</th>
+                            <th class="p-4 font-medium">Домены</th>
+                            <th class="p-4 font-medium">Интервал</th>
+                            <th class="p-4 font-medium">Статус</th>
+                            <th class="p-4 font-medium">Проверка</th>
+                            <th class="p-4 font-medium text-center">Товаров</th>
+                            <th class="p-4 font-medium text-right"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for monitor in monitors %}
+                        {% set domains_list = monitor.domains_json | from_json %}
+                        <tr id="monitor-row-{{ monitor.id }}" class="table-row border-b border-[rgba(74,222,128,0.04)]">
+                            <td class="p-4">
+                                <p class="font-semibold text-text">{{ monitor.name }}</p>
+                            </td>
+                            <td class="p-4 text-muted max-w-[180px] truncate text-xs" title="{{ monitor.original_url }}">
+                                {{ monitor.original_url[:45] }}{% if monitor.original_url|length > 45 %}…{% endif %}
+                            </td>
+                            <td class="p-4">
+                                <div class="flex flex-wrap gap-1">
+                                    {% for d in domains_list[:3] %}
+                                    <span class="domain-chip">{{ d }}</span>
+                                    {% endfor %}
+                                    {% if domains_list|length > 3 %}
+                                    <span class="text-xs text-muted">+{{ domains_list|length - 3 }}</span>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td class="p-4 text-xs">{{ monitor.interval_sec }}s</td>
+                            <td class="p-4">
+                                {% if monitor.is_active %}
+                                <span class="inline-flex items-center gap-1.5 text-xs font-medium text-accent">
+                                    <span class="pulse-dot bg-accent"></span> Активен
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center gap-1.5 text-xs text-muted">
+                                    <span class="w-2 h-2 rounded-full bg-muted inline-block"></span> Пауза
+                                </span>
                                 {% endif %}
-                            </div>
-                        </td>
-                        <td class="p-4 text-xs">{{ monitor.interval_sec }}s</td>
-                        <td class="p-4">
-                            {% if monitor.is_active %}
-                            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-accent">
-                                <span class="pulse-dot bg-accent"></span> Активен
-                            </span>
-                            {% else %}
-                            <span class="inline-flex items-center gap-1.5 text-xs text-muted">
-                                <span class="w-2 h-2 rounded-full bg-muted inline-block"></span> Пауза
-                            </span>
-                            {% endif %}
-                        </td>
-                        <td class="p-4 text-muted text-xs">
-                            {% if monitor.last_check_at %}
-                            {{ monitor.last_check_at.strftime('%d.%m %H:%M') }}
-                            {% else %}
-                            <span class="text-muted/50">—</span>
-                            {% endif %}
-                        </td>
-                        <td class="p-4 text-center">
-                            <span class="text-accent font-bold text-sm">{{ monitor.items_found_count }}</span>
-                        </td>
-                        <td class="p-4">
-                            <div class="flex items-center justify-end gap-1">
-                                <a href="/monitors/{{ monitor.id }}/edit" class="p-1.5 rounded-lg hover:bg-[rgba(74,222,128,0.08)] transition-colors" title="Редактировать">
-                                    <i data-lucide="pencil" class="w-3.5 h-3.5 text-muted"></i>
-                                </a>
-                                <button
-                                    hx-post="/monitors/{{ monitor.id }}/toggle"
-                                    hx-target="#monitor-row-{{ monitor.id }}"
-                                    hx-swap="outerHTML"
-                                    class="p-1.5 rounded-lg hover:bg-[rgba(245,158,11,0.1)] transition-colors"
-                                    title="{{ 'Пауза' if monitor.is_active else 'Запустить' }}"
-                                >
-                                    <i data-lucide="{{ 'pause' if monitor.is_active else 'play' }}" class="w-3.5 h-3.5 text-warning"></i>
-                                </button>
-                                <button
-                                    hx-delete="/monitors/{{ monitor.id }}"
-                                    hx-target="#monitor-row-{{ monitor.id }}"
-                                    hx-swap="outerHTML"
-                                    hx-confirm="Удалить монитор «{{ monitor.name }}»?"
-                                    class="p-1.5 rounded-lg hover:bg-[rgba(239,68,68,0.1)] transition-colors"
-                                    title="Удалить"
-                                >
-                                    <i data-lucide="trash-2" class="w-3.5 h-3.5 text-error"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                            </td>
+                            <td class="p-4 text-muted text-xs">
+                                {% if monitor.last_check_at %}
+                                {{ monitor.last_check_at.strftime('%d.%m %H:%M') }}
+                                {% else %}
+                                <span class="text-muted/50">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="p-4 text-center">
+                                <span class="text-accent font-bold text-sm">{{ monitor.items_found_count }}</span>
+                            </td>
+                            <td class="p-4">
+                                <div class="flex items-center justify-end gap-1">
+                                    <a href="/monitors/{{ monitor.id }}/edit" class="p-1.5 rounded-lg hover:bg-[rgba(74,222,128,0.08)] transition-colors" title="Редактировать">
+                                        <i data-lucide="pencil" class="w-3.5 h-3.5 text-muted"></i>
+                                    </a>
+                                    <button
+                                        hx-post="/monitors/{{ monitor.id }}/toggle"
+                                        hx-target="#monitor-row-{{ monitor.id }}"
+                                        hx-swap="outerHTML"
+                                        class="p-1.5 rounded-lg hover:bg-[rgba(245,158,11,0.1)] transition-colors"
+                                        title="{{ 'Пауза' if monitor.is_active else 'Запустить' }}"
+                                    >
+                                        <i data-lucide="{{ 'pause' if monitor.is_active else 'play' }}" class="w-3.5 h-3.5 text-warning"></i>
+                                    </button>
+                                    <button
+                                        hx-delete="/monitors/{{ monitor.id }}"
+                                        hx-target="#monitor-row-{{ monitor.id }}"
+                                        hx-swap="outerHTML"
+                                        hx-confirm="Удалить монитор «{{ monitor.name }}»?"
+                                        class="p-1.5 rounded-lg hover:bg-[rgba(239,68,68,0.1)] transition-colors"
+                                        title="Удалить"
+                                    >
+                                        <i data-lucide="trash-2" class="w-3.5 h-3.5 text-error"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
-    </div>
-    {% else %}
+        {% else %}
     <div class="card p-12 text-center">
         <div class="icon-badge bg-[rgba(74,222,128,0.06)] mx-auto mb-4" style="width:56px;height:56px;border-radius:16px;">
             <i data-lucide="satellite" class="w-7 h-7 text-muted"></i>
