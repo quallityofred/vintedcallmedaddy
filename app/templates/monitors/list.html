@@ -61,10 +61,10 @@
     {% if monitors %}
     <div class="card overflow-hidden">
         <div class="overflow-x-auto">
-            <table class="w-full text-sm" hx-trigger="every 10s" hx-get="/monitors" hx-select="tbody" hx-swap="innerHTML">
+            <table class="w-full text-sm">
                 <thead>
                     <tr class="border-b border-[rgba(74,222,128,0.06)] text-muted text-left text-xs uppercase tracking-wider">
-                        <th class="p-4"><input type="checkbox" id="select-all" class="rounded border-[rgba(74,222,128,0.2)] bg-surface text-accent focus:ring-accent"></th>
+                        <th class="p-4"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="rounded border-[rgba(74,222,128,0.2)] bg-surface text-accent focus:ring-accent"></th>
                         <th class="p-4 font-medium">Название</th>
                         <th class="p-4 font-medium">URL</th>
                         <th class="p-4 font-medium">Домены</th>
@@ -72,14 +72,18 @@
                         <th class="p-4 font-medium">Статус</th>
                         <th class="p-4 font-medium">Проверка</th>
                         <th class="p-4 font-medium text-center">Товаров</th>
-                        <th class="p-4 font-medium text-right"></th>
+                        <th class="p-4 font-medium text-right">
+                            <button id="bulk-delete-btn" onclick="openBulkDeleteModal()" class="hidden text-error hover:text-red-400 text-xs font-bold uppercase transition-colors">
+                                Удалить выбранные
+                            </button>
+                        </th>
                     </tr>
                 </thead>
-                <tbody id="monitor-table-body">
+                <tbody id="monitor-table-body" hx-trigger="every 10s" hx-get="/monitors" hx-select="tbody" hx-swap="innerHTML">
                     {% for monitor in monitors %}
                     {% set domains_list = monitor.domains_json | from_json %}
                     <tr id="monitor-row-{{ monitor.id }}" class="table-row border-b border-[rgba(74,222,128,0.04)]">
-                        <td class="p-4"><input type="checkbox" name="monitor_id" value="{{ monitor.id }}" class="monitor-checkbox rounded border-[rgba(74,222,128,0.2)] bg-surface text-accent focus:ring-accent"></td>
+                        <td class="p-4"><input type="checkbox" name="monitor_id" value="{{ monitor.id }}" class="monitor-checkbox rounded border-[rgba(74,222,128,0.2)] bg-surface text-accent focus:ring-accent" onchange="updateBulkDeleteBtn()"></td>
                         <td class="p-4">
                             <p class="font-semibold text-text">{{ monitor.name }}</p>
                         </td>
@@ -133,10 +137,7 @@
                                     <i data-lucide="{{ 'pause' if monitor.is_active else 'play' }}" class="w-3.5 h-3.5 text-warning"></i>
                                 </button>
                                 <button
-                                    hx-post="/monitors/{{ monitor.id }}/delete"
-                                    hx-target="#monitor-row-{{ monitor.id }}"
-                                    hx-swap="outerHTML"
-                                    hx-confirm="Удалить монитор «{{ monitor.name }}»?"
+                                    onclick="openDeleteModal('{{ monitor.id }}', '{{ monitor.name }}')"
                                     class="p-1.5 rounded-lg hover:bg-[rgba(239,68,68,0.1)] transition-colors"
                                     title="Удалить"
                                 >
@@ -165,7 +166,7 @@
     {% endif %}
 </div>
 
-<!-- Import Modal - Moved outside to prevent removal -->
+<!-- Import Modal -->
 <div id="import-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center hidden p-4">
     <div class="card w-full max-w-lg animate-in" onclick="event.stopPropagation()">
         <div class="p-6 border-b border-[rgba(74,222,128,0.06)] flex items-center justify-between">
@@ -203,34 +204,89 @@
         </form>
     </div>
 </div>
+
+<!-- Custom Delete Modal -->
+<div id="delete-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center hidden p-4">
+    <div class="card w-full max-w-sm animate-in" onclick="event.stopPropagation()">
+        <div class="p-6">
+            <h2 class="text-xl font-bold text-text mb-2">Подтверждение удаления</h2>
+            <p class="text-muted text-sm mb-6" id="delete-msg"></p>
+            <div class="flex gap-3 justify-end">
+                <button onclick="closeDeleteModal()" class="btn-secondary px-4 py-2 text-sm">Отмена</button>
+                <button id="confirm-delete-btn" class="btn-primary-danger px-4 py-2 text-sm font-bold bg-red-600 hover:bg-red-700">Удалить</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-window.openExportModal = async function(format) {
-    const response = await fetch('/export?format=' + format);
-    const data = await response.text();
-    document.getElementById('json-export-area').value = data;
-    document.getElementById('export-modal').classList.remove('hidden');
-};
+    function toggleSelectAll(checkbox) {
+        document.querySelectorAll('.monitor-checkbox').forEach(cb => cb.checked = checkbox.checked);
+        updateBulkDeleteBtn();
+    }
 
-window.copyJson = function() {
-    const area = document.getElementById('json-export-area');
-    area.select();
-    document.execCommand('copy');
-    alert('Скопировано в буфер обмена!');
-};
+    function updateBulkDeleteBtn() {
+        const selected = document.querySelectorAll('.monitor-checkbox:checked');
+        document.getElementById('bulk-delete-btn').classList.toggle('hidden', selected.length === 0);
+    }
 
-window.downloadTxt = async function() {
-    const response = await fetch('/export?format=txt');
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'monitors.txt';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-};
+    function openDeleteModal(id, name) {
+        document.getElementById('delete-msg').innerText = `Вы уверены, что хотите удалить монитор "${name}"?`;
+        document.getElementById('confirm-delete-btn').onclick = () => {
+            // Optimistic deletion
+            document.getElementById(`monitor-row-${id}`).remove();
+            fetch(`/monitors/${id}/delete`, { method: 'POST' });
+            closeDeleteModal();
+        };
+        document.getElementById('delete-modal').classList.remove('hidden');
+    }
+
+    function openBulkDeleteModal() {
+        const selected = document.querySelectorAll('.monitor-checkbox:checked');
+        document.getElementById('delete-msg').innerText = `Удалить ${selected.length} мониторов?`;
+        document.getElementById('confirm-delete-btn').onclick = async () => {
+            for (const cb of selected) {
+                const id = cb.value;
+                document.getElementById(`monitor-row-${id}`).remove();
+                await fetch(`/monitors/${id}/delete`, { method: 'POST' });
+            }
+            closeDeleteModal();
+            updateBulkDeleteBtn();
+        };
+        document.getElementById('delete-modal').classList.remove('hidden');
+    }
+
+    function closeDeleteModal() {
+        document.getElementById('delete-modal').classList.add('hidden');
+    }
+
+    window.openExportModal = async function(format) {
+        const response = await fetch('/export?format=' + format);
+        const data = await response.text();
+        document.getElementById('json-export-area').value = data;
+        document.getElementById('export-modal').classList.remove('hidden');
+    };
+
+    window.copyJson = function() {
+        const area = document.getElementById('json-export-area');
+        area.select();
+        document.execCommand('copy');
+        alert('Скопировано в буфер обмена!');
+    };
+
+    window.downloadTxt = async function() {
+        const response = await fetch('/export?format=txt');
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'monitors.txt';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    };
 </script>
 {% endblock %}
