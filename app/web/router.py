@@ -456,7 +456,7 @@ async def export_monitors(
         return Response(
             content=content,
             media_type="application/json",
-            headers={"Content-Disposition": "attachment; filename=monitors.json"}
+            headers={"Content-Disposition": 'attachment; filename="monitors.json"'}
         )
     else:
         lines = [m.original_url for m in monitors]
@@ -464,7 +464,7 @@ async def export_monitors(
         return Response(
             content=content,
             media_type="text/plain",
-            headers={"Content-Disposition": "attachment; filename=monitors.txt"}
+            headers={"Content-Disposition": 'attachment; filename="monitors.txt"'}
         )
 
 
