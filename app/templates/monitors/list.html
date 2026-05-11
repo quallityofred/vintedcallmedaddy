@@ -23,14 +23,38 @@
                     <i data-lucide="chevron-down" class="w-3 h-3 ml-1"></i>
                 </button>
                 <div class="absolute right-0 mt-1 w-48 bg-surface border border-[rgba(74,222,128,0.1)] rounded-xl shadow-2xl hidden group-hover:block z-50 overflow-hidden">
-                    <a href="/export?format=json" class="block px-4 py-2 text-sm text-text hover:bg-[rgba(74,222,128,0.08)]">В формате JSON</a>
-                    <a href="/export?format=txt" class="block px-4 py-2 text-sm text-text hover:bg-[rgba(74,222,128,0.08)]">Списком ссылок (.txt)</a>
+                    <button onclick="openExportModal('json')" class="w-full text-left px-4 py-2 text-sm text-text hover:bg-[rgba(74,222,128,0.08)]">Экспорт в JSON</button>
+                    <button onclick="downloadTxt()" class="w-full text-left px-4 py-2 text-sm text-text hover:bg-[rgba(74,222,128,0.08)]">Списком ссылок (.txt)</button>
                 </div>
             </div>
             <a href="/monitors/new" class="btn-primary px-5 py-2.5 inline-flex items-center gap-2 text-sm">
                 <i data-lucide="plus" class="w-4 h-4"></i>
                 <span>Новый монитор</span>
             </a>
+        </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div id="export-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center hidden p-4">
+        <div class="card w-full max-w-lg animate-in" onclick="event.stopPropagation()">
+            <div class="p-6 border-b border-[rgba(74,222,128,0.06)] flex items-center justify-between">
+                <h2 class="text-xl font-bold text-text flex items-center gap-2">
+                    <i data-lucide="code" class="w-5 h-5 text-accent"></i>
+                    Экспорт JSON
+                </h2>
+                <button onclick="document.getElementById('export-modal').classList.add('hidden')" class="text-muted hover:text-text">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-6">
+                <textarea id="json-export-area" readonly rows="10" class="w-full bg-background border border-[rgba(74,222,128,0.1)] rounded-xl p-4 text-sm font-mono"></textarea>
+            </div>
+            <div class="p-6 pt-0 flex gap-3 justify-end">
+                <button onclick="document.getElementById('export-modal').classList.add('hidden')" class="btn-secondary px-6 py-2.5 text-sm">Закрыть</button>
+                <button onclick="copyJson()" class="btn-primary px-6 py-2.5 text-sm font-bold flex items-center gap-2">
+                    <i data-lucide="copy" class="w-4 h-4"></i> Копировать
+                </button>
+            </div>
         </div>
     </div>
 
@@ -177,4 +201,34 @@
         </form>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function openExportModal(format) {
+    const response = await fetch('/export?format=' + format);
+    const data = await response.text();
+    document.getElementById('json-export-area').value = data;
+    document.getElementById('export-modal').classList.remove('hidden');
+}
+
+function copyJson() {
+    const area = document.getElementById('json-export-area');
+    area.select();
+    document.execCommand('copy');
+    alert('Скопировано в буфер обмена!');
+}
+
+async function downloadTxt() {
+    const response = await fetch('/export?format=txt');
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'monitors.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+</script>
 {% endblock %}
