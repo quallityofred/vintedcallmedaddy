@@ -386,7 +386,8 @@ async def logs_page(
     monitor_id: int | None = Query(None),
 ):
     per_page = 50
-    user_monitor_ids = select(Monitor.id).where(Monitor.user_id == user.id)
+    # FIX: Scoping logs query to user's monitors
+    user_monitor_ids = select(Monitor.id).where(Monitor.user_id == user.id).scalar_subquery()
 
     query = (
         select(FoundItem)
