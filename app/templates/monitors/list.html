@@ -34,6 +34,7 @@
         </div>
     </div>
 
+    {% if monitors %}
     <div class="card overflow-hidden">
         <div class="overflow-x-auto">
             <table class="w-full text-sm" hx-trigger="every 10s" hx-get="/monitors" hx-select="tbody" hx-swap="innerHTML">
