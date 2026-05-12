@@ -4,10 +4,12 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
 from aiogram import Bot
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
+from app.models import User
 from app.telegram.settings_store import (
     get_active_telegram_user,
     set_active_telegram_user_id,
@@ -43,97 +45,90 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
-def get_bot() -> Bot | None:
-    if not _bot_token:
-        return None
+def get_bot(token: str | None = None) -> Bot | None:
     from app.telegram.bot import _bots
-    return _bots.get(_bot_token)
+    if token:
+        return _bots.get(token)
+    return None
 
 
-def is_bot_running() -> bool:
-    if not _bot_token:
-        return False
+def is_bot_running(token: str | None = None) -> bool:
     from app.telegram.bot import _polling_tasks
-    task = _polling_tasks.get(_bot_token)
-    return task is not None and not task.done()
-
-
-async def _persist_active_bot_owner(user_id: int | None) -> None:
-    async with AsyncSessionLocal() as db:
-        await set_active_telegram_user_id(db, user_id)
-        await db.commit()
+    if token:
+        task = _polling_tasks.get(token)
+        return task is not None and not task.done()
+    return False
 
 
 async def restore_persisted_bot() -> str | None:
-    if is_bot_running():
-        return None
-
+    """Restores ALL user-configured bots on startup."""
     async with AsyncSessionLocal() as db:
-        user = await get_active_telegram_user(db)
+        result = await db.execute(
+            select(User).where(User.telegram_bot_token != "")
+        )
+        users = result.scalars().all()
 
-    if user is not None:
-        return await start_bot(user.telegram_bot_token, owner_user_id=user.id, persist=False)
+    started_count = 0
+    for user in users:
+        res = await start_bot(user.telegram_bot_token, owner_user_id=user.id)
+        if "успешно" in res:
+            started_count += 1
 
-    if settings.telegram_bot_token:
-        return await start_bot(settings.telegram_bot_token, persist=False)
-
-    return None
+    return f"Восстановлено {started_count} ботов"
 
 
 async def start_bot(
     token: str,
     owner_user_id: int | None = None,
-    persist: bool = True,
 ) -> str:
-    global _bot_token
-    if is_bot_running():
-        if _bot_token == token:
-            return "Бот уже запущен"
-        else:
-            logger.info("Token changed, stopping old bot session...")
-            await stop_bot(clear_persisted_state=False)
+    if is_bot_running(token):
+        return "Бот уже запущен"
 
     try:
-        from app.scheduler.tasks import set_telegram_bot
         from app.telegram.bot import get_or_create_bot, start_polling, terminate_all_sessions
 
+        # Terminate other sessions for THIS token
         await terminate_all_sessions(token)
         bot, dp = get_or_create_bot(token)
-        _bot_token = token
-        set_telegram_bot(bot)
+        
+        # Start polling in background
         asyncio.create_task(start_polling(bot, dp))
-        if persist:
-            await _persist_active_bot_owner(owner_user_id)
-        logger.info("Bot started via settings")
+        
+        logger.info(f"Bot started for user_id={owner_user_id}")
         return "Бот успешно запущен"
     except Exception as e:
-        logger.exception("Failed to start bot")
-        _bot_token = ""
+        logger.exception(f"Failed to start bot for user_id={owner_user_id}")
         return f"Ошибка запуска: {e}"
 
 
-async def stop_bot(clear_persisted_state: bool = True) -> str:
-    global _bot_token
-    if not is_bot_running():
-        if clear_persisted_state:
-            await _persist_active_bot_owner(None)
+async def stop_bot(token: str) -> str:
+    if not is_bot_running(token):
         return "Бот не запущен"
     try:
-        from app.scheduler.tasks import set_telegram_bot
         from app.telegram.bot import get_or_create_bot
         from app.telegram.bot import stop_bot as telegram_stop_bot
 
-        bot, dp = get_or_create_bot(_bot_token)
+        bot, dp = get_or_create_bot(token)
         await telegram_stop_bot(bot, dp)
-        _bot_token = ""
-        set_telegram_bot(None)
-        if clear_persisted_state:
-            await _persist_active_bot_owner(None)
-        logger.info("Bot stopped via settings")
+        logger.info(f"Bot stopped for token {token[:10]}...")
         return "Бот остановлен"
     except Exception as e:
-        logger.exception("Failed to stop bot")
+        logger.exception(f"Failed to stop bot for token {token[:10]}...")
         return f"Ошибка остановки: {e}"
+
+
+async def stop_all_bots() -> None:
+    from app.telegram.bot import _bots, get_shared_dispatcher, stop_bot as telegram_stop_bot
+    tokens = list(_bots.keys())
+    dp = get_shared_dispatcher()
+    for token in tokens:
+        bot = _bots.get(token)
+        if bot:
+            await telegram_stop_bot(bot, dp)
+    logger.info("All bots stopped")
+
+
+
 
 
 async def send_test_message(token: str, chat_id: str) -> str:

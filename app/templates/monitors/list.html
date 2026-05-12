@@ -61,69 +61,78 @@
     {% if monitors %}
     <div class="card overflow-hidden">
         <div class="overflow-x-auto min-h-[300px]">
-            <table class="w-full text-sm border-collapse">
-                <thead class="bg-[rgba(74,222,128,0.02)]">
+            <table class="w-full text-sm border-collapse table-fixed">
+                <thead class="bg-[rgba(74,222,128,0.02)] sticky top-0 z-10 backdrop-blur-md">
                     <tr class="border-b border-[rgba(74,222,128,0.06)] text-muted text-left text-xs uppercase tracking-wider">
-                        <th class="p-4 w-12"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="custom-checkbox"></th>
-                        <th class="p-4 font-medium">Название</th>
-                        <th class="p-4 font-medium">URL</th>
-                        <th class="p-4 font-medium">Домены</th>
-                        <th class="p-4 font-medium">Интервал</th>
-                        <th class="p-4 font-medium">Статус</th>
-                        <th class="p-4 font-medium">Проверка</th>
-                        <th class="p-4 font-medium text-center">Товаров</th>
-                        <th class="p-4 font-medium text-right">
-                            <button id="bulk-delete-btn" onclick="openBulkDeleteModal()" class="hidden text-error hover:text-red-400 text-xs font-bold uppercase transition-all duration-200">
-                                Удалить (<span id="selected-count">0</span>)
-                            </button>
+                        <th class="p-4 w-[50px]"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="custom-checkbox"></th>
+                        <th class="p-4 font-medium w-[200px]">Название</th>
+                        <th class="p-4 font-medium w-[250px]">URL</th>
+                        <th class="p-4 font-medium w-[150px]">Домены</th>
+                        <th class="p-4 font-medium w-[100px]">Интервал</th>
+                        <th class="p-4 font-medium w-[120px]">Статус</th>
+                        <th class="p-4 font-medium w-[120px]">Проверка</th>
+                        <th class="p-4 font-medium text-center w-[80px]">Товаров</th>
+                        <th class="p-4 font-medium text-right w-[120px]">
+                            <div class="flex items-center justify-end h-5">
+                                <button id="bulk-delete-btn" onclick="openBulkDeleteModal()" class="hidden text-error hover:text-red-400 text-[10px] font-black uppercase tracking-tighter transition-all duration-200 bg-red-500/10 px-2 py-1 rounded border border-red-500/20">
+                                    Удалить (<span id="selected-count">0</span>)
+                                </button>
+                                <span id="actions-header-label">Действия</span>
+                            </div>
                         </th>
                     </tr>
                 </thead>
-                <tbody id="monitor-table-body" hx-trigger="every 10s" hx-get="/monitors" hx-select="tbody" hx-swap="innerHTML">
+                <tbody id="monitor-table-body" 
+                    hx-trigger="every 10s" 
+                    hx-get="/monitors" 
+                    hx-select="#monitor-table-body tr" 
+                    hx-swap="innerHTML"
+                    hx-sync="this:replace"
+                    class="divide-y divide-[rgba(74,222,128,0.04)]">
                     {% for monitor in monitors %}
                     {% set domains_list = monitor.domains_json | from_json %}
-                    <tr id="monitor-row-{{ monitor.id }}" class="group border-b border-[rgba(74,222,128,0.04)] hover:bg-[rgba(74,222,128,0.02)]">
+                    <tr id="monitor-row-{{ monitor.id }}" class="group hover:bg-[rgba(74,222,128,0.02)] transition-colors duration-150">
                         <td class="p-4"><input type="checkbox" name="monitor_id" value="{{ monitor.id }}" class="monitor-checkbox custom-checkbox" onchange="updateBulkDeleteBtn()"></td>
                         <td class="p-4">
-                            <p class="font-semibold text-text">{{ monitor.name }}</p>
+                            <p class="font-semibold text-text truncate" title="{{ monitor.name }}">{{ monitor.name }}</p>
                         </td>
-                        <td class="p-4 text-muted max-w-[180px] truncate text-xs" title="{{ monitor.original_url }}">
-                            {{ monitor.original_url[:45] }}{% if monitor.original_url|length > 45 %}…{% endif %}
+                        <td class="p-4 text-muted truncate text-xs" title="{{ monitor.original_url }}">
+                            {{ monitor.original_url }}
                         </td>
                         <td class="p-4">
                             <div class="flex flex-wrap gap-1">
-                                {% for d in domains_list[:3] %}
+                                {% for d in domains_list[:2] %}
                                 <span class="domain-chip">{{ d }}</span>
                                 {% endfor %}
-                                {% if domains_list|length > 3 %}
-                                <span class="text-xs text-muted">+{{ domains_list|length - 3 }}</span>
+                                {% if domains_list|length > 2 %}
+                                <span class="text-[10px] text-muted font-bold">+{{ domains_list|length - 2 }}</span>
                                 {% endif %}
                             </div>
                         </td>
-                        <td class="p-4 text-xs">{{ monitor.interval_sec }}s</td>
+                        <td class="p-4 text-xs font-mono text-muted">{{ monitor.interval_sec }}s</td>
                         <td class="p-4">
                             {% if monitor.is_active %}
-                            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-accent">
+                            <span class="inline-flex items-center gap-1.5 text-[11px] font-bold text-accent uppercase tracking-wide">
                                 <span class="pulse-dot bg-accent"></span> Активен
                             </span>
                             {% else %}
-                            <span class="inline-flex items-center gap-1.5 text-xs text-muted">
-                                <span class="w-2 h-2 rounded-full bg-muted inline-block"></span> Пауза
+                            <span class="inline-flex items-center gap-1.5 text-[11px] font-bold text-muted uppercase tracking-wide">
+                                <span class="w-1.5 h-1.5 rounded-full bg-muted/40 inline-block"></span> Пауза
                             </span>
                             {% endif %}
                         </td>
-                        <td class="p-4 text-muted text-xs">
+                        <td class="p-4 text-muted text-xs whitespace-nowrap">
                             {% if monitor.last_check_at %}
                             {{ monitor.last_check_at.strftime('%d.%m %H:%M') }}
                             {% else %}
-                            <span class="text-muted/50">—</span>
+                            <span class="text-muted/30">—</span>
                             {% endif %}
                         </td>
                         <td class="p-4 text-center">
-                            <span class="text-accent font-bold text-sm">{{ monitor.items_found_count }}</span>
+                            <span class="text-accent font-black text-sm">{{ monitor.items_found_count }}</span>
                         </td>
                         <td class="p-4">
-                            <div class="flex items-center justify-end gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200 transform translate-x-2 group-hover:translate-x-0">
                                 <a href="/monitors/{{ monitor.id }}/edit" class="p-1.5 rounded-lg hover:bg-[rgba(74,222,128,0.08)] transition-colors" title="Редактировать">
                                     <i data-lucide="pencil" class="w-3.5 h-3.5 text-muted"></i>
                                 </a>
@@ -152,6 +161,7 @@
         </div>
     </div>
     {% else %}
+    <!-- ... (empty state unchanged) ... -->
     <div class="card p-12 text-center">
         <div class="icon-badge bg-[rgba(74,222,128,0.06)] mx-auto mb-4" style="width:56px;height:56px;border-radius:16px;">
             <i data-lucide="satellite" class="w-7 h-7 text-muted"></i>
@@ -223,76 +233,133 @@
 
 {% block scripts %}
 <script>
+    let selectedMonitorIds = new Set();
+
     function toggleSelectAll(checkbox) {
-        document.querySelectorAll('.monitor-checkbox').forEach(cb => cb.checked = checkbox.checked);
+        const checkboxes = document.querySelectorAll('.monitor-checkbox');
+        checkboxes.forEach(cb => {
+            cb.checked = checkbox.checked;
+            if (checkbox.checked) {
+                selectedMonitorIds.add(cb.value);
+            } else {
+                selectedMonitorIds.delete(cb.value);
+            }
+        });
         updateBulkDeleteBtn();
     }
 
     function updateBulkDeleteBtn() {
-        const selected = document.querySelectorAll('.monitor-checkbox:checked');
         const bulkBtn = document.getElementById('bulk-delete-btn');
-        if (selected.length > 0) {
-            document.getElementById('selected-count').innerText = selected.length;
+        const actionsLabel = document.getElementById('actions-header-label');
+        const countSpan = document.getElementById('selected-count');
+        
+        if (selectedMonitorIds.size > 0) {
+            countSpan.innerText = selectedMonitorIds.size;
             bulkBtn.classList.remove('hidden');
+            actionsLabel.classList.add('hidden');
+            // Stop polling when something is selected
+            document.getElementById('monitor-table-body').setAttribute('hx-trigger', 'none');
         } else {
             bulkBtn.classList.add('hidden');
+            actionsLabel.classList.remove('hidden');
+            // Resume polling when nothing is selected
+            document.getElementById('monitor-table-body').setAttribute('hx-trigger', 'every 10s');
+            htmx.process(document.getElementById('monitor-table-body'));
         }
     }
 
+    // Handle individual checkbox changes
+    document.addEventListener('change', function(e) {
+        if (e.target.classList.contains('monitor-checkbox')) {
+            if (e.target.checked) {
+                selectedMonitorIds.add(e.target.value);
+            } else {
+                selectedMonitorIds.delete(e.target.value);
+            }
+            updateBulkDeleteBtn();
+        }
+    });
+
+    // Re-apply selection after HTMX swap
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target.id === 'monitor-table-body') {
+            const checkboxes = e.detail.target.querySelectorAll('.monitor-checkbox');
+            checkboxes.forEach(cb => {
+                if (selectedMonitorIds.has(cb.value)) {
+                    cb.checked = true;
+                }
+            });
+            updateBulkDeleteBtn();
+        }
+    });
+
     function openDeleteModal(id, name) {
-        document.getElementById('delete-msg').innerText = `Вы уверены, что хотите удалить монитор "${name}"?`;
-        document.getElementById('confirm-delete-btn').onclick = () => {
-            // Optimistic deletion
-            document.getElementById(`monitor-row-${id}`).remove();
-            fetch(`/monitors/${id}/delete`, { method: 'POST' });
+        document.getElementById('delete-msg').innerHTML = `Вы действительно хотите удалить монитор <span class="text-text font-bold">"${name}"</span>?<br><span class="text-[10px] uppercase tracking-widest text-error/60 mt-2 block">Это действие необратимо</span>`;
+        document.getElementById('confirm-delete-btn').onclick = async () => {
+            const row = document.getElementById(`monitor-row-${id}`);
+            if (row) {
+                row.style.opacity = '0.5';
+                row.style.pointerEvents = 'none';
+            }
+            await fetch(`/monitors/${id}/delete`, { method: 'POST' });
+            if (row) row.remove();
+            selectedMonitorIds.delete(id);
+            updateBulkDeleteBtn();
             closeDeleteModal();
         };
-        document.getElementById('delete-modal').classList.remove('hidden');
+        showModal('delete-modal');
     }
 
     function openBulkDeleteModal() {
-        const selected = document.querySelectorAll('.monitor-checkbox:checked');
-        document.getElementById('delete-msg').innerText = `Удалить ${selected.length} мониторов?`;
+        document.getElementById('delete-msg').innerHTML = `Удалить <span class="text-accent font-black">${selectedMonitorIds.size}</span> выбранных мониторов?<br><span class="text-[10px] uppercase tracking-widest text-error/60 mt-2 block">Все связанные данные будут удалены</span>`;
         document.getElementById('confirm-delete-btn').onclick = async () => {
-            for (const cb of selected) {
-                const id = cb.value;
-                document.getElementById(`monitor-row-${id}`).remove();
-                await fetch(`/monitors/${id}/delete`, { method: 'POST' });
-            }
+            const idsToDelete = Array.from(selectedMonitorIds);
             closeDeleteModal();
+            
+            for (const id of idsToDelete) {
+                const row = document.getElementById(`monitor-row-${id}`);
+                if (row) {
+                    row.style.opacity = '0.5';
+                    row.style.pointerEvents = 'none';
+                }
+                await fetch(`/monitors/${id}/delete`, { method: 'POST' });
+                if (row) row.remove();
+                selectedMonitorIds.delete(id);
+            }
             updateBulkDeleteBtn();
         };
-        document.getElementById('delete-modal').classList.remove('hidden');
+        showModal('delete-modal');
+    }
+
+    function showModal(id) {
+        const modal = document.getElementById(id);
+        modal.classList.remove('hidden');
+        setTimeout(() => modal.classList.add('show'), 10);
     }
 
     function closeDeleteModal() {
         document.getElementById('delete-modal').classList.add('hidden');
     }
 
-    window.openExportModal = async function(format) {
-        const response = await fetch('/export?format=' + format);
-        const data = await response.text();
-        document.getElementById('json-export-area').value = data;
-        document.getElementById('export-modal').classList.remove('hidden');
-    };
+    // Close modals on ESC
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeDeleteModal();
+            document.getElementById('import-modal').classList.add('hidden');
+            document.getElementById('export-modal').classList.add('hidden');
+        }
+    });
 
-    window.copyJson = function() {
-        const area = document.getElementById('json-export-area');
-        area.select();
-        document.execCommand('copy');
-        alert('Скопировано в буфер обмена!');
-    };
-
-    window.downloadTxt = async function() {
-        const response = await fetch('/export?format=txt');
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'monitors.txt';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-    };
+    // Close modals on outside click
+    window.onclick = function(event) {
+        const modals = ['delete-modal', 'import-modal', 'export-modal'];
+        modals.forEach(id => {
+            const modal = document.getElementById(id);
+            if (event.target == modal) {
+                modal.classList.add('hidden');
+            }
+        });
+    }
 </script>
 {% endblock %}
+

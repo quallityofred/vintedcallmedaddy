@@ -89,8 +89,8 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down...")
-    from app.web.dependencies import stop_bot as deps_stop_bot
-    await deps_stop_bot(clear_persisted_state=False)
+    from app.web.dependencies import stop_all_bots
+    await stop_all_bots()
     await scheduler.stop()
     await client.close()
     logger.info("Shutdown complete")

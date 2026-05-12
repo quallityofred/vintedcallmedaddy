@@ -51,33 +51,74 @@
     -webkit-appearance: none;
     width: 1.25rem;
     height: 1.25rem;
-    border: 2px solid rgba(74, 222, 128, 0.2);
-    border-radius: 0.5rem;
-    background-color: var(--surface);
+    border: 2px solid rgba(74, 222, 128, 0.15);
+    border-radius: 6px;
+    background-color: rgba(0, 0, 0, 0.2);
     cursor: pointer;
     position: relative;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.custom-checkbox::after {
+    content: '';
+    width: 10px;
+    height: 10px;
+    background-color: var(--accent);
+    border-radius: 2px;
+    opacity: 0;
+    transform: scale(0.5);
+    transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 .custom-checkbox:checked {
-    background-color: var(--accent);
     border-color: var(--accent);
+    background-color: rgba(74, 222, 128, 0.1);
 }
 .custom-checkbox:checked::after {
-    content: '';
-    position: absolute;
-    left: 6px;
-    top: 2px;
-    width: 6px;
-    height: 10px;
-    border: solid var(--background);
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
+    opacity: 1;
+    transform: scale(1);
 }
 .custom-checkbox:hover {
-    border-color: rgba(74, 222, 128, 0.5);
+    border-color: rgba(74, 222, 128, 0.4);
+    background-color: rgba(74, 222, 128, 0.05);
 }
 .custom-checkbox:focus {
     outline: none;
-    box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.3);
+    box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.15);
 }
+
+/* Modal and Transitions */
+.modal-backdrop {
+    background-color: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    transition: opacity 0.3s ease;
+}
+
+.modal-content {
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.hidden-modal {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.hidden-modal .modal-content {
+    transform: scale(0.9) translateY(10px);
+}
+
+/* Delete Button */
+#bulk-delete-btn {
+    transition: all 0.3s ease;
+}
+#bulk-delete-btn.show {
+    display: inline-flex;
+    animation: slideUp 0.3s ease forwards;
+}
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 
