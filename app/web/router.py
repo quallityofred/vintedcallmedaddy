@@ -1,19 +1,25 @@
 # app/web/router.py
+from __future__ import annotations
 import json
 import logging
 import asyncio
 from datetime import datetime, timezone
 
+from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AppSettings, FoundItem, InviteCode, Monitor, User
+from app.models import AppSettings, FoundItem, InviteCode, Monitor, SeenItem, User
 from app.scraper.domains import VINTED_DOMAINS
 from app.scraper.url_parser import parse_vinted_url
 from app.web.auth import require_admin, require_user
 from app.web.dependencies import get_db, get_scheduler, is_bot_running, settings
+
+if TYPE_CHECKING:
+    from app.scheduler.tasks import MonitorScheduler
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -236,6 +242,7 @@ async def monitor_delete(
     monitor_id: int,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_user),
+    scheduler: MonitorScheduler = Depends(get_scheduler),
 ):
     from sqlalchemy import delete
     result = await db.execute(
@@ -245,17 +252,23 @@ async def monitor_delete(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
 
-    await db.execute(delete(FoundItem).where(FoundItem.monitor_id == monitor_id))
-    await db.delete(monitor)
-    await db.commit()
-
     try:
-        scheduler = get_scheduler()
+        # Remove from scheduler first
         scheduler.remove_monitor(monitor_id)
-    except RuntimeError:
-        logger.warning("Scheduler not available, monitor job not removed")
+        
+        # Transactional cleanup of all related records
+        await db.execute(delete(FoundItem).where(FoundItem.monitor_id == monitor_id))
+        await db.execute(delete(SeenItem).where(SeenItem.monitor_id == monitor_id))
+        await db.delete(monitor)
+        
+        await db.commit()
+        logger.info(f"Monitor {monitor_id} deleted by user {user.username}")
+        return Response(status_code=204)
+    except Exception as e:
+        await db.rollback()
+        logger.exception(f"Failed to delete monitor {monitor_id}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    return Response(status_code=204)
 
 
 
@@ -342,28 +355,48 @@ async def settings_save(
 
 @router.post("/settings/test-bot")
 async def settings_test_bot(
-    telegram_token: str = Form(...),
-    telegram_chat_id: str = Form(...),
+    telegram_token: str = Form(""),
+    telegram_chat_id: str = Form(""),
 ):
+    telegram_token = telegram_token.strip()
+    telegram_chat_id = telegram_chat_id.strip()
+    if not telegram_token or not telegram_chat_id:
+        return "Ошибка: Токен и Chat ID обязательны для теста"
     from app.web.dependencies import send_test_message
     return await send_test_message(telegram_token, telegram_chat_id)
 
 
 @router.post("/settings/start-bot")
 async def settings_start_bot(
+    request: Request,
     user: User = Depends(require_user),
-    telegram_token: str = Form(...),
-    telegram_chat_id: str = Form(...),
+    telegram_token: str = Form(""),
+    telegram_chat_id: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.web.dependencies import start_bot
-    # Save first to ensure it's in DB
-    user.telegram_bot_token = telegram_token
-    user.telegram_chat_id = telegram_chat_id
-    await db.commit()
-    
-    return await start_bot(telegram_token, owner_user_id=user.id)
+    logger.info(f"Start bot request from user {user.username} (id={user.id})")
 
+    telegram_token = telegram_token.strip()
+    telegram_chat_id = telegram_chat_id.strip()
+
+    if not telegram_token:
+        logger.warning(f"Start bot failed: missing token for user {user.username}")
+        return Response(content="Ошибка: Токен не указан", status_code=400)
+
+    from app.web.dependencies import start_bot
+    try:
+        # Save first to ensure it's in DB
+        user.telegram_bot_token = telegram_token
+        user.telegram_chat_id = telegram_chat_id
+        await db.commit()
+        logger.info(f"Updated Telegram settings for user {user.username}")
+
+        result = await start_bot(telegram_token, owner_user_id=user.id)
+        logger.info(f"Bot start result for {user.username}: {result}")
+        return result
+    except Exception as e:
+        logger.exception(f"Unexpected error starting bot for {user.username}")
+        return Response(content=f"Критическая ошибка: {e}", status_code=500)
 
 @router.post("/settings/stop-bot")
 async def settings_stop_bot(

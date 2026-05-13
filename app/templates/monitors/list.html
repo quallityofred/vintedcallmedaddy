@@ -59,12 +59,35 @@
     </div>
 
     {% if monitors %}
+    <!-- Selection Action Bar -->
+    <div id="selection-action-bar" class="fixed bottom-8 left-1/2 -translate-x-1/2 z-[90] hidden">
+        <div class="bg-surface/80 backdrop-blur-xl border border-[rgba(74,222,128,0.2)] rounded-2xl px-6 py-4 shadow-2xl flex items-center gap-6 animate-in slide-in-from-bottom-4">
+            <div class="flex items-center gap-3 pr-6 border-r border-[rgba(74,222,128,0.1)]">
+                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-[10px] font-black text-background" id="selected-count-badge">0</span>
+                <span class="text-xs font-bold text-text uppercase tracking-widest">Выбрано</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="openBulkDeleteModal()" class="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-all text-xs font-bold uppercase tracking-wider">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    Удалить
+                </button>
+                <button onclick="deselectAll()" class="px-4 py-2 rounded-xl hover:bg-[rgba(74,222,128,0.08)] text-muted hover:text-text transition-all text-xs font-bold uppercase tracking-wider">
+                    Отмена
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div class="card overflow-hidden">
-        <div class="overflow-x-auto min-h-[300px]">
+        <div class="overflow-x-auto min-h-[400px]">
             <table class="w-full text-sm border-collapse table-fixed">
                 <thead class="bg-[rgba(74,222,128,0.02)] sticky top-0 z-10 backdrop-blur-md">
                     <tr class="border-b border-[rgba(74,222,128,0.06)] text-muted text-left text-xs uppercase tracking-wider">
-                        <th class="p-4 w-[50px]"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="custom-checkbox"></th>
+                        <th class="p-4 w-[60px]">
+                            <div class="flex items-center justify-center">
+                                <input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" class="custom-checkbox">
+                            </div>
+                        </th>
                         <th class="p-4 font-medium w-[200px]">Название</th>
                         <th class="p-4 font-medium w-[250px]">URL</th>
                         <th class="p-4 font-medium w-[150px]">Домены</th>
@@ -72,14 +95,7 @@
                         <th class="p-4 font-medium w-[120px]">Статус</th>
                         <th class="p-4 font-medium w-[120px]">Проверка</th>
                         <th class="p-4 font-medium text-center w-[80px]">Товаров</th>
-                        <th class="p-4 font-medium text-right w-[120px]">
-                            <div class="flex items-center justify-end h-5">
-                                <button id="bulk-delete-btn" onclick="openBulkDeleteModal()" class="hidden text-error hover:text-red-400 text-[10px] font-black uppercase tracking-tighter transition-all duration-200 bg-red-500/10 px-2 py-1 rounded border border-red-500/20">
-                                    Удалить (<span id="selected-count">0</span>)
-                                </button>
-                                <span id="actions-header-label">Действия</span>
-                            </div>
-                        </th>
+                        <th class="p-4 font-medium text-right w-[120px]">Действия</th>
                     </tr>
                 </thead>
                 <tbody id="monitor-table-body" 
@@ -245,26 +261,49 @@
                 selectedMonitorIds.delete(cb.value);
             }
         });
-        updateBulkDeleteBtn();
+        syncSelectAllState();
+        updateBulkActionsUI();
     }
 
-    function updateBulkDeleteBtn() {
-        const bulkBtn = document.getElementById('bulk-delete-btn');
-        const actionsLabel = document.getElementById('actions-header-label');
-        const countSpan = document.getElementById('selected-count');
+    function deselectAll() {
+        selectedMonitorIds.clear();
+        document.querySelectorAll('.monitor-checkbox').forEach(cb => cb.checked = false);
+        syncSelectAllState();
+        updateBulkActionsUI();
+    }
+
+    function syncSelectAllState() {
+        const selectAll = document.getElementById('select-all');
+        const checkboxes = document.querySelectorAll('.monitor-checkbox');
+        const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+        
+        if (checkedCount === 0) {
+            selectAll.checked = false;
+            selectAll.indeterminate = false;
+        } else if (checkedCount === checkboxes.length) {
+            selectAll.checked = true;
+            selectAll.indeterminate = false;
+        } else {
+            selectAll.checked = false;
+            selectAll.indeterminate = true;
+        }
+    }
+
+    function updateBulkActionsUI() {
+        const actionBar = document.getElementById('selection-action-bar');
+        const countBadge = document.getElementById('selected-count-badge');
+        const tableBody = document.getElementById('monitor-table-body');
         
         if (selectedMonitorIds.size > 0) {
-            countSpan.innerText = selectedMonitorIds.size;
-            bulkBtn.classList.remove('hidden');
-            actionsLabel.classList.add('hidden');
+            countBadge.innerText = selectedMonitorIds.size;
+            actionBar.classList.remove('hidden');
             // Stop polling when something is selected
-            document.getElementById('monitor-table-body').setAttribute('hx-trigger', 'none');
+            tableBody.setAttribute('hx-trigger', 'none');
         } else {
-            bulkBtn.classList.add('hidden');
-            actionsLabel.classList.remove('hidden');
+            actionBar.classList.add('hidden');
             // Resume polling when nothing is selected
-            document.getElementById('monitor-table-body').setAttribute('hx-trigger', 'every 10s');
-            htmx.process(document.getElementById('monitor-table-body'));
+            tableBody.setAttribute('hx-trigger', 'every 10s');
+            htmx.process(tableBody);
         }
     }
 
@@ -276,7 +315,8 @@
             } else {
                 selectedMonitorIds.delete(e.target.value);
             }
-            updateBulkDeleteBtn();
+            syncSelectAllState();
+            updateBulkActionsUI();
         }
     });
 
@@ -289,11 +329,13 @@
                     cb.checked = true;
                 }
             });
-            updateBulkDeleteBtn();
+            syncSelectAllState();
+            updateBulkActionsUI();
         }
     });
 
     function openDeleteModal(id, name) {
+        const modal = document.getElementById('delete-modal');
         document.getElementById('delete-msg').innerHTML = `Вы действительно хотите удалить монитор <span class="text-text font-bold">"${name}"</span>?<br><span class="text-[10px] uppercase tracking-widest text-error/60 mt-2 block">Это действие необратимо</span>`;
         document.getElementById('confirm-delete-btn').onclick = async () => {
             const row = document.getElementById(`monitor-row-${id}`);
@@ -303,14 +345,15 @@
             }
             await fetch(`/monitors/${id}/delete`, { method: 'POST' });
             if (row) row.remove();
-            selectedMonitorIds.delete(id);
-            updateBulkDeleteBtn();
+            selectedMonitorIds.delete(id.toString());
+            updateBulkActionsUI();
             closeDeleteModal();
         };
         showModal('delete-modal');
     }
 
     function openBulkDeleteModal() {
+        const modal = document.getElementById('delete-modal');
         document.getElementById('delete-msg').innerHTML = `Удалить <span class="text-accent font-black">${selectedMonitorIds.size}</span> выбранных мониторов?<br><span class="text-[10px] uppercase tracking-widest text-error/60 mt-2 block">Все связанные данные будут удалены</span>`;
         document.getElementById('confirm-delete-btn').onclick = async () => {
             const idsToDelete = Array.from(selectedMonitorIds);
@@ -326,7 +369,7 @@
                 if (row) row.remove();
                 selectedMonitorIds.delete(id);
             }
-            updateBulkDeleteBtn();
+            updateBulkActionsUI();
         };
         showModal('delete-modal');
     }
@@ -338,7 +381,9 @@
     }
 
     function closeDeleteModal() {
-        document.getElementById('delete-modal').classList.add('hidden');
+        const modal = document.getElementById('delete-modal');
+        modal.classList.remove('show');
+        setTimeout(() => modal.classList.add('hidden'), 300);
     }
 
     // Close modals on ESC
@@ -356,10 +401,45 @@
         modals.forEach(id => {
             const modal = document.getElementById(id);
             if (event.target == modal) {
-                modal.classList.add('hidden');
+                if (id === 'delete-modal') closeDeleteModal();
+                else modal.classList.add('hidden');
             }
         });
     }
+
+    window.openExportModal = async function(format) {
+        const response = await fetch('/export?format=' + format);
+        const data = await response.text();
+        document.getElementById('json-export-area').value = data;
+        showModal('export-modal');
+    };
+
+    window.copyJson = function() {
+        const area = document.getElementById('json-export-area');
+        area.select();
+        document.execCommand('copy');
+        // Simple feedback
+        const btn = event.currentTarget;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="check" class="w-4 h-4"></i> Скопировано!';
+        lucide.createIcons();
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            lucide.createIcons();
+        }, 2000);
+    };
+
+    window.downloadTxt = async function() {
+        const response = await fetch('/export?format=txt');
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'monitors.txt';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    };
 </script>
 {% endblock %}
 

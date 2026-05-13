@@ -81,12 +81,18 @@ async def start_bot(
     token: str,
     owner_user_id: int | None = None,
 ) -> str:
+    if not token or not token.strip():
+        logger.error(f"Cannot start bot: empty token for user_id={owner_user_id}")
+        return "Ошибка: Токен не может быть пустым"
+
     if is_bot_running(token):
+        logger.info(f"Bot for token {token[:10]}... already running")
         return "Бот уже запущен"
 
     try:
         from app.telegram.bot import get_or_create_bot, start_polling, terminate_all_sessions
 
+        logger.info(f"Starting bot for user_id={owner_user_id}, token={token[:10]}...")
         # Terminate other sessions for THIS token
         await terminate_all_sessions(token)
         bot, dp = get_or_create_bot(token)
@@ -94,7 +100,7 @@ async def start_bot(
         # Start polling in background
         asyncio.create_task(start_polling(bot, dp))
         
-        logger.info(f"Bot started for user_id={owner_user_id}")
+        logger.info(f"Bot started successfully for user_id={owner_user_id}")
         return "Бот успешно запущен"
     except Exception as e:
         logger.exception(f"Failed to start bot for user_id={owner_user_id}")

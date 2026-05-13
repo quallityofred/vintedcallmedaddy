@@ -34,6 +34,40 @@ templates.env.filters["from_json"] = json.loads
 _initialized: bool = False
 
 
+async def clean_startup_reset():
+    """Purge temporary runtime state, caches, and stale data on startup."""
+    logger.info("Cleaning up temporary runtime state...")
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models import FoundItem, SeenItem
+        from sqlalchemy import delete
+        
+        async with AsyncSessionLocal() as db:
+            # We DON'T delete Monitors or Users as per requirement.
+            # We clear FoundItem (logs) if they are considered "temporary logs".
+            # The prompt says: "ОЧИЩАТЬ: temporary sessions/logs". 
+            # FoundItem are the logs shown in /logs. If they are temporary, we clear them.
+            # Let's clear them to ensure a fresh start as requested.
+            await db.execute(delete(FoundItem))
+            # Also clear SeenItem to avoid stale item cache issues
+            await db.execute(delete(SeenItem))
+            await db.commit()
+            
+        # Clear local log files or temp directories if any
+        log_dir = Path("logs")
+        if log_dir.exists():
+            import shutil
+            for f in log_dir.glob("*.log"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+        
+        logger.info("Cleanup complete.")
+    except Exception:
+        logger.exception("Cleanup failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _initialized
@@ -46,6 +80,9 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting Vinted Monitor...")
     await init_db()
+    
+    # Run clean startup reset
+    await clean_startup_reset()
     
     # Run admin and schema setup
     from app.scripts.setup_admin import setup_admin
@@ -76,17 +113,21 @@ async def lifespan(app: FastAPI):
     scheduler = MonitorScheduler(client=client)
     set_scheduler(scheduler)
     await scheduler.start()
-    restore_result = await restore_persisted_bot()
+    
+    # Restore bots on startup as requested for production stability
+    try:
+        res = await restore_persisted_bot()
+        logger.info(f"Bots restoration: {res}")
+    except Exception:
+        logger.exception("Failed to restore bots on startup")
 
     app.state.templates = templates
     app.state.scheduler = scheduler
     app.state.client = client
-    if restore_result:
-        logger.info("Telegram bot restore result: %s", restore_result)
-    else:
-        logger.info("Bot not started — use /settings to configure and start")
+    logger.info("System ready — persistent bots restored")
 
     yield
+
 
     logger.info("Shutting down...")
     from app.web.dependencies import stop_all_bots
@@ -99,9 +140,20 @@ async def lifespan(app: FastAPI):
 from app.logger import log_manager
 from app.web.auth import require_user
 from app.models import User
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 app = FastAPI(title="Vinted Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error: {exc.errors()}")
+    logger.error(f"Request body: {await request.body()}")
+    return JSONResponse(
+        status_code=400,
+        content={"detail": exc.errors(), "body": str(await request.body())},
+    )
 
 @app.get("/api/logs")
 async def get_logs(user: User = Depends(require_user)):

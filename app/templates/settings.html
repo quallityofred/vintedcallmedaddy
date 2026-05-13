@@ -126,50 +126,103 @@
 
 <script>
 function testBot() {
-    const token = document.getElementById('telegram_token').value;
-    const chatId = document.getElementById('telegram_chat_id').value;
+    const token = document.getElementById('telegram_token').value.trim();
+    const chatId = document.getElementById('telegram_chat_id').value.trim();
     const resultEl = document.getElementById('bot-result');
+    
+    if (!token || !chatId) {
+        resultEl.textContent = 'Ошибка: Токен и Chat ID обязательны';
+        resultEl.className = 'text-xs text-error';
+        return;
+    }
+
     resultEl.textContent = 'Отправка...';
     resultEl.className = 'text-xs text-muted';
+    
     fetch('/settings/test-bot', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'telegram_token=' + encodeURIComponent(token) + '&telegram_chat_id=' + encodeURIComponent(chatId)
     })
-    .then(r => r.text())
+    .then(async r => {
+        const text = await r.text();
+        if (!r.ok) throw new Error(text || 'Ошибка сервера');
+        return text;
+    })
     .then(msg => {
         resultEl.textContent = msg;
         resultEl.className = msg.includes('отправлено') ? 'text-xs text-accent' : 'text-xs text-error';
+    })
+    .catch(err => {
+        resultEl.textContent = err.message;
+        resultEl.className = 'text-xs text-error';
     });
 }
+
 function startBot() {
-    const token = document.getElementById('telegram_token').value;
-    const chatId = document.getElementById('telegram_chat_id').value;
+    const token = document.getElementById('telegram_token').value.trim();
+    const chatId = document.getElementById('telegram_chat_id').value.trim();
     const resultEl = document.getElementById('bot-result');
+    
+    if (!token) {
+        resultEl.textContent = 'Ошибка: Токен обязателен';
+        resultEl.className = 'text-xs text-error';
+        return;
+    }
+
     resultEl.textContent = 'Запуск...';
     resultEl.className = 'text-xs text-muted';
+    
     fetch('/settings/start-bot', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'telegram_token=' + encodeURIComponent(token) + '&telegram_chat_id=' + encodeURIComponent(chatId)
     })
-    .then(r => r.text())
+    .then(async r => {
+        const text = await r.text();
+        if (!r.ok) {
+            // Try to parse JSON for validation errors
+            try {
+                const json = JSON.parse(text);
+                if (json.detail) {
+                    return Promise.reject(new Error('Ошибка: ' + JSON.stringify(json.detail)));
+                }
+            } catch(e) {}
+            throw new Error(text || 'Ошибка при запуске');
+        }
+        return text;
+    })
     .then(msg => {
         resultEl.textContent = msg;
         resultEl.className = msg.includes('успешно') || msg.includes('уже') ? 'text-xs text-accent' : 'text-xs text-error';
-        setTimeout(() => location.reload(), 1500);
+        if (msg.includes('успешно') || msg.includes('уже')) {
+            setTimeout(() => location.reload(), 1500);
+        }
+    })
+    .catch(err => {
+        resultEl.textContent = err.message;
+        resultEl.className = 'text-xs text-error';
     });
 }
+
 function stopBot() {
     const resultEl = document.getElementById('bot-result');
     resultEl.textContent = 'Остановка...';
     resultEl.className = 'text-xs text-muted';
     fetch('/settings/stop-bot', {method: 'POST'})
-    .then(r => r.text())
+    .then(async r => {
+        const text = await r.text();
+        if (!r.ok) throw new Error(text || 'Ошибка при остановке');
+        return text;
+    })
     .then(msg => {
         resultEl.textContent = msg;
         resultEl.className = 'text-xs text-accent';
         setTimeout(() => location.reload(), 1500);
+    })
+    .catch(err => {
+        resultEl.textContent = err.message;
+        resultEl.className = 'text-xs text-error';
     });
 }
 </script>

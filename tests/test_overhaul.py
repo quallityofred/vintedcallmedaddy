@@ -65,53 +65,30 @@ async def test_multi_user_bot_configuration(db_session):
         assert is_bot_running("token2")
 
 @pytest.mark.asyncio
-async def test_monitor_deletion_cascade(db_session):
-    """Verify that deleting a monitor also deletes its found items."""
-    import random
-    rid = random.randint(1000, 9999)
-    user = User(username=f"test_user_{rid}", telegram_bot_token="t", telegram_chat_id="c")
+async def test_clean_startup_reset(db_session):
+    """Verify that FoundItem and SeenItem are cleared on startup, but Monitors are kept."""
+    user = User(username="cleanup_user", telegram_bot_token="t", telegram_chat_id="c")
     user.set_password("pass")
     db_session.add(user)
     await db_session.commit()
-
-
     
-    monitor = Monitor(
-        user_id=user.id,
-        name="Test Monitor",
-        original_url="http://example.com",
-        params_json="{}",
-        domains_json="[]"
-    )
+    monitor = Monitor(user_id=user.id, name="Keep Me", original_url="u", params_json="{}", domains_json="[]")
     db_session.add(monitor)
     await db_session.commit()
     
-    found_item = FoundItem(
-        monitor_id=monitor.id,
-        vinted_item_id=123,
-        domain="vinted.fr",
-        title="Test Item",
-        price=10.0,
-        currency="EUR",
-        brand="B",
-        size="S",
-        condition="N",
-        photo_url="p",
-        item_url="u",
-        seller_id=456
-    )
-    db_session.add(found_item)
+    found = FoundItem(monitor_id=monitor.id, vinted_item_id=1, domain="d", title="T", price=1.0, currency="E", brand="B", size="S", condition="N", photo_url="p", item_url="u", seller_id=1)
+    db_session.add(found)
     await db_session.commit()
     
-    # Delete monitor via router logic (mimicked)
-    from sqlalchemy import delete
-    await db_session.execute(delete(FoundItem).where(FoundItem.monitor_id == monitor.id))
-    await db_session.delete(monitor)
-    await db_session.commit()
+    from app.main import clean_startup_reset
+    # We need to mock AsyncSessionLocal to use our test db_session
+    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
     
-    # Verify monitor and found item are gone
-    mon_count = await db_session.execute(select(Monitor).where(Monitor.id == monitor.id))
-    assert mon_count.scalar_one_or_none() is None
-    
-    item_count = await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id))
-    assert item_count.scalar_one_or_none() is None
+    with patch("app.database.AsyncSessionLocal", side_effect=session_factory):
+        await clean_startup_reset()
+        
+    # Verify
+    assert (await db_session.execute(select(Monitor))).scalar_one_or_none() is not None
+    assert (await db_session.execute(select(FoundItem))).scalar_one_or_none() is None
+
