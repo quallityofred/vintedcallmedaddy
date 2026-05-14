@@ -32,6 +32,9 @@ engine = create_async_engine(
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import reflection
+
 async def init_db() -> None:
     max_retries = 5
     for i in range(max_retries):
@@ -39,14 +42,61 @@ async def init_db() -> None:
             logger.info(f"Attempting to connect to database (attempt {i+1}/{max_retries})...")
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-            logger.info("Database initialized successfully.")
+                # Perform manual migrations for existing tables
+                await validate_and_migrate_db(conn)
+            logger.info("Database initialized and migrated successfully.")
             return
-        except SQLAlchemyError as e:
+        except Exception as e:
             logger.error(f"Database initialization failed: {e}")
             if i < max_retries - 1:
                 await asyncio.sleep(5)
             else:
                 raise e
+
+
+async def validate_and_migrate_db(conn) -> None:
+    """Safely adds missing columns and indexes to existing tables with detailed logging."""
+    logger.info("Validating database schema...")
+    
+    def get_columns(connection, table_name):
+        inspector = inspect(connection)
+        return [c["name"] for c in inspector.get_columns(table_name)]
+
+    # 1. Migrate seen_items
+    columns_seen = await conn.run_sync(get_columns, "seen_items")
+    if "user_id" not in columns_seen:
+        logger.warning("Migration required: column 'user_id' missing in 'seen_items'")
+        await conn.execute(text("ALTER TABLE seen_items ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE"))
+        logger.info("Successfully added 'user_id' to 'seen_items'")
+    else:
+        logger.debug("'seen_items' schema is up to date (user_id exists)")
+        
+    try:
+        if engine.dialect.name == 'postgresql':
+            await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_seen_items_user_item_domain ON seen_items (user_id, vinted_item_id, domain)"))
+        else:
+            await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_seen_items_user_item_domain ON seen_items (user_id, vinted_item_id, domain)"))
+    except Exception as e:
+        logger.warning(f"Note: Could not ensure unique index on seen_items (might already exist): {e}")
+
+    # 2. Migrate found_items
+    columns_found = await conn.run_sync(get_columns, "found_items")
+    if "notified" not in columns_found:
+        logger.warning("Migration required: column 'notified' missing in 'found_items'")
+        await conn.execute(text("ALTER TABLE found_items ADD COLUMN notified BOOLEAN DEFAULT FALSE"))
+        logger.info("Successfully added 'notified' to 'found_items'")
+    
+    if "monitor_id" not in columns_found:
+        logger.warning("Migration required: column 'monitor_id' missing in 'found_items'")
+        await conn.execute(text("ALTER TABLE found_items ADD COLUMN monitor_id INTEGER REFERENCES monitors(id) ON DELETE CASCADE"))
+        logger.info("Successfully added 'monitor_id' to 'found_items'")
+
+    try:
+        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_found_items_monitor_item_domain ON found_items (monitor_id, vinted_item_id, domain)"))
+    except Exception as e:
+        logger.warning(f"Note: Could not ensure unique index on found_items (might already exist): {e}")
+    
+    logger.info("Database schema validation completed.")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
