@@ -108,7 +108,7 @@
                     {% for monitor in monitors %}
                     {% set domains_list = monitor.domains_json | from_json %}
                     <tr id="monitor-row-{{ monitor.id }}" class="group hover:bg-[rgba(74,222,128,0.02)] transition-colors duration-150">
-                        <td class="p-4"><input type="checkbox" name="monitor_id" value="{{ monitor.id }}" class="monitor-checkbox custom-checkbox" onchange="updateBulkDeleteBtn()"></td>
+                        <td class="p-4"><input type="checkbox" name="monitor_id" value="{{ monitor.id }}" class="monitor-checkbox custom-checkbox"></td>
                         <td class="p-4">
                             <p class="font-semibold text-text truncate" title="{{ monitor.name }}">{{ monitor.name }}</p>
                         </td>

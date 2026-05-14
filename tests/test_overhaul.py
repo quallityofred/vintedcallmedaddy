@@ -89,6 +89,10 @@ async def test_clean_startup_reset(db_session):
         await clean_startup_reset()
         
     # Verify
-    assert (await db_session.execute(select(Monitor))).scalar_one_or_none() is not None
-    assert (await db_session.execute(select(FoundItem))).scalar_one_or_none() is None
+    # Use scalars().all() to handle multiple monitors if tests are not perfectly isolated
+    monitors = (await db_session.execute(select(Monitor))).scalars().all()
+    assert len(monitors) > 0
+    
+    found_items = (await db_session.execute(select(FoundItem))).scalars().all()
+    assert len(found_items) == 0
 

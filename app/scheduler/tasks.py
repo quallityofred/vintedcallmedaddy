@@ -74,9 +74,12 @@ def _reset_interval_if_scaled_from_time_window(monitor: Monitor) -> int:
     return _normalize_adaptive_interval(monitor)
 
 
-async def _update_monitor_interval(db: AsyncSessionLocal, monitor: Monitor, found_new: bool, count: int = 0) -> None:
-    original_interval = _resolve_original_interval(monitor)
-    monitor.interval_sec = _reset_interval_if_scaled_from_time_window(monitor)
+async def _update_monitor_interval(db: AsyncSessionLocal, monitor: Monitor, found_new: bool, count: int = 0, original_interval: int | None = None) -> None:
+    if original_interval is None:
+        original_interval = _resolve_original_interval(monitor)
+    
+    # Ensure we don't scale below original_interval
+    monitor.interval_sec = max(monitor.interval_sec, original_interval)
     
     if found_new:
         monitor.items_found_count += count
@@ -94,138 +97,220 @@ async def _update_monitor_interval(db: AsyncSessionLocal, monitor: Monitor, foun
             monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
 
+import sys
+
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
-    # 1. Fetch monitor and hidden sellers, then release connection
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-        monitor = result.scalar_one_or_none()
-        if monitor is None or not monitor.is_active:
-            return
-
-        params: dict = json.loads(monitor.params_json)
-        domains: list[str] = json.loads(monitor.domains_json)
-
-        hidden_result = await db.execute(select(HiddenSeller.seller_id))
-        hidden_seller_ids: set[int] = {row[0] for row in hidden_result.fetchall()}
-        
-        user_id = monitor.user_id
-        is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
-
-    # Prepare contextual logger
-    log_extra = {"user_id": user_id}
-    
-    # 2. Perform search (OUTSIDE DB session)
     try:
-        items = await client.search_all_domains(params, domains)
-    except Exception:
-        logger.exception("search_all_domains failed for monitor_id=%d", monitor_id, extra=log_extra)
-        items = []
+        sys.stderr.write(f"DEBUG: check_monitor started for {monitor_id}\n")
+        sys.stderr.flush()
+        # 1. Fetch monitor and hidden sellers
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+            monitor = result.scalar_one_or_none()
+            if monitor is None:
+                sys.stderr.write(f"DEBUG: Monitor {monitor_id} not found\n")
+                sys.stderr.flush()
+                return
+            if not monitor.is_active:
+                sys.stderr.write(f"DEBUG: Monitor {monitor_id} is not active\n")
+                sys.stderr.flush()
+                return
 
-    # 3. Save results in a new session
-    new_items_to_notify: list[VintedItem] = []
-    async with AsyncSessionLocal() as db:
-        # Re-fetch or merge monitor to the new session
-        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-        monitor = result.scalar_one_or_none()
-        if monitor is None or not monitor.is_active:
-            return
+            # Access attributes IMMEDIATELY to avoid lazy loading later
+            params_json = monitor.params_json
+            domains_json = monitor.domains_json
+            user_id = monitor.user_id
+            is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
+            
+            # Parse now so we don't need the monitor object for this
+            params: dict = json.loads(params_json)
+            domains: list[str] = json.loads(domains_json)
+            original_interval = params.get("_original_interval", monitor.interval_sec)
+
+            hidden_result = await db.execute(select(HiddenSeller.seller_id))
+            hidden_seller_ids: set[int] = {row[0] for row in hidden_result.fetchall()}
+            
+        # 2. Perform search (OUTSIDE DB session)
+        try:
+            items = await client.search_all_domains(params, domains)
+        except Exception as e:
+            print(f"DEBUG: search_all_domains failed for monitor_id={monitor_id}: {e}")
+            items = []
 
         if not items:
-            await _update_monitor_interval(db, monitor, False)
-            await db.commit()
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+                monitor = result.scalar_one_or_none()
+                if monitor and monitor.is_active:
+                    await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
+                    await db.commit()
             return
 
-        filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
-        
-        for item in filtered_items:
-            # Atomic upsert for SeenItem
-            stmt = pg_insert(SeenItem).values(
-                vinted_item_id=item.id, 
-                domain=item.domain,
-                seen_at=datetime.now(timezone.utc)
-            )
-            stmt = stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-            res = await db.execute(stmt)
-            
-            if res.rowcount == 0:
-                continue
+        # 3. Save results in a new session
+        new_items_to_notify: list[VintedItem] = []
+        async with AsyncSessionLocal() as db:
+            try:
+                result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+                monitor = result.scalar_one_or_none()
+                if monitor is None:
+                    print(f"DEBUG: Monitor {monitor_id} not found in step 3")
+                    return
+                if not monitor.is_active:
+                    print(f"DEBUG: Monitor {monitor_id} is not active in step 3")
+                    return
 
-            # If cold start, we mark as notified=True to SILENCE
-            # If normal run, we mark as notified=False to QUEUE for sending
-            notified_status = True if is_cold_start else False
-            
-            found_stmt = pg_insert(FoundItem).values(
-                monitor_id=monitor_id,
-                vinted_item_id=item.id,
-                domain=item.domain,
-                title=item.title,
-                price=item.price,
-                currency=item.currency,
-                brand=item.brand,
-                size=item.size,
-                condition=item.condition,
-                photo_url=item.photo_url,
-                item_url=item.item_url,
-                seller_id=item.seller_id,
-                found_at=datetime.now(timezone.utc),
-                notified=notified_status,
-            )
-            found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-            found_res = await db.execute(found_stmt)
-            
-            if found_res.rowcount > 0 and not notified_status:
-                new_items_to_notify.append(item)
+                filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+                
+                for item in filtered_items:
+                    # 1. Check if seen by THIS user (or system-wide if user_id is None)
+                    is_new_for_user = True
+                    
+                    # Atomic check/insert for SeenItem
+                    if db.bind.dialect.name == 'postgresql':
+                        stmt = pg_insert(SeenItem).values(
+                            user_id=user_id,
+                            vinted_item_id=item.id, 
+                            domain=item.domain,
+                            seen_at=datetime.now(timezone.utc)
+                        )
+                        stmt = stmt.on_conflict_do_nothing(index_elements=['user_id', 'vinted_item_id', 'domain'])
+                        res = await db.execute(stmt)
+                        if res.rowcount == 0:
+                            is_new_for_user = False
+                    else:
+                        # SQLite: Use prefix_with("OR IGNORE") for atomicity in concurrent runs
+                        stmt = insert(SeenItem).values(
+                            user_id=user_id,
+                            vinted_item_id=item.id,
+                            domain=item.domain,
+                            seen_at=datetime.now(timezone.utc)
+                        ).prefix_with("OR IGNORE")
+                        res = await db.execute(stmt)
+                        if res.rowcount == 0:
+                            is_new_for_user = False
 
-        await _update_monitor_interval(db, monitor, (len(new_items_to_notify) > 0 or not is_cold_start), count=len(new_items_to_notify))
-        monitor.last_check_at = datetime.now(timezone.utc)
-        await db.commit()
+                    # 2. Record in FoundItem (logs) - unique per monitor
+                    # If cold start OR not new for user, we mark as notified=True to SILENCE
+                    notified_status = True if (is_cold_start or not is_new_for_user) else False
+                    
+                    if db.bind.dialect.name == 'postgresql':
+                        found_stmt = pg_insert(FoundItem).values(
+                            monitor_id=monitor_id,
+                            vinted_item_id=item.id,
+                            domain=item.domain,
+                            title=item.title,
+                            price=item.price,
+                            currency=item.currency,
+                            brand=item.brand,
+                            size=item.size,
+                            condition=item.condition,
+                            photo_url=item.photo_url,
+                            item_url=item.item_url,
+                            seller_id=item.seller_id,
+                            found_at=datetime.now(timezone.utc),
+                            notified=notified_status,
+                        )
+                        found_stmt = found_stmt.on_conflict_do_nothing(index_elements=['monitor_id', 'vinted_item_id', 'domain'])
+                        found_res = await db.execute(found_stmt)
+                        if found_res.rowcount > 0 and not notified_status:
+                            new_items_to_notify.append(item)
+                    else:
+                        # SQLite
+                        found_stmt = insert(FoundItem).values(
+                            monitor_id=monitor_id,
+                            vinted_item_id=item.id,
+                            domain=item.domain,
+                            title=item.title,
+                            price=item.price,
+                            currency=item.currency,
+                            brand=item.brand,
+                            size=item.size,
+                            condition=item.condition,
+                            photo_url=item.photo_url,
+                            item_url=item.item_url,
+                            seller_id=item.seller_id,
+                            found_at=datetime.now(timezone.utc),
+                            notified=notified_status,
+                        ).prefix_with("OR IGNORE")
+                        found_res = await db.execute(found_stmt)
+                        if found_res.rowcount > 0:
+                            if not notified_status:
+                                new_items_to_notify.append(item)
+                        else:
+                            print(f"DEBUG: Monitor {monitor_id} failed to insert FoundItem (rowcount=0)")
 
-    # 4. Process Pending Notifications (including any backlog)
-    await process_pending_notifications()
+                await _update_monitor_interval(db, monitor, (len(new_items_to_notify) > 0 or not is_cold_start), count=len(new_items_to_notify), original_interval=original_interval)
+                monitor.last_check_at = datetime.now(timezone.utc)
+                await db.commit()
+            except Exception as e:
+                print(f"DEBUG: Monitor {monitor_id} error in step 3: {e}")
+                await db.rollback()
+                raise
+
+        # 4. Process Pending Notifications
+        asyncio.create_task(process_pending_notifications())
+    except Exception as e:
+        print(f"DEBUG: GLOBAL ERROR in check_monitor for {monitor_id}: {e}")
+        raise
+
+
+
+
+    # 4. Process Pending Notifications
+    asyncio.create_task(process_pending_notifications())
 
 
 async def process_pending_notifications() -> None:
-    """Finds all FoundItems with notified=False and attempts to send them."""
-    async with AsyncSessionLocal() as db:
-        # Get items that haven't been notified yet, oldest first
-        result = await db.execute(
-            select(FoundItem)
-            .where(FoundItem.notified == False)
-            .order_by(FoundItem.found_at.asc())
-            .limit(50) # Process in batches to avoid new flood
-        )
-        pending_items = result.scalars().all()
+    """Finds all FoundItems with notified=False and attempts to send them with locking."""
+    # Use a lock to prevent concurrent notification processing within the same process
+    # Global lock for this function
+    if not hasattr(process_pending_notifications, "_lock"):
+        process_pending_notifications._lock = asyncio.Lock()
         
-        if not pending_items:
-            return
-
-        logger.info("Processing %d pending notifications", len(pending_items))
-        
-        # Group by monitor to reuse bot/chat_id
-        for fi in pending_items:
-            # We need VintedItem object for the notification function
-            item = VintedItem(
-                id=fi.vinted_item_id,
-                title=fi.title,
-                price=fi.price,
-                currency=fi.currency,
-                brand=fi.brand,
-                size=fi.size,
-                condition=fi.condition,
-                photo_url=fi.photo_url,
-                item_url=fi.item_url,
-                domain=fi.domain,
-                seller_id=fi.seller_id
+    async with process_pending_notifications._lock:
+        async with AsyncSessionLocal() as db:
+            # Get items that haven't been notified yet, oldest first
+            # On Postgres we use FOR UPDATE SKIP LOCKED
+            query = (
+                select(FoundItem)
+                .where(FoundItem.notified == False)
+                .order_by(FoundItem.found_at.asc())
+                .limit(50)
             )
             
-            success = await _send_single_notification(fi.monitor_id, item)
-            if success:
-                fi.notified = True
-                await db.commit() # Commit each one to avoid re-sending on crash
-            else:
-                # If failed (e.g. Flood limit), stop processing the rest of the batch
-                logger.warning("Stopping notification batch processing due to failure/limit")
-                break
+            if db.bind.dialect.name == 'postgresql':
+                query = query.with_for_update(skip_locked=True)
+                
+            result = await db.execute(query)
+            pending_items = result.scalars().all()
+            
+            if not pending_items:
+                return
+
+            logger.info("Processing %d pending notifications", len(pending_items))
+            
+            for fi in pending_items:
+                item = VintedItem(
+                    id=fi.vinted_item_id,
+                    title=fi.title,
+                    price=fi.price,
+                    currency=fi.currency,
+                    brand=fi.brand,
+                    size=fi.size,
+                    condition=fi.condition,
+                    photo_url=fi.photo_url,
+                    item_url=fi.item_url,
+                    domain=fi.domain,
+                    seller_id=fi.seller_id
+                )
+                
+                success = await _send_single_notification(fi.monitor_id, item)
+                if success:
+                    fi.notified = True
+                    # Partial commits to ensure we don't re-send if one fails later
+                    await db.commit()
+                else:
+                    break
 
 
 async def _send_single_notification(monitor_id: int, item: VintedItem) -> bool:

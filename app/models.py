@@ -103,7 +103,7 @@ class Monitor(Base):
 class FoundItem(Base):
     __tablename__ = "found_items"
     __table_args__ = (
-        UniqueConstraint("vinted_item_id", "domain", name="uq_found_items_vinted_item_domain"),
+        UniqueConstraint("monitor_id", "vinted_item_id", "domain", name="uq_found_items_monitor_item_domain"),
         Index("ix_found_items_vinted_item_id", "vinted_item_id"),
         Index("ix_found_items_monitor_id", "monitor_id"),
         Index("ix_found_items_domain", "domain"),
@@ -167,11 +167,13 @@ class AppSettings(Base):
 class SeenItem(Base):
     __tablename__ = "seen_items"
     __table_args__ = (
-        UniqueConstraint("vinted_item_id", "domain", name="uq_seen_items_vinted_item_domain"),
+        UniqueConstraint("user_id", "vinted_item_id", "domain", name="uq_seen_items_user_item_domain"),
         Index("ix_seen_items_vinted_item_id", "vinted_item_id"),
+        Index("ix_seen_items_user_id", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     vinted_item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     domain: Mapped[str] = mapped_column(String, nullable=False)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

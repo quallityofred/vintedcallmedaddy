@@ -61,11 +61,19 @@ async def test_check_monitor_efficiency(db_session):
     from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
     import random
     
+    # Create user
+    user = User(username="audit_user", telegram_bot_token="t", telegram_chat_id="c")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
     # Use unique IDs to avoid any leftover state issues
     item_id = random.randint(1000000, 9999999)
     
     # Setup monitor
     monitor = Monitor(
+        user_id=user.id,
         name="Test",
         original_url="http://test.com",
         params_json=json.dumps({"q": "test"}),
@@ -96,13 +104,13 @@ async def test_check_monitor_efficiency(db_session):
 
     # Verify results in a fresh session
     async with session_factory() as verify_db:
-        # Verify SeenItem created
-        result = await verify_db.execute(select(SeenItem).where(SeenItem.vinted_item_id == item_id))
+        # Verify SeenItem created for THIS user
+        result = await verify_db.execute(select(SeenItem).where(SeenItem.user_id == user.id, SeenItem.vinted_item_id == item_id))
         seen = result.scalar_one_or_none()
         assert seen is not None, f"SeenItem with id {item_id} was not created"
 
         # Verify FoundItem created
-        result = await verify_db.execute(select(FoundItem).where(FoundItem.vinted_item_id == item_id))
+        result = await verify_db.execute(select(FoundItem).where(FoundItem.monitor_id == monitor_id, FoundItem.vinted_item_id == item_id))
         found = result.scalar_one_or_none()
         assert found is not None, f"FoundItem with id {item_id} was not created"
 

@@ -7,7 +7,10 @@ from app.models import Base
 
 @pytest_asyncio.fixture(scope="session")
 async def engine():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"timeout": 30}
+    )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine

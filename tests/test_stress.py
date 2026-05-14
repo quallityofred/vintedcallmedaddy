@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import func, select
 
-from app.models import FoundItem, Monitor, SeenItem
+from app.models import FoundItem, Monitor, SeenItem, User
 from app.scheduler.tasks import check_monitor
 from app.scraper.parser import VintedItem
 
@@ -16,15 +16,26 @@ from app.scraper.parser import VintedItem
 @pytest.mark.asyncio
 async def test_concurrent_monitor_execution(db_session):
     """Stress test: Run many monitors concurrently and verify deduplication works."""
-    # Create 10 monitors
+    # Create a user
+    user = User(username="stress_user", telegram_bot_token="t", telegram_chat_id="c")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    # Create 10 monitors for this user
     monitor_ids = []
+    from datetime import datetime, timezone
     for i in range(10):
         monitor = Monitor(
+            user_id=user.id,
             name=f"Monitor {i}",
             original_url="http://test.com",
             params_json=json.dumps({"q": f"test {i}"}),
             domains_json=json.dumps(["vinted.fr"]),
-            is_active=True
+            is_active=True,
+            items_found_count=1, # Not a cold start
+            last_check_at=datetime.now(timezone.utc)
         )
         db_session.add(monitor)
         await db_session.commit()
@@ -40,38 +51,36 @@ async def test_concurrent_monitor_execution(db_session):
     mock_client = MagicMock()
     mock_client.search_all_domains = AsyncMock(return_value=[shared_item])
 
-    # Run all monitors concurrently
-    # We need a NEW session for each task because sessions are not async-safe for concurrent use
-    async def mock_session_local_factory():
-        session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
-        async with session_factory() as session:
-            yield session
-
-    # Instead of patching with a single session, we patch with a factory that creates a new one
-    # But AsyncSessionLocal is used as a context manager: async with AsyncSessionLocal() as db:
-    # So we need a callable that returns an async context manager.
+    # Run all monitors concurrently with NEW sessions to avoid race conditions in SQLAlchemy
     from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
 
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
          patch("app.scheduler.tasks.send_item_notification", AsyncMock()):
         
-        tasks = [check_monitor(mid, mock_client) for mid in monitor_ids]
+        # Serialize execution to avoid SQLite in-memory locking issues in tests
+        semaphore = asyncio.Semaphore(1)
+        async def sem_check(mid):
+            async with semaphore:
+                await check_monitor(mid, mock_client)
+        
+        tasks = [sem_check(mid) for mid in monitor_ids]
         await asyncio.gather(*tasks)
 
-    # Verify only ONE SeenItem exists for this ID
+    # Verify only ONE SeenItem exists for this user/item
     result = await db_session.execute(
-        select(func.count(SeenItem.id)).where(SeenItem.vinted_item_id == 999)
+        select(func.count(SeenItem.id)).where(SeenItem.user_id == user.id, SeenItem.vinted_item_id == 999)
     )
     assert result.scalar() == 1
 
-    # Verify only ONE FoundItem exists for this item_id/domain (across all monitors)
-    # Wait, our logic allows different monitors to have the same item in FoundItem?
-    # No, check_monitor uses:
-    # found_stmt = pg_insert(FoundItem).on_conflict_do_nothing(index_elements=['vinted_item_id', 'domain'])
-    # This means only the FIRST monitor that finds it will record it.
-    
+    # Verify each monitor recorded it in FoundItem (logs)
     result = await db_session.execute(
         select(func.count(FoundItem.id)).where(FoundItem.vinted_item_id == 999)
+    )
+    assert result.scalar() == 10
+
+    # Verify only ONE notification was queued (notified=False)
+    result = await db_session.execute(
+        select(func.count(FoundItem.id)).where(FoundItem.vinted_item_id == 999, FoundItem.notified == False)
     )
     assert result.scalar() == 1

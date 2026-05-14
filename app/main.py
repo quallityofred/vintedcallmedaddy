@@ -39,18 +39,19 @@ async def clean_startup_reset():
     logger.info("Cleaning up temporary runtime state...")
     try:
         from app.database import AsyncSessionLocal
-        from app.models import FoundItem, SeenItem
-        from sqlalchemy import delete
+        from app.models import FoundItem, SeenItem, Monitor
+        from sqlalchemy import delete, update
         
         async with AsyncSessionLocal() as db:
-            # We DON'T delete Monitors or Users as per requirement.
-            # We clear FoundItem (logs) if they are considered "temporary logs".
-            # The prompt says: "ОЧИЩАТЬ: temporary sessions/logs". 
-            # FoundItem are the logs shown in /logs. If they are temporary, we clear them.
-            # Let's clear them to ensure a fresh start as requested.
+            # We clear FoundItem (logs) and SeenItem (cache)
             await db.execute(delete(FoundItem))
-            # Also clear SeenItem to avoid stale item cache issues
             await db.execute(delete(SeenItem))
+            
+            # Reset monitors to force cold-start on first check after restart
+            await db.execute(
+                update(Monitor).values(last_check_at=None, items_found_count=0)
+            )
+            
             await db.commit()
             
         # Clear local log files or temp directories if any
