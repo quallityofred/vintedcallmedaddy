@@ -21,7 +21,6 @@ def get_shared_dispatcher() -> Dispatcher:
         _shared_dispatcher.include_router(router)
     return _shared_dispatcher
 
-
 async def terminate_all_sessions(token: str) -> None:
     """Kill ALL bot sessions on Telegram servers before starting a new one."""
     try:

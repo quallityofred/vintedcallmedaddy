@@ -1,0 +1,232 @@
+# app/web/dependencies.py
+"""
+FastAPI dependency injection functions.
+
+Provides:
+  - get_db()                 → async DB session
+  - get_current_user()       → User | None
+  - require_user()           → User  (redirects to /login)
+  - require_admin()          → User  (403 if not admin)
+  - get_scheduler()          → MonitorScheduler | None
+  - get_scraper_client()     → VintedClient | None
+  - start_bot()              → start Telegram polling for a token
+  - stop_bot()               → stop polling for a token
+  - is_bot_running()         → bool
+  - restore_persisted_bot()  → re-attach bots from DB on startup
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
+
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import AsyncSessionLocal
+from app.models import User, UserSession
+
+if TYPE_CHECKING:
+    from app.scheduler.tasks import MonitorScheduler
+    from app.scraper.client import VintedClient
+
+logger = logging.getLogger(__name__)
+
+SESSION_COOKIE = "session_token"
+
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Yield an async SQLAlchemy session."""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+async def get_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Return the logged-in User or None if no valid session cookie exists."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    result = await db.execute(
+        select(UserSession).where(UserSession.token == token)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        return None
+    user_result = await db.execute(
+        select(User).where(User.id == session.user_id)
+    )
+    return user_result.scalar_one_or_none()
+
+
+async def require_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Return the current user or redirect to /login.
+
+    Raises :class:`RequireLoginException` when unauthenticated so that the
+    exception handler in ``main.py`` can issue the redirect.
+    """
+    user = await get_current_user(request, db)
+    if user is None:
+        raise RequireLoginException()
+    return user
+
+
+async def require_admin(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Return the current user only if they are an admin."""
+    user = await require_user(request, db)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+class RequireLoginException(Exception):
+    """Raised by require_user() to trigger a redirect to /login."""
+
+
+# ---------------------------------------------------------------------------
+# Application-state accessors
+# ---------------------------------------------------------------------------
+
+def get_scheduler(request: Request) -> "MonitorScheduler | None":
+    """Return the MonitorScheduler stored on app.state, or None."""
+    return getattr(request.app.state, "scheduler", None)
+
+
+def get_scraper_client(request: Request) -> "VintedClient | None":
+    """Return the VintedClient stored on app.state, or None."""
+    return getattr(request.app.state, "scraper_client", None)
+
+
+# ---------------------------------------------------------------------------
+# Bot lifecycle helpers
+# ---------------------------------------------------------------------------
+
+def is_bot_running(token: str) -> bool:
+    """Return True if there is an active polling task for *token*."""
+    from app.telegram.bot import _polling_tasks
+    task = _polling_tasks.get(token)
+    return task is not None and not task.done()
+
+
+async def _polling_wrapper(bot, dp, token: str) -> None:
+    """Internal coroutine that runs polling and cleans up _polling_tasks on exit."""
+    import app.telegram.bot as bot_module
+    try:
+        await dp.start_polling(bot)
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("Telegram polling crashed for token=...%s", token[-6:])
+    finally:
+        bot_module._polling_tasks.pop(token, None)
+
+
+async def start_bot(token: str, owner_user_id: int | None = None) -> str:
+    """
+    Start Telegram long-polling for *token*.
+
+    Stores the polling asyncio.Task directly in bot._polling_tasks so that
+    is_bot_running() returns True as soon as the task is created — without
+    depending on the internal task-registration inside start_polling().
+
+    If a polling task already exists and is alive the call is a no-op.
+    Returns a human-readable result string (Russian, for the UI).
+    """
+    if not token or not token.strip():
+        return "Ошибка: неверный формат токена"
+
+    if is_bot_running(token):
+        return "Бот уже запущен"
+
+    try:
+        import app.telegram.bot as bot_module
+        from app.telegram.bot import get_or_create_bot, terminate_all_sessions
+
+        await terminate_all_sessions(token)
+        bot, dp = get_or_create_bot(token)
+
+        # Create the task and register it BEFORE the first await so that
+        # is_bot_running() is True immediately after this function returns.
+        task = asyncio.create_task(_polling_wrapper(bot, dp, token))
+        bot_module._polling_tasks[token] = task
+
+        # Yield control so the task can start running
+        await asyncio.sleep(0.05)
+
+        logger.info("Bot started (token=...%s, user_id=%s)", token[-6:], owner_user_id)
+        return "Бот успешно запущен"
+    except Exception as exc:
+        logger.exception("Failed to start bot")
+        return f"Ошибка запуска: {exc}"
+
+
+async def stop_bot(token: str) -> None:
+    """Cancel the polling task for *token* and close the bot session."""
+    from app.telegram.bot import _polling_tasks, _bots
+
+    task = _polling_tasks.pop(token, None)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+    bot = _bots.pop(token, None)
+    if bot:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+
+    logger.info("Bot stopped (token=...%s)", token[-6:])
+
+
+async def restore_persisted_bot(app_state) -> None:
+    """
+    On application startup, re-start Telegram polling for every user that
+    has a configured bot token.  Called from the FastAPI lifespan handler.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(User).where(
+                    User.telegram_bot_token != "",
+                    User.telegram_chat_id != "",
+                )
+            )
+            users = result.scalars().all()
+
+        for user in users:
+            if user.telegram_bot_token:
+                try:
+                    result = await start_bot(user.telegram_bot_token, owner_user_id=user.id)
+                    logger.info(
+                        "Restored bot for user %s: %s", user.username, result
+                    )
+                except Exception:
+                    logger.exception("Failed to restore bot for user %s", user.username)
+    except Exception:
+        logger.exception("restore_persisted_bot failed")
