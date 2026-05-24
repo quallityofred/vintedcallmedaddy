@@ -149,11 +149,14 @@ class ScraperSession(Base):
 class HiddenSeller(Base):
     __tablename__ = "hidden_sellers"
     __table_args__ = (
-        Index("ix_hidden_sellers_seller_id", "seller_id"),
+        Index("ix_hidden_sellers_user_seller", "user_id", "seller_id"),
+        # per-user uniqueness
+        UniqueConstraint("user_id", "seller_id", name="uq_hidden_sellers_user_seller"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    seller_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    seller_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     hidden_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 

@@ -67,8 +67,24 @@ async def lifespan(app: FastAPI):
         raise
 
     # 2. VintedClient
-    from app.scraper.client import VintedClient
-    scraper_client = VintedClient()
+    from app.scraper.client import VintedClient, CloudflareFallback
+    from app.scraper.rate_limiter import TokenBucketLimiter
+
+    rate_limiter = TokenBucketLimiter(
+        rate=float(settings.rate_limit_per_minute),
+        per=60.0,
+    )
+    cf_fallback = (
+        CloudflareFallback(
+            worker_url=settings.cf_worker_url,
+            block_threshold=settings.cf_worker_block_threshold,
+            recovery_minutes=settings.cf_worker_recovery_minutes,
+        )
+        if settings.cf_worker_url
+        else None
+    )
+
+    scraper_client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
     app.state.scraper_client = scraper_client
     logger.info("Scraper client created")
 
@@ -141,11 +157,13 @@ def create_app() -> FastAPI:
     )
 
     # ── Middleware ────────────────────────────────────────────────────────
+    origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()] or ["*"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=origins,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
+        allow_credentials=True,
     )
 
     # ── Static files ──────────────────────────────────────────────────────

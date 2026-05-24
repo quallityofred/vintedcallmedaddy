@@ -29,17 +29,27 @@ def _ensure_engine_initialized() -> None:
         data_dir = settings.get_sqlite_data_dir()
         if data_dir is not None:
             data_dir.mkdir(parents=True, exist_ok=True)
+    if settings.is_sqlite():
+        from sqlalchemy.pool import StaticPool
 
-    engine = create_async_engine(
-        settings.database_url_validated,
-        echo=False,
-        future=True,
-        pool_size=20,
-        max_overflow=10,
-        pool_timeout=30,
-        pool_pre_ping=True,
-        connect_args={"statement_cache_size": 0},
-    )
+        engine = create_async_engine(
+            settings.database_url_validated,
+            echo=False,
+            future=True,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+    else:
+        engine = create_async_engine(
+            settings.database_url_validated,
+            echo=False,
+            future=True,
+            pool_size=20,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_pre_ping=True,
+            connect_args={"statement_cache_size": 0},
+        )
     AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 

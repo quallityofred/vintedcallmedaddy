@@ -101,10 +101,12 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 			params = json.loads(monitor.params_json)
 			domains = json.loads(monitor.domains_json)
 			user_id = monitor.user_id
-			is_cold_start = monitor.last_check_at is None or monitor.items_found_count == 0
+			is_cold_start = monitor.last_check_at is None
 			original_interval = params.get("_original_interval", monitor.interval_sec)
 
-			hidden_result = await db.execute(select(HiddenSeller.seller_id))
+			hidden_result = await db.execute(
+				select(HiddenSeller.seller_id).where(HiddenSeller.user_id == user_id)
+			)
 			hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
 
 		items = await client.search_all_domains(params, domains)
@@ -126,7 +128,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 
 			filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
 			new_items_to_notify: list[VintedItem] = []
-			is_pg = db.bind.dialect.name == "postgresql"
+			is_pg = not settings.is_sqlite()
 
 			for item in filtered_items:
 				if is_pg:
@@ -219,7 +221,7 @@ async def process_pending_notifications() -> None:
 				.limit(50)
 			)
 
-			if db.bind.dialect.name == "postgresql":
+			if not settings.is_sqlite():
 				query = query.with_for_update(skip_locked=True)
 
 			result = await db.execute(query)
@@ -255,7 +257,7 @@ async def process_pending_notifications() -> None:
 							bot_to_use, _ = get_or_create_bot(user.telegram_bot_token)
 							chat_id_to_use = int(user.telegram_chat_id)
 
-				if bot_to_use and chat_id_to_use:
+				if bot_to_use and chat_id_to_use is not None:
 					try:
 						await send_item_notification(bot_to_use, chat_id_to_use, item)
 						fi.notified = True

@@ -127,6 +127,9 @@ class VintedClient:
         async with self._lock:
             if self._session_ready.get(domain, False):
                 return
+            # Mark as ready optimistically to prevent concurrent warmups
+            self._session_ready[domain] = True
+
         try:
             await asyncio.sleep(random.uniform(WARMUP_DELAY_MIN, WARMUP_DELAY_MAX))
             headers = {
@@ -140,12 +143,14 @@ class VintedClient:
                 timeout=30.0,
             )
             if response.status_code == 200:
-                async with self._lock:
-                    self._session_ready[domain] = True
                 logger.info("Session warmed up for domain=%s", domain)
             else:
+                async with self._lock:
+                    self._session_ready[domain] = False
                 logger.warning("Warmup returned status=%d for domain=%s", response.status_code, domain)
         except Exception:
+            async with self._lock:
+                self._session_ready[domain] = False
             logger.exception("Warmup error for domain=%s", domain)
 
     async def _search_via_cf(self, domain: str, params: dict) -> list[VintedItem]:

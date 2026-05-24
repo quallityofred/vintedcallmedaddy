@@ -7,7 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     telegram_bot_token: str = ""
-    telegram_chat_id: int = 0
+    telegram_chat_id: int | None = None
+    allowed_origins: str = "*"
     check_interval_seconds: int = 120
     secret_key: str = ""  # MUST be set in .env for production!
     database_url: str = "sqlite+aiosqlite:///:memory:"
@@ -18,6 +19,8 @@ class Settings(BaseSettings):
 
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
 
         cloud_domains = ["supabase.co", "supabase.com", "neon.tech", "railway.app"]
         if any(cloud in url for cloud in cloud_domains):
