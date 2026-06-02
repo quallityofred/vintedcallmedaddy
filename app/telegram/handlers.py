@@ -7,19 +7,26 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import AsyncSessionLocal
+from app.database import get_session_factory
 from app.models import AppSettings, FoundItem, HiddenSeller, Monitor, User
 from app.telegram.settings_store import update_user_chat_id_by_bot_token
 
 logger = logging.getLogger(__name__)
 router = Router()
+AsyncSessionLocal = None
+
+
+def _new_session() -> AsyncSession:
+    session_factory = AsyncSessionLocal or get_session_factory()
+    return session_factory()
 
 
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     chat_id = str(message.chat.id)
-    async with AsyncSessionLocal() as db:
+    async with _new_session() as db:
         success = await update_user_chat_id_by_bot_token(db, message.bot.token, chat_id)
         await db.commit()
     if success:
@@ -30,7 +37,7 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
-    async with AsyncSessionLocal() as db:
+    async with _new_session() as db:
         # Find user by token
         user_result = await db.execute(select(User).where(User.telegram_bot_token == message.bot.token))
         user = user_result.scalar_one_or_none()
@@ -63,7 +70,7 @@ async def cmd_status(message: Message) -> None:
 
 @router.message(Command("pause"))
 async def cmd_pause(message: Message) -> None:
-    async with AsyncSessionLocal() as db:
+    async with _new_session() as db:
         user_result = await db.execute(select(User).where(User.telegram_bot_token == message.bot.token))
         user = user_result.scalar_one_or_none()
         if not user: return
@@ -79,7 +86,7 @@ async def cmd_pause(message: Message) -> None:
 
 @router.message(Command("resume"))
 async def cmd_resume(message: Message) -> None:
-    async with AsyncSessionLocal() as db:
+    async with _new_session() as db:
         user_result = await db.execute(select(User).where(User.telegram_bot_token == message.bot.token))
         user = user_result.scalar_one_or_none()
         if not user: return
@@ -94,7 +101,7 @@ async def cmd_resume(message: Message) -> None:
 
 @router.message(Command("list"))
 async def cmd_list(message: Message) -> None:
-    async with AsyncSessionLocal() as db:
+    async with _new_session() as db:
         user_result = await db.execute(select(User).where(User.telegram_bot_token == message.bot.token))
         user = user_result.scalar_one_or_none()
         if not user: return
@@ -124,7 +131,7 @@ async def hide_seller_handler(callback: CallbackQuery) -> None:
         await callback.answer("Ошибка данных.")
         return
 
-    async with AsyncSessionLocal() as db:
+    async with _new_session() as db:
         user_result = await db.execute(
             select(User).where(User.telegram_bot_token == callback.bot.token)
         )

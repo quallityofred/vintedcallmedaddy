@@ -2,14 +2,15 @@
 import asyncio
 import logging
 from sqlalchemy import select
-from app.database import AsyncSessionLocal, engine
+from app.database import get_engine, get_session_factory
 from app.models import User, Base
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def setup_admin():
-    async with AsyncSessionLocal() as db:
+    session_factory = get_session_factory()
+    async with session_factory() as db:
         # 1. Add missing columns explicitly for migration (SQLAlchemy create_all doesn't do this)
         from sqlalchemy import text
         try:
@@ -22,7 +23,7 @@ async def setup_admin():
             logger.warning(f"Note: Some columns might already exist or table doesn't exist yet: {e}")
 
         # 2. Ensure tables exist (including the new invite_codes table)
-        async with engine.begin() as conn:
+        async with get_engine().begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             
         username = "qwe"

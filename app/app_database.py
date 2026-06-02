@@ -3,7 +3,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import inspect, text
 
 from app.config import get_settings
@@ -51,6 +51,22 @@ def _ensure_engine_initialized() -> None:
             connect_args={"statement_cache_size": 0},
         )
     AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the current async session factory, initializing it if needed."""
+    _ensure_engine_initialized()
+    if AsyncSessionLocal is None:
+        raise RuntimeError("Database session factory is not initialized")
+    return AsyncSessionLocal
+
+
+def get_engine() -> AsyncEngine:
+    """Return the current async engine, initializing it if needed."""
+    _ensure_engine_initialized()
+    if engine is None:
+        raise RuntimeError("Database engine is not initialized")
+    return engine
 
 
 def _get_effective_engine():
@@ -155,8 +171,8 @@ async def validate_and_migrate_db(conn) -> None:
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency: yields an async DB session."""
-    _ensure_engine_initialized()
-    async with AsyncSessionLocal() as session:
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         try:
             yield session
         finally:

@@ -11,9 +11,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import AsyncSessionLocal
+from app.database import get_session_factory
 from app.models import FoundItem, HiddenSeller, Monitor, SeenItem, User
 from app.scraper.client import VintedClient
 from app.scraper.parser import VintedItem
@@ -30,6 +31,12 @@ INTERVAL_STEP_DOWN_FAST = 0.7
 
 _telegram_bot: Bot | None = None
 _notification_lock = asyncio.Lock()
+AsyncSessionLocal = None
+
+
+def _new_session() -> AsyncSession:
+	session_factory = AsyncSessionLocal or get_session_factory()
+	return session_factory()
 
 
 def set_telegram_bot(bot: Bot) -> None:
@@ -92,7 +99,7 @@ async def _update_monitor_interval(
 async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 	"""Main task: check a single monitor for new Vinted listings."""
 	try:
-		async with AsyncSessionLocal() as db:
+		async with _new_session() as db:
 			result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
 			monitor = result.scalar_one_or_none()
 			if monitor is None or not monitor.is_active:
@@ -112,7 +119,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 		items = await client.search_all_domains(params, domains)
 
 		if not items:
-			async with AsyncSessionLocal() as db:
+			async with _new_session() as db:
 				result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
 				monitor = result.scalar_one_or_none()
 				if monitor and monitor.is_active:
@@ -120,7 +127,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 					await db.commit()
 			return
 
-		async with AsyncSessionLocal() as db:
+		async with _new_session() as db:
 			result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
 			monitor = result.scalar_one_or_none()
 			if monitor is None or not monitor.is_active:
@@ -213,7 +220,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 async def process_pending_notifications() -> None:
 	"""Send pending Telegram notifications for newly found items."""
 	async with _notification_lock:
-		async with AsyncSessionLocal() as db:
+		async with _new_session() as db:
 			query = (
 				select(FoundItem)
 				.where(FoundItem.notified == False)  # noqa: E712
@@ -249,7 +256,7 @@ async def process_pending_notifications() -> None:
 					bot_to_use = _telegram_bot
 					chat_id_to_use = settings.telegram_chat_id
 
-					async with AsyncSessionLocal() as db2:
+					async with _new_session() as db2:
 						monitor = await db2.get(Monitor, fi.monitor_id)
 						if monitor and monitor.user_id:
 							user = await db2.get(User, monitor.user_id)
@@ -277,7 +284,7 @@ class MonitorScheduler:
 
 	async def start(self) -> None:
 		"""Load active monitors from DB and start all their jobs."""
-		async with AsyncSessionLocal() as db:
+		async with _new_session() as db:
 			result = await db.execute(select(Monitor).where(Monitor.is_active == True))  # noqa: E712
 			monitors = result.scalars().all()
 

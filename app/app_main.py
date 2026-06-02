@@ -259,14 +259,15 @@ async def clean_startup_reset() -> None:
     * Resets ``last_check_at = None`` and ``items_found_count = 0`` on every
       monitor so ``check_monitor`` knows it is a cold start.
 
-    Uses ``app.database.AsyncSessionLocal`` via the module reference so that
-    test-time patches of that attribute are correctly respected.
+    Uses ``app.database.AsyncSessionLocal`` when tests patch it, otherwise
+    resolves the initialized session factory dynamically.
     """
     import app.database as _db_module
     from app.models import FoundItem, Monitor, SeenItem
     from sqlalchemy import delete, update
 
-    async with _db_module.AsyncSessionLocal() as db:
+    session_factory = _db_module.AsyncSessionLocal or _db_module.get_session_factory()
+    async with session_factory() as db:
         await db.execute(delete(FoundItem))
         await db.execute(delete(SeenItem))
         await db.execute(update(Monitor).values(last_check_at=None, items_found_count=0))

@@ -25,7 +25,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import AsyncSessionLocal
+from app.database import get_session_factory
 from app.models import User, UserSession
 
 if TYPE_CHECKING:
@@ -43,7 +43,8 @@ SESSION_COOKIE = "session_token"
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Yield an async SQLAlchemy session."""
-    async with AsyncSessionLocal() as session:
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         try:
             yield session
         finally:
@@ -210,7 +211,8 @@ async def restore_persisted_bot(app_state) -> None:
     has a configured bot token.  Called from the FastAPI lifespan handler.
     """
     try:
-        async with AsyncSessionLocal() as db:
+        session_factory = get_session_factory()
+        async with session_factory() as db:
             result = await db.execute(
                 select(User).where(
                     User.telegram_bot_token != "",
