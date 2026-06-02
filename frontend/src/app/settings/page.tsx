@@ -83,6 +83,18 @@ export default function SettingsPage() {
           </AlertDescription>
         </Alert>
       </AnimatedSection>
+
+      <AnimatedSection delay={0.12} className="grid gap-4 md:grid-cols-3">
+        {[
+          "Token values should stay write-only in the new API.",
+          "Proxy settings should continue to refresh scraper sessions server-side.",
+          "Bot controls must keep CSRF headers and user ownership checks.",
+        ].map((item) => (
+          <div key={item} className="glass-panel rounded-2xl p-4 text-sm leading-6 text-muted-foreground">
+            {item}
+          </div>
+        ))}
+      </AnimatedSection>
     </PageShell>
   );
 }

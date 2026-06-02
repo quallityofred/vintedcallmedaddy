@@ -2,11 +2,10 @@ import { Activity, Bell, Clock, Radar } from "lucide-react";
 
 import { AnimatedSection } from "@/components/animated-section";
 import { DashboardCard } from "@/components/dashboard-card";
+import { MonitorPreview } from "@/components/monitor-preview";
 import { PageShell } from "@/components/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const cards = [
   { title: "Active monitors", value: "API pending", icon: Radar },
@@ -29,39 +28,31 @@ export default function DashboardPage() {
       </AnimatedSection>
 
       <AnimatedSection delay={0.08}>
+        <MonitorPreview />
+      </AnimatedSection>
+
+      <AnimatedSection delay={0.12}>
         <Card className="glass-panel">
           <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle>Monitor table preview</CardTitle>
+              <CardTitle>API readiness checklist</CardTitle>
               <CardDescription>
-                The first real dashboard pass will hydrate this table from `/api/v1/monitors`.
+                Placeholder guidance for the next backend API phase.
               </CardDescription>
             </div>
-            <Badge variant="outline" className="w-fit">
-              Read-only shell
+            <Badge variant="outline" className="w-fit border-emerald-300/20 text-emerald-200">
+              No backend calls yet
             </Badge>
           </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Domains</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Last check</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {[0, 1, 2].map((row) => (
-                  <TableRow key={row}>
-                    <TableCell><Skeleton className="h-4 w-32" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-20" /></TableCell>
-                    <TableCell className="flex justify-end"><Skeleton className="h-4 w-24" /></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          <CardContent className="grid gap-3 md:grid-cols-3">
+            {["/api/v1/auth/me", "/api/v1/auth/csrf", "/api/v1/monitors"].map((endpoint) => (
+              <div key={endpoint} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <p className="font-mono text-sm text-emerald-200">{endpoint}</p>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  Contract pending. Existing Jinja route remains the source of truth.
+                </p>
+              </div>
+            ))}
           </CardContent>
         </Card>
       </AnimatedSection>

@@ -1,8 +1,10 @@
 import Link from "next/link";
-import { ArrowRight, Bell, Radar, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, Bell, Database, Gauge, Radar, ShieldCheck, Sparkles } from "lucide-react";
 
 import { AnimatedSection } from "@/components/animated-section";
 import { DashboardCard } from "@/components/dashboard-card";
+import { MonitorPreview } from "@/components/monitor-preview";
+import { SectionHeading } from "@/components/section-heading";
 import { SplineHero } from "@/components/spline-hero";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +25,24 @@ const features = [
     title: "Stay isolated",
     description: "Build the new UI around user-scoped API contracts and safe defaults.",
     icon: ShieldCheck,
+  },
+];
+
+const principles = [
+  {
+    title: "Backend-owned runtime",
+    value: "FastAPI continues to own auth, sessions, scheduler, scraper, and Telegram bots.",
+    icon: Database,
+  },
+  {
+    title: "Safe migration",
+    value: "New routes stay visual until versioned API contracts exist.",
+    icon: ShieldCheck,
+  },
+  {
+    title: "Operator density",
+    value: "Dashboards stay compact, scannable, and responsive on small screens.",
+    icon: Gauge,
   },
 ];
 
@@ -75,7 +95,22 @@ export default function Home() {
         </div>
       </section>
       <section className="mx-auto max-w-7xl px-6 pb-16 lg:px-10">
-        <AnimatedSection className="glass-panel rounded-3xl p-6 sm:p-8">
+        <AnimatedSection className="mb-8">
+          <SectionHeading
+            eyebrow="Product concept"
+            title="A command center for search monitoring, deduplication, and notifications."
+            description="This design starts with product-specific screens instead of generic marketing sections. Demo values are labeled and will be replaced by FastAPI JSON endpoints in later phases."
+          />
+        </AnimatedSection>
+        <AnimatedSection delay={0.08} className="mb-8">
+          <MonitorPreview />
+        </AnimatedSection>
+        <AnimatedSection delay={0.12} className="grid gap-4 md:grid-cols-3">
+          {principles.map((principle) => (
+            <DashboardCard key={principle.title} {...principle} compact />
+          ))}
+        </AnimatedSection>
+        <AnimatedSection delay={0.16} className="glass-panel mt-8 rounded-3xl p-6 sm:p-8">
           <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
             <div>
               <div className="mb-3 flex items-center gap-2 text-sm text-emerald-200">
