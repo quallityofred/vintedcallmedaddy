@@ -60,7 +60,7 @@ async def test_route_table_has_no_duplicate_registrations():
 
 @pytest.mark.asyncio
 async def test_settings_page_renders_and_persists_scraper_settings(db_session):
-    user, token = await _create_user_session(db_session, "settings_user")
+    user, token = await _create_user_session(db_session, "settings_user", is_admin=True)
     _override_db(db_session)
 
     transport = ASGITransport(app=app)
@@ -79,15 +79,48 @@ async def test_settings_page_renders_and_persists_scraper_settings(db_session):
                 "proxies": "http://proxy.example:8080",
                 "sessions_per_domain": "4",
                 "rate_limit_per_minute": "9",
+                "cf_worker_url": "https://worker.example.workers.dev",
+                "cf_worker_block_threshold": "3",
+                "cf_worker_recovery_minutes": "15",
+                "check_interval_seconds": "180",
+                "offpeak_interval_multiplier": "2.2",
+                "night_interval_multiplier": "4.5",
+                "peak_start_hour": "7",
+                "peak_end_hour": "22",
             },
         )
         assert response.status_code == 200
         assert "http://proxy.example:8080" in response.text
+        assert "token-one" not in response.text
+        assert "123\" name=\"telegram_chat_id" not in response.text
 
     result = await db_session.execute(select(AppSettings).where(AppSettings.key == "rate_limit_per_minute"))
     assert result.scalar_one().value == "9"
+    result = await db_session.execute(select(AppSettings).where(AppSettings.key == "cf_worker_url"))
+    assert result.scalar_one().value == "https://worker.example.workers.dev"
     await db_session.refresh(user)
     assert user.telegram_bot_token == "token-one"
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_settings_page_masks_saved_telegram_credentials(db_session):
+    user, token = await _create_user_session(db_session, "masked_settings_user")
+    user.telegram_bot_token = "123456:SECRET-TOKEN"
+    user.telegram_chat_id = "987654321"
+    await db_session.commit()
+    _override_db(db_session)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("session_token", token)
+        response = await client.get("/settings")
+        assert response.status_code == 200
+        assert "123456:SECRET-TOKEN" not in response.text
+        assert "987654321" not in response.text
+        assert "******OKEN" in response.text
+        assert "******4321" in response.text
+        assert "Global scraper and Cloudflare Worker settings are managed by admins." in response.text
     app.dependency_overrides.clear()
 
 

@@ -62,6 +62,9 @@ async def lifespan(app: FastAPI):
     try:
         await init_db()
         logger.info("Database ready")
+        from app.runtime_settings import apply_db_runtime_settings
+        await apply_db_runtime_settings()
+        logger.info("Runtime settings loaded")
     except Exception:
         logger.exception("Database init failed")
         raise
@@ -157,11 +160,14 @@ def create_app() -> FastAPI:
     )
 
     # ── Middleware ────────────────────────────────────────────────────────
-    origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()] or ["*"]
+    origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
+    if settings.frontend_url:
+        origins.append(settings.frontend_url.strip())
+    origins = list(dict.fromkeys(origins)) or ["*"]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
         allow_credentials=True,
     )

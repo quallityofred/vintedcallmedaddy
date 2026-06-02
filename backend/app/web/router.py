@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
@@ -39,7 +38,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logger import log_manager
-from app.models import AppSettings, FoundItem, Monitor, User
+from app.models import FoundItem, Monitor, User
+from app.runtime_settings import (
+	apply_global_settings_to_runtime,
+	load_global_settings,
+	mask_secret,
+	save_global_settings,
+)
 from app.scraper.domains import VINTED_DOMAINS
 from app.scraper.url_parser import extract_domains_from_url, parse_vinted_url
 from app.config import get_settings
@@ -72,73 +77,6 @@ def _fmt_interval(seconds: int) -> str:
 	if seconds < 60:
 		return f"{seconds}s"
 	return f"{seconds // 60}m{seconds % 60:02d}s"
-
-
-async def _get_db_setting(db: AsyncSession, key: str, default: str = "") -> str:
-	result = await db.execute(select(AppSettings).where(AppSettings.key == key))
-	row = result.scalar_one_or_none()
-	return row.value if row else default
-
-
-async def _set_db_setting(db: AsyncSession, key: str, value: str) -> None:
-	result = await db.execute(select(AppSettings).where(AppSettings.key == key))
-	row = result.scalar_one_or_none()
-	if row:
-		row.value = value
-	else:
-		db.add(AppSettings(key=key, value=value))
-
-
-async def _load_scraper_settings(db: AsyncSession) -> dict[str, str]:
-	return {
-		"proxies": await _get_db_setting(db, "proxies", settings.proxies),
-		"sessions_per_domain": await _get_db_setting(
-			db, "sessions_per_domain", str(settings.sessions_per_domain)
-		),
-		"rate_limit_per_minute": await _get_db_setting(
-			db, "rate_limit_per_minute", str(settings.rate_limit_per_minute)
-		),
-	}
-
-
-async def _save_scraper_settings(
-	db: AsyncSession,
-	proxies: str,
-	sessions_per_domain: int,
-	rate_limit_per_minute: int,
-) -> dict[str, str]:
-	cleaned = {
-		"proxies": proxies.strip(),
-		"sessions_per_domain": str(max(1, min(sessions_per_domain, 10))),
-		"rate_limit_per_minute": str(max(1, min(rate_limit_per_minute, 30))),
-	}
-	for key, value in cleaned.items():
-		await _set_db_setting(db, key, value)
-	return cleaned
-
-
-async def _apply_scraper_settings(request: Request, saved: dict[str, str]) -> None:
-	settings.proxies = saved["proxies"]
-	settings.sessions_per_domain = int(saved["sessions_per_domain"])
-	settings.rate_limit_per_minute = int(saved["rate_limit_per_minute"])
-
-	client = get_scraper_client(request)
-	if client:
-		client.rate_limiter.rate = float(settings.rate_limit_per_minute)
-		try:
-			await client.close()
-		except Exception:
-			logger.exception("Failed to refresh scraper sessions after settings update")
-
-	try:
-		import app.scraper.client as scraper_client_module
-		scraper_client_module.settings.proxies = settings.proxies
-		scraper_client_module.settings.sessions_per_domain = settings.sessions_per_domain
-		scraper_client_module.settings.rate_limit_per_minute = settings.rate_limit_per_minute
-		scraper_client_module.MAX_CONCURRENT_DOMAINS = settings.sessions_per_domain
-		scraper_client_module._domain_semaphore = asyncio.Semaphore(settings.sessions_per_domain)
-	except Exception:
-		logger.exception("Failed to apply scraper concurrency settings")
 
 
 # ---------------------------------------------------------------------------
@@ -624,7 +562,7 @@ async def settings_page(
 	user: User = Depends(require_user),
 ):
 	bot_running = web_deps.is_bot_running(user.telegram_bot_token) if user.telegram_bot_token else False
-	scraper_settings = await _load_scraper_settings(db)
+	global_settings = await load_global_settings(db)
 	return _templates(request).TemplateResponse(
 		request,
 		"settings.html",
@@ -633,7 +571,13 @@ async def settings_page(
 			"user": user,
 			"bot_running": bot_running,
 			"saved": False,
-			"settings": scraper_settings,
+			"settings": global_settings,
+			"telegram_token_masked": mask_secret(user.telegram_bot_token),
+			"telegram_chat_id_masked": mask_secret(user.telegram_chat_id),
+			"telegram_token_configured": bool(user.telegram_bot_token),
+			"telegram_chat_id_configured": bool(user.telegram_chat_id),
+			"can_edit_global_settings": user.is_admin,
+			"settings_error": None,
 		},
 	)
 
@@ -647,22 +591,48 @@ async def settings_save(
 	proxies: str = Form(default=""),
 	sessions_per_domain: int = Form(default=3),
 	rate_limit_per_minute: int = Form(default=8),
+	cf_worker_url: str = Form(default=""),
+	cf_worker_block_threshold: int = Form(default=2),
+	cf_worker_recovery_minutes: int = Form(default=10),
+	check_interval_seconds: int = Form(default=120),
+	offpeak_interval_multiplier: float = Form(default=2.5),
+	night_interval_multiplier: float = Form(default=5.0),
+	peak_start_hour: int = Form(default=8),
+	peak_end_hour: int = Form(default=23),
 ):
 	old_token = user.telegram_bot_token
 
-	if telegram_token:
+	if telegram_token.strip():
 		user.telegram_bot_token = telegram_token.strip()
-	if telegram_chat_id:
+	if telegram_chat_id.strip():
 		user.telegram_chat_id = telegram_chat_id.strip()
-	scraper_settings = await _save_scraper_settings(
-		db,
-		proxies,
-		sessions_per_domain,
-		rate_limit_per_minute,
-	)
+
+	settings_error = None
+	global_settings = await load_global_settings(db)
+	if user.is_admin:
+		try:
+			global_settings = await save_global_settings(
+				db,
+				{
+					"proxies": proxies,
+					"sessions_per_domain": sessions_per_domain,
+					"rate_limit_per_minute": rate_limit_per_minute,
+					"cf_worker_url": cf_worker_url,
+					"cf_worker_block_threshold": cf_worker_block_threshold,
+					"cf_worker_recovery_minutes": cf_worker_recovery_minutes,
+					"check_interval_seconds": check_interval_seconds,
+					"offpeak_interval_multiplier": offpeak_interval_multiplier,
+					"night_interval_multiplier": night_interval_multiplier,
+					"peak_start_hour": peak_start_hour,
+					"peak_end_hour": peak_end_hour,
+				},
+			)
+		except ValueError as exc:
+			settings_error = str(exc)
 
 	await db.commit()
-	await _apply_scraper_settings(request, scraper_settings)
+	if user.is_admin and settings_error is None:
+		await apply_global_settings_to_runtime(global_settings, get_scraper_client(request))
 
 	# Restart bot if token changed
 	if old_token and old_token != user.telegram_bot_token:
@@ -676,9 +646,16 @@ async def settings_save(
 			"request": request,
 			"user": user,
 			"bot_running": bot_running,
-			"saved": True,
-			"settings": scraper_settings,
+			"saved": settings_error is None,
+			"settings": global_settings,
+			"telegram_token_masked": mask_secret(user.telegram_bot_token),
+			"telegram_chat_id_masked": mask_secret(user.telegram_chat_id),
+			"telegram_token_configured": bool(user.telegram_bot_token),
+			"telegram_chat_id_configured": bool(user.telegram_chat_id),
+			"can_edit_global_settings": user.is_admin,
+			"settings_error": settings_error,
 		},
+		status_code=422 if settings_error else 200,
 	)
 
 # ---------------------------------------------------------------------------
@@ -830,13 +807,17 @@ async def settings_start_bot(
 	telegram_chat_id: str = Form(default=""),
 ):
 	"""Save bot settings and start polling. Used by JS and tests."""
-	if not telegram_token.strip():
+	submitted_token = telegram_token.strip()
+	submitted_chat_id = telegram_chat_id.strip()
+	effective_token = submitted_token or user.telegram_bot_token
+	if not effective_token:
 		return JSONResponse({"ok": False, "message": "РўРѕРєРµРЅ РЅРµ СѓРєР°Р·Р°РЅ"}, status_code=400)
 
 	old_token = user.telegram_bot_token
-	user.telegram_bot_token = telegram_token.strip()
-	if telegram_chat_id.strip():
-		user.telegram_chat_id = telegram_chat_id.strip()
+	if submitted_token:
+		user.telegram_bot_token = submitted_token
+	if submitted_chat_id:
+		user.telegram_chat_id = submitted_chat_id
 	await db.commit()
 
 	if old_token and old_token != user.telegram_bot_token:

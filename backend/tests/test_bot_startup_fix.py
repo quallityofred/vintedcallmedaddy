@@ -103,7 +103,7 @@ async def test_start_bot_duplicate_start_prevention(db_session):
         with patch("app.web.router.web_deps.is_bot_running", return_value=True):
             response = await ac.post(
                 "/settings/start-bot",
-                data={"telegram_token": "token123", "telegram_chat_id": "chat123"},
+                data={"telegram_token": "", "telegram_chat_id": ""},
                 headers={"X-CSRF-Token": csrf_token_for_session(token)},
             )
             assert response.status_code == 200

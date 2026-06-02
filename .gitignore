@@ -1,25 +1,38 @@
-# Ignore python bytecode and cache
-__pycache__/
-*.pyc
-
 # Environment files
 .env
-.venv
-venv/
+.env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
 
-# Database files
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+
+# Local data
 *.db
 data/
-
-# IDEs and Editors
-.idea/
-.vscode/
-.DS_Store
+backend/data/
 
 # Logs
 *.log
 
-# Build/Dist
-*.egg-info/
-dist/
-build/
+# IDEs and OS files
+.idea/
+.vscode/
+.DS_Store

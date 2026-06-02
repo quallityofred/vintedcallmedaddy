@@ -8,6 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: int | None = None
+    environment: str = "development"
+    frontend_url: str = ""
     allowed_origins: str = "*"
     check_interval_seconds: int = 120
     secret_key: str = ""  # MUST be set in .env for production!
@@ -72,7 +74,11 @@ def get_settings() -> Settings:
 
     if not settings.secret_key or settings.secret_key == "change-me-in-production":
         import os
-        if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER"):
+        if (
+            settings.environment.lower() in {"production", "prod"}
+            or os.getenv("RAILWAY_ENVIRONMENT")
+            or os.getenv("RENDER")
+        ):
             raise ValueError(
                 "SECRET_KEY must be set in .env file for production deployment!\n"
                 "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
