@@ -175,6 +175,8 @@ def create_app() -> FastAPI:
     templates_dir = os.path.join(os.path.dirname(__file__), "templates")
     templates = Jinja2Templates(directory=templates_dir)
     templates.env.filters["from_json"] = _from_json_filter
+    from app.web.csrf import csrf_token_for_request
+    templates.env.globals["csrf_token"] = csrf_token_for_request
     app.state.templates = templates
 
     # ── Routers ───────────────────────────────────────────────────────────

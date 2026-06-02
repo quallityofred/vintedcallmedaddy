@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     allowed_origins: str = "*"
     check_interval_seconds: int = 120
     secret_key: str = ""  # MUST be set in .env for production!
+    session_cookie_secure: bool = False
     database_url: str = "sqlite+aiosqlite:///:memory:"
 
     @property

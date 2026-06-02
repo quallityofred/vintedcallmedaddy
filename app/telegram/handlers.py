@@ -6,6 +6,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.database import AsyncSessionLocal
 from app.models import AppSettings, FoundItem, HiddenSeller, Monitor, User
@@ -124,10 +125,27 @@ async def hide_seller_handler(callback: CallbackQuery) -> None:
         return
 
     async with AsyncSessionLocal() as db:
-        existing = await db.get(HiddenSeller, seller_id)
+        user_result = await db.execute(
+            select(User).where(User.telegram_bot_token == callback.bot.token)
+        )
+        user = user_result.scalar_one_or_none()
+        if user is None:
+            await callback.answer("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.")
+            return
+
+        existing_result = await db.execute(
+            select(HiddenSeller).where(
+                HiddenSeller.user_id == user.id,
+                HiddenSeller.seller_id == seller_id,
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
         if existing is None:
-            hidden = HiddenSeller(seller_id=seller_id)
-            db.add(hidden)
-            await db.commit()
+            db.add(HiddenSeller(user_id=user.id, seller_id=seller_id))
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
     await callback.answer("Продавец скрыт.")
-    await callback.message.edit_reply_markup(reply_markup=None)
+    if callback.message:
+        await callback.message.edit_reply_markup(reply_markup=None)

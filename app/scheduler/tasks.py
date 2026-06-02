@@ -245,26 +245,26 @@ async def process_pending_notifications() -> None:
 					seller_id=fi.seller_id,
 				)
 
-				bot_to_use = _telegram_bot
-				chat_id_to_use = settings.telegram_chat_id
+				try:
+					bot_to_use = _telegram_bot
+					chat_id_to_use = settings.telegram_chat_id
 
-				async with AsyncSessionLocal() as db2:
-					monitor = await db2.get(Monitor, fi.monitor_id)
-					if monitor and monitor.user_id:
-						user = await db2.get(User, monitor.user_id)
-						if user and user.telegram_bot_token and user.telegram_chat_id:
-							from app.telegram.bot import get_or_create_bot
-							bot_to_use, _ = get_or_create_bot(user.telegram_bot_token)
-							chat_id_to_use = int(user.telegram_chat_id)
+					async with AsyncSessionLocal() as db2:
+						monitor = await db2.get(Monitor, fi.monitor_id)
+						if monitor and monitor.user_id:
+							user = await db2.get(User, monitor.user_id)
+							if user and user.telegram_bot_token and user.telegram_chat_id:
+								from app.telegram.bot import get_or_create_bot
+								bot_to_use, _ = get_or_create_bot(user.telegram_bot_token)
+								chat_id_to_use = int(user.telegram_chat_id)
 
-				if bot_to_use and chat_id_to_use is not None:
-					try:
+					if bot_to_use and chat_id_to_use is not None:
 						await send_item_notification(bot_to_use, chat_id_to_use, item)
 						fi.notified = True
 						await db.commit()
-					except Exception:
-						logger.exception("Notification failed for item %s", fi.vinted_item_id)
-						break
+				except Exception:
+					logger.exception("Notification failed for item %s", fi.vinted_item_id)
+					break
 
 
 class MonitorScheduler:

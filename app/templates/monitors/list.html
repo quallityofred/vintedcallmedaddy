@@ -74,6 +74,7 @@
                 </button>
             </div>
             <form method="post" action="/monitors/import" enctype="multipart/form-data" class="p-6 space-y-4">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token(request) }}">
                 <div>
                     <label class="text-xs font-medium text-muted mb-2 block uppercase tracking-wider">JSON или список URL</label>
                     <textarea name="import_data" rows="8" placeholder='[{"name":"Nike","url":"https://...","domains":["vinted.fr"]}]&#10;&#10;или построчно:&#10;https://www.vinted.fr/catalog?brand_ids[]=53'
@@ -217,6 +218,7 @@
                                 <form method="post" action="/monitors/{{ monitor.id }}/delete"
                                     data-monitor-name="{{ monitor.name }}" onsubmit="return confirmDelete(this)"
                                     class="inline">
+                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token(request) }}">
                                     <button type="submit"
                                         class="p-2 rounded-lg hover:bg-red-500/10 text-muted hover:text-red-500 transition-all"
                                         title="Удалить">
@@ -358,7 +360,10 @@ async function downloadTxt() {
 // ── Manual trigger ─────────────────────────────────────────────────────────
 async function triggerMonitor(id) {
     try {
-        const res = await fetch(`/api/monitors/${id}/trigger`, { method: 'POST' });
+        const res = await fetch(`/api/monitors/${id}/trigger`, {
+            method: 'POST',
+            headers: {'X-CSRF-Token': '{{ csrf_token(request) }}'}
+        });
         const data = await res.json();
         showToast(data.message, data.ok ? 'success' : 'error');
     } catch (e) {

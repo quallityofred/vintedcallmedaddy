@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
@@ -53,20 +54,11 @@ from app.web.dependencies import (
 	start_bot,
 	stop_bot,
 )
+from app.web.csrf import require_csrf
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 router = APIRouter()
-
-# If the full implementation lives in `app.web.app_web_router`, include
-# its APIRouter so routes defined there (e.g. /settings/start-bot) are
-# available on the canonical `app.web.router` used by the app factory.
-try:
-	from app.web.app_web_router import router as _impl_router
-	router.include_router(_impl_router)
-except Exception:
-	pass
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,37 +74,6 @@ def _fmt_interval(seconds: int) -> str:
 	return f"{seconds // 60}m{seconds % 60:02d}s"
 
 
-# ---------------------------------------------------------------------------
-# Re-export / alias helpers
-# ---------------------------------------------------------------------------
-try:
-	from app.web.app_web_router import import_monitors as _impl_import_monitors
-except Exception:
-	_impl_import_monitors = None
-
-
-if _impl_import_monitors:
-	async def import_monitors(request, raw_text: str = "", db: AsyncSession = None, user: User = None, import_file=None):
-		"""Wrapper that delegates to `app.web.app_web_router.import_monitors`.
-
-		When tests patch `app.web.router.get_scheduler`, they patch the name
-		in this module. The implementation in `app_web_router` resolves the
-		`get_scheduler` name from its own globals, so we temporarily inject
-		this module's `get_scheduler` into the implementation's globals so
-		test patches take effect.
-		"""
-		orig = _impl_import_monitors.__globals__.get("get_scheduler")
-		_impl_import_monitors.__globals__["get_scheduler"] = get_scheduler
-		try:
-			return await _impl_import_monitors(request, raw_text, db, user, import_file)
-		finally:
-			if orig is None:
-				# restore to original (delete key) to avoid side-effects
-				_impl_import_monitors.__globals__.pop("get_scheduler", None)
-			else:
-				_impl_import_monitors.__globals__["get_scheduler"] = orig
-
-
 async def _get_db_setting(db: AsyncSession, key: str, default: str = "") -> str:
 	result = await db.execute(select(AppSettings).where(AppSettings.key == key))
 	row = result.scalar_one_or_none()
@@ -126,6 +87,58 @@ async def _set_db_setting(db: AsyncSession, key: str, value: str) -> None:
 		row.value = value
 	else:
 		db.add(AppSettings(key=key, value=value))
+
+
+async def _load_scraper_settings(db: AsyncSession) -> dict[str, str]:
+	return {
+		"proxies": await _get_db_setting(db, "proxies", settings.proxies),
+		"sessions_per_domain": await _get_db_setting(
+			db, "sessions_per_domain", str(settings.sessions_per_domain)
+		),
+		"rate_limit_per_minute": await _get_db_setting(
+			db, "rate_limit_per_minute", str(settings.rate_limit_per_minute)
+		),
+	}
+
+
+async def _save_scraper_settings(
+	db: AsyncSession,
+	proxies: str,
+	sessions_per_domain: int,
+	rate_limit_per_minute: int,
+) -> dict[str, str]:
+	cleaned = {
+		"proxies": proxies.strip(),
+		"sessions_per_domain": str(max(1, min(sessions_per_domain, 10))),
+		"rate_limit_per_minute": str(max(1, min(rate_limit_per_minute, 30))),
+	}
+	for key, value in cleaned.items():
+		await _set_db_setting(db, key, value)
+	return cleaned
+
+
+async def _apply_scraper_settings(request: Request, saved: dict[str, str]) -> None:
+	settings.proxies = saved["proxies"]
+	settings.sessions_per_domain = int(saved["sessions_per_domain"])
+	settings.rate_limit_per_minute = int(saved["rate_limit_per_minute"])
+
+	client = get_scraper_client(request)
+	if client:
+		client.rate_limiter.rate = float(settings.rate_limit_per_minute)
+		try:
+			await client.close()
+		except Exception:
+			logger.exception("Failed to refresh scraper sessions after settings update")
+
+	try:
+		import app.scraper.client as scraper_client_module
+		scraper_client_module.settings.proxies = settings.proxies
+		scraper_client_module.settings.sessions_per_domain = settings.sessions_per_domain
+		scraper_client_module.settings.rate_limit_per_minute = settings.rate_limit_per_minute
+		scraper_client_module.MAX_CONCURRENT_DOMAINS = settings.sessions_per_domain
+		scraper_client_module._domain_semaphore = asyncio.Semaphore(settings.sessions_per_domain)
+	except Exception:
+		logger.exception("Failed to apply scraper concurrency settings")
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +275,7 @@ async def monitor_new_form(
 	)
 
 
-@router.post("/monitors", response_class=HTMLResponse)
+@router.post("/monitors", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
 async def monitor_create(
 	request: Request,
 	db: AsyncSession = Depends(get_db),
@@ -358,7 +371,7 @@ async def monitor_edit_form(
 	)
 
 
-@router.post("/monitors/{monitor_id}/edit", response_class=HTMLResponse)
+@router.post("/monitors/{monitor_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
 async def monitor_update(
 	monitor_id: int,
 	request: Request,
@@ -413,7 +426,7 @@ async def monitor_update(
 # Monitors – delete
 # ---------------------------------------------------------------------------
 
-@router.post("/monitors/{monitor_id}/delete")
+@router.post("/monitors/{monitor_id}/delete", dependencies=[Depends(require_csrf)])
 async def monitor_delete(
 	monitor_id: int,
 	request: Request,
@@ -436,7 +449,7 @@ async def monitor_delete(
 	return RedirectResponse(url="/monitors", status_code=303)
 
 
-@router.post("/monitors/bulk-delete")
+@router.post("/monitors/bulk-delete", dependencies=[Depends(require_csrf)])
 async def monitor_bulk_delete(
 	request: Request,
 	db: AsyncSession = Depends(get_db),
@@ -513,7 +526,7 @@ async def export_txt(
 	return PlainTextResponse("\n".join(lines))
 
 
-@router.post("/monitors/import", response_class=HTMLResponse)
+@router.post("/monitors/import", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
 async def monitor_import(
 	request: Request,
 	db: AsyncSession = Depends(get_db),
@@ -611,6 +624,7 @@ async def settings_page(
 	user: User = Depends(require_user),
 ):
 	bot_running = web_deps.is_bot_running(user.telegram_bot_token) if user.telegram_bot_token else False
+	scraper_settings = await _load_scraper_settings(db)
 	return _templates(request).TemplateResponse(
 		request,
 		"settings.html",
@@ -619,10 +633,11 @@ async def settings_page(
 			"user": user,
 			"bot_running": bot_running,
 			"saved": False,
+			"settings": scraper_settings,
 		},
 	)
 
-@router.post("/settings", response_class=HTMLResponse)
+@router.post("/settings", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
 async def settings_save(
 	request: Request,
 	db: AsyncSession = Depends(get_db),
@@ -639,8 +654,15 @@ async def settings_save(
 		user.telegram_bot_token = telegram_token.strip()
 	if telegram_chat_id:
 		user.telegram_chat_id = telegram_chat_id.strip()
+	scraper_settings = await _save_scraper_settings(
+		db,
+		proxies,
+		sessions_per_domain,
+		rate_limit_per_minute,
+	)
 
 	await db.commit()
+	await _apply_scraper_settings(request, scraper_settings)
 
 	# Restart bot if token changed
 	if old_token and old_token != user.telegram_bot_token:
@@ -655,10 +677,267 @@ async def settings_save(
 			"user": user,
 			"bot_running": bot_running,
 			"saved": True,
+			"settings": scraper_settings,
 		},
 	)
 
 # ---------------------------------------------------------------------------
 # Logs
 # ---------------------------------------------------------------------------
+
+@router.get("/logs", response_class=HTMLResponse)
+async def logs_page(
+	request: Request,
+	page: int = 1,
+	user: User = Depends(require_user),
+):
+	per_page = 100
+	all_logs = log_manager.get_user_logs(user.id)
+	total = len(all_logs)
+	start = (page - 1) * per_page
+	page_logs = list(reversed(all_logs))[start: start + per_page]
+	total_pages = max(1, (total + per_page - 1) // per_page)
+
+	return _templates(request).TemplateResponse(
+		request,
+		"logs.html",
+		{
+			"request": request,
+			"user": user,
+			"logs": page_logs,
+			"page": page,
+			"total_pages": total_pages,
+			"total": total,
+		},
+	)
+
+
+@router.get("/api/logs")
+async def api_logs(
+	request: Request,
+	limit: int = 100,
+	user: User = Depends(require_user),
+):
+	"""Return recent logs as JSON array (newest first)."""
+	limit = max(1, min(limit, 500))
+	logs = list(reversed(log_manager.get_user_logs(user.id)))[:limit]
+	system = list(reversed(log_manager.get_system_logs()))[:20] if user.is_admin else []
+	return JSONResponse({"logs": logs, "system": system})
+
+
+# ---------------------------------------------------------------------------
+# Bot management API
+# ---------------------------------------------------------------------------
+
+@router.post("/api/bot/start", dependencies=[Depends(require_csrf)])
+async def api_bot_start(
+	request: Request,
+	db: AsyncSession = Depends(get_db),
+	user: User = Depends(require_user),
+):
+	if not user.telegram_bot_token:
+		return JSONResponse({"ok": False, "message": "РўРѕРєРµРЅ РЅРµ Р·Р°РґР°РЅ"}, status_code=400)
+	msg = await start_bot(user.telegram_bot_token, owner_user_id=user.id)
+	return JSONResponse({"ok": True, "message": msg})
+
+
+@router.post("/api/bot/stop", dependencies=[Depends(require_csrf)])
+async def api_bot_stop(
+	request: Request,
+	db: AsyncSession = Depends(get_db),
+	user: User = Depends(require_user),
+):
+	if not user.telegram_bot_token:
+		return JSONResponse({"ok": False, "message": "РўРѕРєРµРЅ РЅРµ Р·Р°РґР°РЅ"}, status_code=400)
+	await stop_bot(user.telegram_bot_token)
+	return JSONResponse({"ok": True, "message": "Р‘РѕС‚ РѕСЃС‚Р°РЅРѕРІР»РµРЅ"})
+
+
+@router.post("/api/bot/test", dependencies=[Depends(require_csrf)])
+async def api_bot_test(
+	request: Request,
+	user: User = Depends(require_user),
+):
+	"""Send a test Telegram message to the user's saved chat."""
+	return await _send_test_message(user.telegram_bot_token, user.telegram_chat_id)
+
+
+@router.post("/settings/test-bot", dependencies=[Depends(require_csrf)])
+async def settings_test_bot(
+	request: Request,
+	user: User = Depends(require_user),
+	telegram_token: str = Form(default=""),
+	telegram_chat_id: str = Form(default=""),
+):
+	"""Send a test Telegram message with submitted settings without saving them."""
+	token = telegram_token.strip() or user.telegram_bot_token
+	chat_id = telegram_chat_id.strip() or user.telegram_chat_id
+	return await _send_test_message(token, chat_id)
+
+
+async def _send_test_message(token: str, chat_id: str):
+	if not token or not chat_id:
+		return JSONResponse({"ok": False, "message": "Р‘РѕС‚ РЅРµ РЅР°СЃС‚СЂРѕРµРЅ"}, status_code=400)
+
+	try:
+		from app.telegram.bot import get_or_create_bot
+		bot, _ = get_or_create_bot(token)
+		await bot.send_message(
+			int(chat_id),
+			"вњ… <b>РўРµСЃС‚ РїСЂРѕР№РґРµРЅ!</b>\nVinted Monitor СЂР°Р±РѕС‚Р°РµС‚ РєРѕСЂСЂРµРєС‚РЅРѕ.",
+			parse_mode="HTML",
+		)
+		return JSONResponse({"ok": True, "message": "РўРµСЃС‚ РѕС‚РїСЂР°РІР»РµРЅ"})
+	except Exception as exc:
+		return JSONResponse({"ok": False, "message": str(exc)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Manual trigger
+# ---------------------------------------------------------------------------
+
+@router.post("/api/monitors/{monitor_id}/trigger", dependencies=[Depends(require_csrf)])
+async def api_monitor_trigger(
+	monitor_id: int,
+	request: Request,
+	db: AsyncSession = Depends(get_db),
+	user: User = Depends(require_user),
+):
+	"""Manually trigger an immediate check for a monitor."""
+	result = await db.execute(
+		select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+	)
+	monitor = result.scalar_one_or_none()
+	if monitor is None:
+		raise HTTPException(status_code=404, detail="Monitor not found")
+
+	scheduler = get_scheduler(request)
+	if scheduler and scheduler.trigger_now(monitor_id):
+		return JSONResponse({"ok": True, "message": "РџСЂРѕРІРµСЂРєР° Р·Р°РїСѓС‰РµРЅР°"})
+	return JSONResponse({"ok": False, "message": "РџР»Р°РЅРёСЂРѕРІС‰РёРє РЅРµРґРѕСЃС‚СѓРїРµРЅ"}, status_code=503)
+
+
+# ---------------------------------------------------------------------------
+# Settings bot controls
+# ---------------------------------------------------------------------------
+
+@router.post("/settings/start-bot", dependencies=[Depends(require_csrf)])
+async def settings_start_bot(
+	request: Request,
+	db: AsyncSession = Depends(get_db),
+	user: User = Depends(require_user),
+	telegram_token: str = Form(default=""),
+	telegram_chat_id: str = Form(default=""),
+):
+	"""Save bot settings and start polling. Used by JS and tests."""
+	if not telegram_token.strip():
+		return JSONResponse({"ok": False, "message": "РўРѕРєРµРЅ РЅРµ СѓРєР°Р·Р°РЅ"}, status_code=400)
+
+	old_token = user.telegram_bot_token
+	user.telegram_bot_token = telegram_token.strip()
+	if telegram_chat_id.strip():
+		user.telegram_chat_id = telegram_chat_id.strip()
+	await db.commit()
+
+	if old_token and old_token != user.telegram_bot_token:
+		await stop_bot(old_token)
+
+	if web_deps.is_bot_running(user.telegram_bot_token):
+		return JSONResponse({"ok": True, "message": "Р‘РѕС‚ СѓР¶Рµ Р·Р°РїСѓС‰РµРЅ"})
+
+	msg = await start_bot(user.telegram_bot_token, owner_user_id=user.id)
+	return JSONResponse({"ok": True, "message": msg})
+
+
+@router.post("/settings/stop-bot", dependencies=[Depends(require_csrf)])
+async def settings_stop_bot(
+	request: Request,
+	db: AsyncSession = Depends(get_db),
+	user: User = Depends(require_user),
+):
+	"""Stop the bot for the current user."""
+	if not user.telegram_bot_token:
+		return JSONResponse({"ok": False, "message": "РўРѕРєРµРЅ РЅРµ Р·Р°РґР°РЅ"}, status_code=400)
+	await stop_bot(user.telegram_bot_token)
+	return JSONResponse({"ok": True, "message": "Р‘РѕС‚ РѕСЃС‚Р°РЅРѕРІР»РµРЅ"})
+
+
+# ---------------------------------------------------------------------------
+# import_monitors alias for direct unit tests
+# ---------------------------------------------------------------------------
+
+async def import_monitors(
+	request,
+	raw_text: str = "",
+	db: AsyncSession = None,
+	user: User = None,
+	import_file=None,
+) -> None:
+	content = (raw_text or "").strip()
+	if not content:
+		return
+
+	scheduler = get_scheduler(request) if request else None
+	created = 0
+
+	if content.startswith("[") or content.startswith("{"):
+		try:
+			payload = json.loads(content)
+			if isinstance(payload, dict):
+				payload = [payload]
+			for item in payload:
+				if not isinstance(item, dict):
+					continue
+				url = item.get("url", "")
+				if not url:
+					continue
+				name = item.get("name") or url[:60]
+				domains = item.get("domains") or list(VINTED_DOMAINS.keys())
+				domains = [d for d in domains if d in VINTED_DOMAINS]
+				interval_sec = int(item.get("interval_sec", 120))
+				params = parse_vinted_url(url)
+				params["_original_interval"] = interval_sec
+				monitor = Monitor(
+					user_id=user.id,
+					name=name,
+					original_url=url,
+					params_json=json.dumps(params),
+					domains_json=json.dumps(domains),
+					interval_sec=interval_sec,
+					is_active=item.get("is_active", True),
+				)
+				db.add(monitor)
+				await db.flush()
+				if scheduler and monitor.is_active:
+					scheduler.add_monitor(monitor.id, interval_sec)
+				created += 1
+			await db.commit()
+		except Exception as exc:
+			logger.warning("import_monitors JSON error: %s", exc)
+	else:
+		for line in content.splitlines():
+			url = line.strip()
+			if not url or not url.startswith("http"):
+				continue
+			params = parse_vinted_url(url)
+			interval_sec = 120
+			params["_original_interval"] = interval_sec
+			domains = list(VINTED_DOMAINS.keys())
+			monitor = Monitor(
+				user_id=user.id,
+				name=url[:60],
+				original_url=url,
+				params_json=json.dumps(params),
+				domains_json=json.dumps(domains),
+				interval_sec=interval_sec,
+				is_active=True,
+			)
+			db.add(monitor)
+			await db.flush()
+			if scheduler and monitor.is_active:
+				scheduler.add_monitor(monitor.id, interval_sec)
+			created += 1
+		await db.commit()
+
+	logger.info("import_monitors: created %d monitors", created)
 

@@ -13,6 +13,7 @@
 
     <div class="card p-6">
         <form method="post" action="/settings" class="space-y-8">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token(request) }}">
             <div class="pb-6 border-b border-[rgba(74,222,128,0.06)]">
                 <div class="flex items-center gap-2 mb-5">
                     <i data-lucide="send" class="w-4 h-4 text-accent"></i>
@@ -125,6 +126,8 @@
 </div>
 
 <script>
+const csrfToken = "{{ csrf_token(request) }}";
+
 function testBot() {
     const token = document.getElementById('telegram_token').value.trim();
     const chatId = document.getElementById('telegram_chat_id').value.trim();
@@ -141,7 +144,7 @@ function testBot() {
     
     fetch('/settings/test-bot', {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrfToken},
         body: 'telegram_token=' + encodeURIComponent(token) + '&telegram_chat_id=' + encodeURIComponent(chatId)
     })
     .then(async r => {
@@ -175,7 +178,7 @@ function startBot() {
     
     fetch('/settings/start-bot', {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrfToken},
         body: 'telegram_token=' + encodeURIComponent(token) + '&telegram_chat_id=' + encodeURIComponent(chatId)
     })
     .then(async r => {
@@ -209,7 +212,7 @@ function stopBot() {
     const resultEl = document.getElementById('bot-result');
     resultEl.textContent = 'Остановка...';
     resultEl.className = 'text-xs text-muted';
-    fetch('/settings/stop-bot', {method: 'POST'})
+    fetch('/settings/stop-bot', {method: 'POST', headers: {'X-CSRF-Token': csrfToken}})
     .then(async r => {
         const text = await r.text();
         if (!r.ok) throw new Error(text || 'Ошибка при остановке');

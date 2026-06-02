@@ -11,7 +11,8 @@
         </div>
     </div>
     <div class="card p-6">
-        <form method="post" action="{% if monitor %}/monitors/{{ monitor.id }}/edit{% else %}/monitors{% endif %}" class="space-y-6">
+    <form method="post" action="{% if monitor %}/monitors/{{ monitor.id }}/edit{% else %}/monitors{% endif %}" class="space-y-6">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token(request) }}">
             <div>
                 <label class="flex items-center gap-2 text-sm font-medium text-text mb-2">
                     <i data-lucide="tag" class="w-3.5 h-3.5 text-muted"></i> Название

@@ -1,4 +1,4 @@
-{% raw %}<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -229,6 +229,7 @@
                     <span class="font-medium text-text">{{ user.username }}</span>
                 </div>
                 <form method="post" action="/logout" class="inline">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token(request) }}">
                     <button type="submit" class="text-muted hover:text-error transition-colors" title="Выйти">
                         <i data-lucide="log-out" class="w-4 h-4"></i>
                     </button>
@@ -322,4 +323,4 @@ if (window.lucide) lucide.createIcons();
 document.getElementById('global-overlay')?.addEventListener('click', closeAllModals);
 </script>
 </body>
-</html>{% endraw %}
+</html>

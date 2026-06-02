@@ -53,12 +53,14 @@
                         <td class="p-4">
                             <div class="flex items-center justify-end gap-1">
                                 <form action="/admin/invites/{{ invite.id }}/toggle" method="POST" class="inline">
+                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token(request) }}">
                                     <button type="submit" class="p-1.5 rounded-lg hover:bg-[rgba(245,158,11,0.1)] transition-colors" title="{{ 'Деактивировать' if invite.is_active else 'Активировать' }}">
                                         <i data-lucide="{{ 'pause' if invite.is_active else 'play' }}" class="w-3.5 h-3.5 text-warning"></i>
                                     </button>
                                 </form>
                                 <button
                                     hx-delete="/admin/invites/{{ invite.id }}"
+                                    hx-headers='{"X-CSRF-Token": "{{ csrf_token(request) }}"}'
                                     hx-target="#invite-row-{{ invite.id }}"
                                     hx-swap="outerHTML"
                                     hx-confirm="Удалить этот инвайт-код?"
@@ -89,6 +91,7 @@
                 </button>
             </div>
             <form action="/admin/invites" method="POST" class="p-6 space-y-4">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token(request) }}">
                 <div class="space-y-1.5">
                     <label class="text-xs font-medium text-muted uppercase tracking-wider">Код (опционально)</label>
                     <input type="text" name="code" class="w-full bg-background border border-[rgba(74,222,128,0.1)] rounded-xl p-3 text-sm focus:outline-none focus:border-accent transition-all" placeholder="Оставьте пустым для автогенерации">

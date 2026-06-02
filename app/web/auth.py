@@ -1,5 +1,6 @@
 # app/web/auth.py
 import secrets
+import os
 
 from fastapi import Depends, Request
 from fastapi.responses import RedirectResponse
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User, UserSession
+from app.config import get_settings
 from app.web.dependencies import get_db
 
 SESSION_COOKIE = "session_token"
@@ -58,6 +60,13 @@ class RequireLoginException(Exception):
     pass
 
 
+def _secure_cookie_required() -> bool:
+    settings = get_settings()
+    if settings.session_cookie_secure:
+        return True
+    return bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER"))
+
+
 def set_session_cookie(response: RedirectResponse, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
@@ -65,6 +74,7 @@ def set_session_cookie(response: RedirectResponse, token: str) -> None:
         max_age=SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
+        secure=_secure_cookie_required(),
     )
 
 

@@ -1,4 +1,4 @@
-# tests/test_admin_invite.py
+﻿# tests/test_admin_invite.py
 import asyncio
 import pytest
 from sqlalchemy import select
@@ -34,7 +34,7 @@ async def test_registration_requires_valid_invite(db_session):
     response = await register_submit(
         request, db_session, "user1", "pass123", "pass123", "invalid-code"
     )
-    assert "Неверный или использованный инвайт-код" in request.app.state.templates.TemplateResponse.call_args[0][2]["error"]
+    assert "РќРµРІРµСЂРЅС‹Р№ РёР»Рё РёСЃРїРѕР»СЊР·РѕРІР°РЅРЅС‹Р№ РёРЅРІР°Р№С‚-РєРѕРґ" in request.app.state.templates.TemplateResponse.call_args[0][2]["error"]
 
     # 2. Test valid code
     invite = InviteCode(code="valid-code", max_uses=1, used_count=0, is_active=True)
