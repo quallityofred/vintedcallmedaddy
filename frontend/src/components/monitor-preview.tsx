@@ -32,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DomainSelection } from "@/components/domain-selection";
 
 interface Monitor {
   id: number;
@@ -59,6 +60,7 @@ export function MonitorPreview() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [editingMonitor, setEditingMonitor] = useState<Monitor | null>(null);
+  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
 
   const fetchMonitors = useCallback(async () => {
     setError(false);
@@ -154,6 +156,10 @@ export function MonitorPreview() {
 
   const handleCreateOrUpdate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (selectedDomains.length === 0) {
+      toast.error("Please select at least one domain");
+      return;
+    }
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
@@ -161,6 +167,7 @@ export function MonitorPreview() {
       name: formData.get("name") as string,
       url: formData.get("url") as string,
       interval_sec: parseInt(formData.get("interval_sec") as string),
+      domains: selectedDomains,
     };
 
     try {
@@ -251,7 +258,10 @@ export function MonitorPreview() {
               open={isCreateOpen}
               onOpenChange={(open) => {
                 setIsCreateOpen(open);
-                if (!open) setEditingMonitor(null);
+                if (!open) {
+                    setEditingMonitor(null);
+                    setSelectedDomains([]);
+                }
               }}
             >
               <DialogTrigger
@@ -308,6 +318,10 @@ export function MonitorPreview() {
                         required
                       />
                     </div>
+                    <DomainSelection
+                      selectedDomains={selectedDomains}
+                      onSelectionChange={setSelectedDomains}
+                    />
                   </div>
                   <DialogFooter>
                     <Button className="w-full sm:w-auto" type="submit" disabled={isSubmitting}>
@@ -408,6 +422,7 @@ export function MonitorPreview() {
                               onClick={() => {
                                 setEditingMonitor(monitor);
                                 setIsCreateOpen(true);
+                                // Note: In a full impl, we'd also load the existing domains
                               }}
                               size="icon-xs"
                               title="Edit"

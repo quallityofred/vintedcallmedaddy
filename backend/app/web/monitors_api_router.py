@@ -84,6 +84,12 @@ async def list_monitors(
     return monitors
 
 
+@router.get("/domains")
+async def list_supported_domains():
+    """List all supported Vinted domains."""
+    return [{"domain": d, "flag": get_flag(d)} for d in VINTED_DOMAINS]
+
+
 @router.get("/{monitor_id}", response_model=MonitorResponse)
 async def get_monitor(
     monitor_id: int,
