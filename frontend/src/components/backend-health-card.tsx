@@ -143,20 +143,26 @@ export function BackendHealthCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         {isLoading ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {["status", "scheduler", "bots", "checked"].map((item) => (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {["Status", "Jobs", "Bots"].map((item) => (
               <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <Skeleton className="h-3 w-16 bg-white/10" />
                 <Skeleton className="mt-2 h-5 w-12 bg-white/10" />
               </div>
             ))}
+            <div className="col-span-1 rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:col-span-3">
+                <Skeleton className="h-3 w-16 bg-white/10" />
+                <Skeleton className="mt-2 h-5 w-32 bg-white/10" />
+            </div>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <HealthMetric label="Status" value={health.data?.status ?? "unavailable"} />
             <HealthMetric label="Jobs" value={String(health.data?.scheduler_jobs ?? 0)} />
             <HealthMetric label="Bots" value={String(health.data?.bots_running ?? 0)} />
-            <HealthMetric label="Checked" value={formatCheckedAt(health.checkedAt)} />
+            <div className="col-span-1 sm:col-span-3">
+                <HealthMetric label="Checked" value={formatCheckedAt(health.checkedAt)} />
+            </div>
           </div>
         )}
 
