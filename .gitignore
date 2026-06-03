@@ -36,3 +36,5 @@ backend/data/
 .idea/
 .vscode/
 .DS_Store
+
+.codex-memory/
