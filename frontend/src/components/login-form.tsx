@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { safeNextPath } from "@/lib/auth";
+import { useAuth } from "@/context/auth-context";
 
 type LoginFormProps = {
   nextPath?: string;
@@ -35,6 +36,7 @@ async function getCsrfToken() {
 
 export function LoginForm({ nextPath }: LoginFormProps) {
   const router = useRouter();
+  const { refresh } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +69,7 @@ export function LoginForm({ nextPath }: LoginFormProps) {
       }
 
       setSuccess(true);
+      await refresh();
       router.push(safeNextPath(nextPath));
       router.refresh();
     } catch {
