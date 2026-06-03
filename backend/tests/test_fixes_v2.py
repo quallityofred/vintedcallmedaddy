@@ -46,7 +46,7 @@ async def test_duplicate_notification_prevention_same_user(db_session):
     assert len(seen_result.scalars().all()) == 1
 
     # 2. FoundItem has 2 entries (one for each monitor)
-    found_result = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 123))
+    found_result = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 123, FoundItem.monitor_id.in_([m1.id, m2.id])))
     found_items = found_result.scalars().all()
     assert len(found_items) == 2
     

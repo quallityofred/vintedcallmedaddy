@@ -43,8 +43,8 @@ async def test_dashboard_stats_api_unauthenticated(db_session):
 
 @pytest.mark.asyncio
 async def test_dashboard_stats_api_authenticated_user_scoping(db_session):
-    user1 = await _create_user(db_session, "user1")
-    user2 = await _create_user(db_session, "user2")
+    user1 = await _create_user(db_session, "dash_user1")
+    user2 = await _create_user(db_session, "dash_user2")
     _override_db(db_session)
 
     # User 1 monitors
@@ -100,7 +100,7 @@ async def test_dashboard_stats_api_authenticated_user_scoping(db_session):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        await _login_user(client, "user1")
+        await _login_user(client, "dash_user1")
         response = await client.get("/api/v1/dashboard/stats")
         assert response.status_code == 200
         data = response.json()
@@ -113,7 +113,7 @@ async def test_dashboard_stats_api_authenticated_user_scoping(db_session):
 
         # Test User 2 (separate client to clear cookies)
         async with AsyncClient(transport=transport, base_url="http://test") as client2:
-            await _login_user(client2, "user2")
+            await _login_user(client2, "dash_user2")
             response2 = await client2.get("/api/v1/dashboard/stats")
             assert response2.status_code == 200
             data2 = response2.json()
