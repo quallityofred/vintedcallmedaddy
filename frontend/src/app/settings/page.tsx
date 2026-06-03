@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuth } from "@/context/auth-context";
 
 interface TelegramStatus {
   token_configured: boolean;
@@ -21,13 +20,11 @@ interface TelegramStatus {
   chat_id_masked: string;
 }
 
-interface GlobalSettings {
-  cloudflare_worker: {
-    url: string;
-    configured: boolean;
-    block_threshold: number;
-    recovery_minutes: number;
-  };
+interface UserCfSettings {
+  url: string;
+  configured: boolean;
+  block_threshold: number;
+  recovery_minutes: number;
 }
 
 export default function SettingsPage() {
@@ -39,10 +36,9 @@ export default function SettingsPage() {
 }
 
 function SettingsContent() {
-  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<TelegramStatus | null>(null);
-  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
+  const [userCfSettings, setUserCfSettings] = useState<UserCfSettings | null>(null);
   const [token, setToken] = useState("");
   const [chatId, setChatId] = useState("");
   const [saving, setSaving] = useState(false);
@@ -63,11 +59,11 @@ function SettingsContent() {
       if (response.ok) {
         const data = await response.json();
         setStatus(data.telegram);
-        setGlobalSettings(data.global_settings || null);
-        if (data.global_settings) {
-            setCfUrl(data.global_settings.cloudflare_worker.url || "");
-            setCfBlock(data.global_settings.cloudflare_worker.block_threshold?.toString() || "");
-            setCfRecovery(data.global_settings.cloudflare_worker.recovery_minutes?.toString() || "");
+        setUserCfSettings(data.cloudflare_worker || null);
+        if (data.cloudflare_worker) {
+            setCfUrl(data.cloudflare_worker.url || "");
+            setCfBlock(data.cloudflare_worker.block_threshold?.toString() || "");
+            setCfRecovery(data.cloudflare_worker.recovery_minutes?.toString() || "");
         }
       }
     } catch {
@@ -169,7 +165,7 @@ function SettingsContent() {
     <PageShell
       eyebrow="Settings"
       title="Configuration"
-      description="Manage your notification and global scraper settings."
+      description="Manage your notification and personal scraper settings."
     >
       <AnimatedSection className="grid gap-5">
         <Card className="glass-panel">
@@ -250,55 +246,54 @@ function SettingsContent() {
           </CardContent>
         </Card>
 
-        {user?.is_admin && globalSettings && (
         <Card className="glass-panel">
           <CardHeader className="border-b border-white/10 p-4 sm:p-6">
             <CardTitle className="flex items-center gap-2">
               <Globe className="size-4 text-emerald-200" />
-              Cloudflare Worker
+              Your Cloudflare Worker
             </CardTitle>
-            <CardDescription>Configure global worker settings for enhanced scraper resilience.</CardDescription>
+            <CardDescription>Used only for your own monitors.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5 p-4 sm:p-6">
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="space-y-2 md:col-span-3">
-                    <Label htmlFor="cfUrl">Worker URL</Label>
-                    <Input
-                      disabled={savingCf}
-                      id="cfUrl"
-                      onChange={(event) => setCfUrl(event.target.value)}
-                      placeholder="https://worker.example.com"
-                      value={cfUrl}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="cfBlock">Block threshold</Label>
-                    <Input
-                      disabled={savingCf}
-                      id="cfBlock"
-                      type="number"
-                      onChange={(event) => setCfBlock(event.target.value)}
-                      value={cfBlock}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="cfRecovery">Recovery minutes</Label>
-                    <Input
-                      disabled={savingCf}
-                      id="cfRecovery"
-                      type="number"
-                      onChange={(event) => setCfRecovery(event.target.value)}
-                      value={cfRecovery}
-                    />
-                  </div>
-                </div>
-                <Button className="sm:w-auto" disabled={savingCf} onClick={handleUpdateCfWorker}>
-                    {savingCf ? <Loader2 className="size-4 animate-spin" /> : <Cog className="size-4" />}
-                    {savingCf ? "Saving" : "Save settings"}
-                </Button>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2 md:col-span-3">
+                <Label htmlFor="cfUrl">Worker URL</Label>
+                <Input
+                  disabled={savingCf}
+                  id="cfUrl"
+                  onChange={(event) => setCfUrl(event.target.value)}
+                  placeholder="https://worker.example.com"
+                  value={cfUrl}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="cfBlock">Block threshold</Label>
+                <Input
+                  disabled={savingCf}
+                  id="cfBlock"
+                  type="number"
+                  onChange={(event) => setCfBlock(event.target.value)}
+                  value={cfBlock}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="cfRecovery">Recovery minutes</Label>
+                <Input
+                  disabled={savingCf}
+                  id="cfRecovery"
+                  type="number"
+                  onChange={(event) => setCfRecovery(event.target.value)}
+                  value={cfRecovery}
+                />
+              </div>
+            </div>
+            <Button className="sm:w-auto" disabled={savingCf} onClick={handleUpdateCfWorker}>
+              {savingCf ? <Loader2 className="size-4 animate-spin" /> : <Cog className="size-4" />}
+              {savingCf ? "Saving" : "Save settings"}
+            </Button>
+            <p className="text-xs text-muted-foreground">If no Worker is configured, checks run without CF Worker.</p>
           </CardContent>
         </Card>
-        )}
       </AnimatedSection>
     </PageShell>
   );

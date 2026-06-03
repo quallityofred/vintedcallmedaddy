@@ -117,6 +117,12 @@ async def _settings_response(db: AsyncSession, user: User) -> dict[str, object]:
             "is_admin": user.is_admin,
         },
         "telegram": _telegram_payload(user),
+        "cloudflare_worker": {
+            "url": user.cf_worker_url,
+            "configured": bool(user.cf_worker_url),
+            "block_threshold": user.cf_worker_block_threshold,
+            "recovery_minutes": user.cf_worker_recovery_minutes,
+        },
         "can_edit_global_settings": user.is_admin,
     }
     if user.is_admin:
@@ -170,27 +176,41 @@ async def update_telegram_settings(
 @router.patch("/settings/cloudflare-worker", dependencies=[Depends(require_api_csrf)])
 async def update_cloudflare_worker_settings(
     request: CloudflareWorkerUpdate,
-    http_request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_admin),
+    user: User = Depends(require_api_user),
 ):
-    saved = await load_global_settings(db)
-    raw = _updated_settings(
-        saved,
-        {
-            "cf_worker_url": request.cf_worker_url.strip() if request.cf_worker_url is not None else None,
-            "cf_worker_block_threshold": request.cf_worker_block_threshold,
-            "cf_worker_recovery_minutes": request.cf_worker_recovery_minutes,
-        },
-    )
-    try:
-        cleaned = await save_global_settings(db, raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if request.cf_worker_url is not None:
+        if request.cf_worker_url:
+            # Validate URL
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(request.cf_worker_url.strip())
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    raise ValueError
+            except ValueError:
+                raise HTTPException(status_code=422, detail="Invalid Worker URL")
+            user.cf_worker_url = request.cf_worker_url.strip().rstrip("/")
+        else:
+            user.cf_worker_url = ""
+
+    if request.cf_worker_block_threshold is not None:
+        if not (1 <= request.cf_worker_block_threshold <= 20):
+            raise HTTPException(status_code=422, detail="Block threshold must be between 1 and 20")
+        user.cf_worker_block_threshold = request.cf_worker_block_threshold
+    
+    if request.cf_worker_recovery_minutes is not None:
+        if not (1 <= request.cf_worker_recovery_minutes <= 1440):
+            raise HTTPException(status_code=422, detail="Recovery minutes must be between 1 and 1440")
+        user.cf_worker_recovery_minutes = request.cf_worker_recovery_minutes
 
     await db.commit()
-    await apply_global_settings_to_runtime(cleaned, get_scraper_client(http_request))
-    return {"global_settings": _global_settings_payload(cleaned)}
+    await db.refresh(user)
+    return {"cloudflare_worker": {
+        "url": user.cf_worker_url,
+        "configured": bool(user.cf_worker_url),
+        "block_threshold": user.cf_worker_block_threshold,
+        "recovery_minutes": user.cf_worker_recovery_minutes,
+    }}
 
 
 @router.patch("/settings/scraper", dependencies=[Depends(require_api_csrf)])
