@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { KeyRound, Loader2, Send, ShieldCheck } from "lucide-react";
+import { KeyRound, Loader2, Send, ShieldCheck, Globe, Cog } from "lucide-react";
 import { toast } from "sonner";
 
 import { AnimatedSection } from "@/components/animated-section";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useAuth } from "@/context/auth-context";
 
 interface TelegramStatus {
   token_configured: boolean;
@@ -18,6 +19,15 @@ interface TelegramStatus {
   bot_running: boolean;
   token_masked: string;
   chat_id_masked: string;
+}
+
+interface GlobalSettings {
+  cloudflare_worker: {
+    url: string;
+    configured: boolean;
+    block_threshold: number;
+    recovery_minutes: number;
+  };
 }
 
 export default function SettingsPage() {
@@ -29,23 +39,36 @@ export default function SettingsPage() {
 }
 
 function SettingsContent() {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<TelegramStatus | null>(null);
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
   const [token, setToken] = useState("");
   const [chatId, setChatId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [savingCf, setSavingCf] = useState(false);
   const [actionInFlight, setActionInFlight] = useState<"start" | "stop" | "test" | null>(null);
+  
+  const [cfUrl, setCfUrl] = useState("");
+  const [cfBlock, setCfBlock] = useState("");
+  const [cfRecovery, setCfRecovery] = useState("");
 
-  const fetchStatus = useCallback(async () => {
+  const fetchSettings = useCallback(async () => {
     try {
-      const response = await fetch("/api/v1/telegram/status", {
+      const response = await fetch("/api/v1/settings", {
         cache: "no-store",
         credentials: "same-origin",
         headers: { Accept: "application/json" },
       });
       if (response.ok) {
-        const data = (await response.json()) as { telegram: TelegramStatus };
+        const data = await response.json();
         setStatus(data.telegram);
+        setGlobalSettings(data.global_settings || null);
+        if (data.global_settings) {
+            setCfUrl(data.global_settings.cloudflare_worker.url || "");
+            setCfBlock(data.global_settings.cloudflare_worker.block_threshold?.toString() || "");
+            setCfRecovery(data.global_settings.cloudflare_worker.recovery_minutes?.toString() || "");
+        }
       }
     } catch {
       toast.error("Failed to load settings");
@@ -55,9 +78,8 @@ function SettingsContent() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchStatus();
-  }, [fetchStatus]);
+    void fetchSettings();
+  }, [fetchSettings]);
 
   const getCsrfToken = async () => {
     const response = await fetch("/api/v1/auth/csrf", {
@@ -69,7 +91,7 @@ function SettingsContent() {
     return csrf_token;
   };
 
-  const handleUpdate = async () => {
+  const handleUpdateTelegram = async () => {
     setSaving(true);
     try {
       const csrfToken = await getCsrfToken();
@@ -89,11 +111,38 @@ function SettingsContent() {
       toast.success("Settings updated");
       setToken("");
       setChatId("");
-      void fetchStatus();
+      void fetchSettings();
     } catch {
       toast.error("Failed to update settings");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleUpdateCfWorker = async () => {
+    setSavingCf(true);
+    try {
+      const csrfToken = await getCsrfToken();
+      const response = await fetch("/api/v1/settings/cloudflare-worker", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({
+          cf_worker_url: cfUrl,
+          cf_worker_block_threshold: parseInt(cfBlock),
+          cf_worker_recovery_minutes: parseInt(cfRecovery),
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to update settings");
+      toast.success("Settings updated");
+      void fetchSettings();
+    } catch {
+      toast.error("Failed to update settings");
+    } finally {
+      setSavingCf(false);
     }
   };
 
@@ -108,7 +157,7 @@ function SettingsContent() {
       });
       if (!response.ok) throw new Error(`Failed to ${action} bot`);
       toast.success(`Action ${action} successful`);
-      void fetchStatus();
+      void fetchSettings();
     } catch {
       toast.error(`Failed to ${action} bot`);
     } finally {
@@ -119,10 +168,10 @@ function SettingsContent() {
   return (
     <PageShell
       eyebrow="Settings"
-      title="Telegram Controls"
-      description="Configure private notification delivery for this account."
+      title="Configuration"
+      description="Manage your notification and global scraper settings."
     >
-      <AnimatedSection className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <AnimatedSection className="grid gap-5">
         <Card className="glass-panel">
           <CardHeader className="border-b border-white/10 p-4 sm:p-6">
             <CardTitle className="flex items-center gap-2">
@@ -165,7 +214,7 @@ function SettingsContent() {
                   </div>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                  <Button className="sm:w-auto" disabled={saving} onClick={handleUpdate}>
+                  <Button className="sm:w-auto" disabled={saving} onClick={handleUpdateTelegram}>
                     {saving ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
                     {saving ? "Saving" : "Save credentials"}
                   </Button>
@@ -196,34 +245,60 @@ function SettingsContent() {
                     </Button>
                   )}
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm">
-                  <p className="font-medium">Saved credential status</p>
-                  <p className="mt-2 text-muted-foreground">
-                    Token: {status?.token_configured ? status.token_masked : "not configured"}
-                    {" | "}
-                    Chat: {status?.chat_id_configured ? status.chat_id_masked : "not configured"}
-                  </p>
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    Full token values are never rendered back into the browser after saving.
-                  </p>
-                </div>
               </>
             )}
           </CardContent>
         </Card>
-        <Card className="glass-panel h-fit">
+
+        {user?.is_admin && globalSettings && (
+        <Card className="glass-panel">
           <CardHeader className="border-b border-white/10 p-4 sm:p-6">
             <CardTitle className="flex items-center gap-2">
-              <ShieldCheck className="size-4 text-emerald-200" />
-              Safety model
+              <Globe className="size-4 text-emerald-200" />
+              Cloudflare Worker
             </CardTitle>
-            <CardDescription>Notification settings stay scoped to the current user.</CardDescription>
+            <CardDescription>Configure global worker settings for enhanced scraper resilience.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3 p-4 text-sm text-muted-foreground sm:p-6">
-            <p>Credentials are stored server-side and are never exposed through frontend environment variables.</p>
-            <p>Bot actions use CSRF-protected API calls through the same-origin `/api` rewrite.</p>
+          <CardContent className="space-y-5 p-4 sm:p-6">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="space-y-2 md:col-span-3">
+                    <Label htmlFor="cfUrl">Worker URL</Label>
+                    <Input
+                      disabled={savingCf}
+                      id="cfUrl"
+                      onChange={(event) => setCfUrl(event.target.value)}
+                      placeholder="https://worker.example.com"
+                      value={cfUrl}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="cfBlock">Block threshold</Label>
+                    <Input
+                      disabled={savingCf}
+                      id="cfBlock"
+                      type="number"
+                      onChange={(event) => setCfBlock(event.target.value)}
+                      value={cfBlock}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="cfRecovery">Recovery minutes</Label>
+                    <Input
+                      disabled={savingCf}
+                      id="cfRecovery"
+                      type="number"
+                      onChange={(event) => setCfRecovery(event.target.value)}
+                      value={cfRecovery}
+                    />
+                  </div>
+                </div>
+                <Button className="sm:w-auto" disabled={savingCf} onClick={handleUpdateCfWorker}>
+                    {savingCf ? <Loader2 className="size-4 animate-spin" /> : <Cog className="size-4" />}
+                    {savingCf ? "Saving" : "Save settings"}
+                </Button>
           </CardContent>
         </Card>
+        )}
       </AnimatedSection>
     </PageShell>
   );
