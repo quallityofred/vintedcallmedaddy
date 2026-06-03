@@ -19,7 +19,24 @@ export function PageShell({ eyebrow, title, description, children }: {
   const router = useRouter();
 
   async function handleLogout() {
-    await fetch("/api/v1/auth/logout", { method: "POST" });
+    try {
+      const csrfResponse = await fetch("/api/v1/auth/csrf", {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      const { csrf_token } = await csrfResponse.json();
+
+      await fetch("/api/v1/auth/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "X-CSRF-Token": csrf_token,
+        },
+      });
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
     await refresh();
     router.push("/");
   }
