@@ -7,7 +7,6 @@ import { AnimatedSection } from "@/components/animated-section";
 import { DashboardCard } from "@/components/dashboard-card";
 import { MonitorPreview } from "@/components/monitor-preview";
 import { SectionHeading } from "@/components/section-heading";
-import { SplineHero } from "@/components/spline-hero";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -103,14 +102,16 @@ export default function Home() {
           </AnimatedSection>
 
           <AnimatedSection delay={0.12}>
-            <SplineHero />
+            <div className="flex aspect-square items-center justify-center rounded-3xl bg-emerald-300/5 p-12 text-emerald-200/50">
+              <Radar className="size-32" />
+            </div>
           </AnimatedSection>
         </div>
       </section>
       <section className="mx-auto max-w-7xl px-6 pb-16 lg:px-10">
         <AnimatedSection className="mb-8">
           <SectionHeading
-            eyebrow="Product concept"
+            eyebrow="Product overview"
             title="A command center for search monitoring, deduplication, and notifications."
             description="Review monitor health, recent findings, and notification readiness from one responsive interface."
           />
@@ -128,11 +129,11 @@ export default function Home() {
             <div>
               <div className="mb-3 flex items-center gap-2 text-sm text-emerald-200">
                 <Sparkles className="size-4" />
-                Ready for daily operations
+                Reliability built-in
               </div>
-              <h2 className="text-2xl font-semibold tracking-tight">Backend-owned safety remains in place.</h2>
+              <h2 className="text-2xl font-semibold tracking-tight">Reliable monitoring, every time.</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                Auth, CSRF, scheduler, scraper, Telegram, and deduplication stay in FastAPI while the frontend uses the versioned API surface.
+                Automated search tracking, intelligent deduplication, and fast Telegram notifications.
               </p>
             </div>
             <Link href="/settings" className={buttonVariants({ variant: "secondary" })}>
