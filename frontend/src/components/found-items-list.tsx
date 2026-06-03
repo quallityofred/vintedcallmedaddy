@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { ExternalLink, Loader2, EyeOff } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ExternalLink, EyeOff, Loader2, PackageSearch } from "lucide-react";
 import { toast } from "sonner";
 
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 interface FoundItem {
@@ -26,15 +26,17 @@ export function FoundItemsList() {
   const [items, setItems] = useState<FoundItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [hidingSellerId, setHidingSellerId] = useState<number | null>(null);
 
   const fetchItems = useCallback(async () => {
+    setError(false);
     try {
       const response = await fetch("/api/v1/items?limit=10", {
         cache: "no-store",
         credentials: "same-origin",
       });
       if (!response.ok) throw new Error("Failed to fetch items");
-      const data = await response.json();
+      const data = (await response.json()) as { items: FoundItem[] };
       setItems(data.items);
     } catch {
       setError(true);
@@ -49,16 +51,22 @@ export function FoundItemsList() {
   }, [fetchItems]);
 
   const getCsrfToken = async () => {
-    const response = await fetch("/api/v1/auth/csrf");
-    const { csrf_token } = await response.json();
+    const response = await fetch("/api/v1/auth/csrf", {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    const { csrf_token } = (await response.json()) as { csrf_token: string };
     return csrf_token;
   };
 
   const handleHideSeller = async (sellerId: number) => {
+    setHidingSellerId(sellerId);
     try {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/hidden-sellers", {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken,
@@ -69,69 +77,96 @@ export function FoundItemsList() {
       toast.success("Seller hidden");
       void fetchItems();
     } catch {
-      toast.error("Failed to hide seller");
+      toast.error("Seller could not be hidden");
+    } finally {
+      setHidingSellerId(null);
     }
   };
 
   return (
-    <Card className="glass-panel">
-      <CardHeader>
-        <CardTitle>Recent Found Items</CardTitle>
-        <CardDescription>Latest items found across your monitors.</CardDescription>
+    <Card className="glass-panel overflow-hidden">
+      <CardHeader className="border-b border-white/10 p-4 sm:p-6">
+        <CardTitle className="flex items-center gap-2">
+          <PackageSearch className="size-4 text-emerald-200" />
+          Recent items
+        </CardTitle>
+        <CardDescription>Latest user-scoped findings across active monitors.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="p-3 sm:p-5">
         {loading ? (
-          <div className="flex h-32 items-center justify-center text-muted-foreground">
-            <Loader2 className="size-6 animate-spin opacity-20" />
+          <div className="flex h-36 flex-col items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-muted-foreground">
+            <Loader2 className="size-5 animate-spin text-emerald-200" />
+            <p className="mt-2 text-sm">Loading recent items</p>
           </div>
         ) : error ? (
-          <div className="h-32 text-center text-red-400">Failed to load items.</div>
+          <div className="flex h-36 items-center justify-center rounded-2xl border border-red-300/20 bg-red-400/10 px-4 text-center text-sm text-red-100">
+            Recent items could not be loaded. Refresh the page or try again later.
+          </div>
         ) : items.length === 0 ? (
-          <div className="h-32 text-center text-muted-foreground">No items found yet.</div>
+          <div className="flex h-40 flex-col items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] px-4 text-center">
+            <PackageSearch className="mb-3 size-8 text-emerald-200/80" />
+            <p className="text-sm font-medium">No findings yet</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              New matches will appear here after active monitors discover items.
+            </p>
+          </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-white/10">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell>
-                      <div className="font-medium">{item.title}</div>
-                      <div className="text-xs text-muted-foreground">{item.brand} • {item.size} • {item.condition}</div>
-                    </TableCell>
-                    <TableCell>{item.price} {item.currency}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <a 
-                          href={item.item_url} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          className={cn(buttonVariants({ variant: "ghost", size: "icon-xs" }))}
-                          title="View"
-                        >
-                          <ExternalLink className="size-3.5" />
-                        </a>
-                        <Button 
-                          variant="ghost" 
-                          size="icon-xs" 
-                          title="Hide Seller"
-                          onClick={() => handleHideSeller(item.seller_id)}
-                          className="text-amber-400 hover:text-amber-300"
-                        >
-                          <EyeOff className="size-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/10">
+            <div className="overflow-x-auto">
+              <Table className="min-w-[720px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Item</TableHead>
+                    <TableHead className="text-right">Price</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {items.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell className="max-w-[28rem]">
+                        <div className="truncate font-medium">{item.title}</div>
+                        <div className="mt-1 truncate text-xs text-muted-foreground">
+                          {[item.brand, item.size, item.condition].filter(Boolean).join(" - ")}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">
+                        {item.price} {item.currency}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex justify-end gap-1">
+                          <a
+                            aria-label={`Open listing ${item.title}`}
+                            className={cn(buttonVariants({ variant: "ghost", size: "icon-xs" }))}
+                            href={item.item_url}
+                            rel="noreferrer"
+                            target="_blank"
+                            title="Open listing"
+                          >
+                            <ExternalLink className="size-3.5" />
+                          </a>
+                          <Button
+                            aria-label={`Hide seller ${item.seller_id}`}
+                            className="text-amber-300 hover:text-amber-200"
+                            disabled={hidingSellerId === item.seller_id}
+                            onClick={() => handleHideSeller(item.seller_id)}
+                            size="icon-xs"
+                            title="Hide seller"
+                            variant="ghost"
+                          >
+                            {hidingSellerId === item.seller_id ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <EyeOff className="size-3.5" />
+                            )}
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         )}
       </CardContent>

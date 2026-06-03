@@ -10,14 +10,11 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const params = await searchParams;
   const rawNext = Array.isArray(params?.next) ? params?.next[0] : params?.next;
   const nextPath = safeNextPath(rawNext);
-  const legacyLoginUrl =
-    process.env.NEXT_PUBLIC_LEGACY_LOGIN_URL ??
-    (process.env.NODE_ENV === "development" ? "http://localhost:8080/login" : undefined);
 
   return (
     <main className="flex min-h-screen items-center justify-center px-6 py-12">
       <AnimatedSection className="w-full max-w-md">
-        <LoginForm legacyLoginUrl={legacyLoginUrl} nextPath={nextPath} />
+        <LoginForm nextPath={nextPath} />
       </AnimatedSection>
     </main>
   );

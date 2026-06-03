@@ -1,26 +1,25 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { 
-  Bell, 
-  Clock3, 
-  ExternalLink, 
-  Radar, 
-  ShieldCheck, 
-  Plus, 
-  Trash2, 
-  Pause, 
-  Play, 
-  RefreshCcw,
+import { useCallback, useEffect, useState } from "react";
+import {
+  Bell,
+  Clock3,
+  ExternalLink,
   Loader2,
-  MoreVertical
+  MoreVertical,
+  Pause,
+  Play,
+  Plus,
+  Radar,
+  RefreshCcw,
+  ShieldCheck,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface Monitor {
   id: number;
@@ -45,8 +45,8 @@ interface Monitor {
 
 const events = [
   { label: "DB-level dedup active", icon: ShieldCheck },
-  { label: "Telegram notification active", icon: Bell },
-  { label: "Adaptive interval enabled", icon: Clock3 },
+  { label: "Telegram delivery visible", icon: Bell },
+  { label: "Adaptive intervals enabled", icon: Clock3 },
 ];
 
 export function MonitorPreview() {
@@ -56,19 +56,23 @@ export function MonitorPreview() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [actionKey, setActionKey] = useState<string | null>(null);
   const [editingMonitor, setEditingMonitor] = useState<Monitor | null>(null);
 
   const fetchMonitors = useCallback(async () => {
+    setError(false);
     try {
       const response = await fetch("/api/v1/monitors", {
         cache: "no-store",
         credentials: "same-origin",
       });
       if (!response.ok) {
-        throw new Error("API error");
+        throw new Error("Unable to load monitors");
       }
       const data = (await response.json()) as Monitor[];
       setMonitors(data);
+      setSelectedIds((current) => current.filter((id) => data.some((monitor) => monitor.id === id)));
     } catch {
       setError(true);
     } finally {
@@ -82,24 +86,25 @@ export function MonitorPreview() {
   }, [fetchMonitors]);
 
   const getCsrfToken = async () => {
-    const response = await fetch("/api/v1/auth/csrf");
-    const { csrf_token } = await response.json();
+    const response = await fetch("/api/v1/auth/csrf", {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    const { csrf_token } = (await response.json()) as { csrf_token: string };
     return csrf_token;
   };
 
-  const handleAction = async (id: number, action: string) => {
+  const handleAction = async (id: number, action: "check-now" | "pause" | "resume" | "delete") => {
+    const nextActionKey = `${id}:${action}`;
+    setActionKey(nextActionKey);
+
     try {
       const csrfToken = await getCsrfToken();
-      let method = "POST";
-      let path = `/api/v1/monitors/${id}/${action}`;
-      
-      if (action === "delete") {
-        method = "DELETE";
-        path = `/api/v1/monitors/${id}`;
-      }
-
-      const response = await fetch(path, {
-        method,
+      const isDelete = action === "delete";
+      const response = await fetch(isDelete ? `/api/v1/monitors/${id}` : `/api/v1/monitors/${id}/${action}`, {
+        method: isDelete ? "DELETE" : "POST",
+        credentials: "same-origin",
         headers: {
           "X-CSRF-Token": csrfToken,
         },
@@ -107,21 +112,26 @@ export function MonitorPreview() {
 
       if (!response.ok) throw new Error("Action failed");
 
-      toast.success(`Monitor ${action === "delete" ? "deleted" : action + "ed"} successfully`);
+      const message = action === "check-now" ? "Monitor check queued" : `Monitor ${isDelete ? "deleted" : "updated"}`;
+      toast.success(message);
       void fetchMonitors();
     } catch {
-      toast.error(`Failed to ${action} monitor`);
+      toast.error("Monitor action failed");
+    } finally {
+      setActionKey(null);
     }
   };
 
   const handleBulkDelete = async () => {
     if (selectedIds.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedIds.length} monitors?`)) return;
+    if (!confirm(`Delete ${selectedIds.length} selected monitor${selectedIds.length === 1 ? "" : "s"}?`)) return;
 
+    setBulkDeleting(true);
     try {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/monitors/bulk-delete", {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken,
@@ -130,20 +140,23 @@ export function MonitorPreview() {
       });
 
       if (!response.ok) throw new Error("Bulk delete failed");
-      
-      const { deleted_count } = await response.json();
-      toast.success(`${deleted_count} monitors deleted`);
+
+      const { deleted_count } = (await response.json()) as { deleted_count: number };
+      toast.success(`${deleted_count} monitor${deleted_count === 1 ? "" : "s"} deleted`);
       setSelectedIds([]);
       void fetchMonitors();
     } catch {
-      toast.error("Failed to perform bulk delete");
+      toast.error("Bulk delete failed");
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
-  const handleCreateOrUpdate = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const handleCreateOrUpdate = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     setIsSubmitting(true);
-    const formData = new FormData(e.currentTarget);
+
+    const formData = new FormData(event.currentTarget);
     const payload = {
       name: formData.get("name") as string,
       url: formData.get("url") as string,
@@ -157,6 +170,7 @@ export function MonitorPreview() {
 
       const response = await fetch(path, {
         method,
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken,
@@ -169,7 +183,7 @@ export function MonitorPreview() {
         throw new Error(errData.detail || `Failed to ${editingMonitor ? "update" : "create"} monitor`);
       }
 
-      toast.success(`Monitor ${editingMonitor ? "updated" : "created"} successfully`);
+      toast.success(`Monitor ${editingMonitor ? "updated" : "created"}`);
       setIsCreateOpen(false);
       setEditingMonitor(null);
       void fetchMonitors();
@@ -183,85 +197,129 @@ export function MonitorPreview() {
 
   const getDomain = (url: string) => {
     try {
-      const u = new URL(url);
-      return u.hostname.replace("www.", "");
+      const parsed = new URL(url);
+      return parsed.hostname.replace("www.", "");
     } catch {
       return "unknown";
     }
   };
 
-  const formatInterval = (sec: number) => {
-    if (sec < 60) return `${sec}s`;
-    return `${Math.floor(sec / 60)}m${sec % 60}s`;
+  const formatInterval = (seconds: number) => {
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+  };
+
+  const allSelected = Boolean(monitors?.length && selectedIds.length === monitors.length);
+  const hasSelection = selectedIds.length > 0;
+
+  const toggleAll = () => {
+    if (!monitors) return;
+    setSelectedIds(allSelected ? [] : monitors.map((monitor) => monitor.id));
+  };
+
+  const toggleMonitor = (id: number) => {
+    setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   };
 
   return (
     <Card className="glass-panel overflow-hidden">
-      <CardHeader className="border-b border-white/10">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
+      <CardHeader className="border-b border-white/10 p-4 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
             <CardTitle className="flex items-center gap-2">
               <Radar className="size-4 text-emerald-200" />
-              Monitoring Dashboard
+              Monitors
             </CardTitle>
-            <CardDescription>
-              Manage your active Vinted search monitors.
-            </CardDescription>
+            <CardDescription>Manage search URLs, check cadence, and monitor controls.</CardDescription>
           </div>
-          <div className="flex items-center gap-2">
-            {selectedIds.length > 0 && (
-              <Button 
-                variant="destructive" 
-                size="sm" 
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            {hasSelection ? (
+              <Button
+                aria-label={`Delete ${selectedIds.length} selected monitors`}
+                className="w-full animate-in fade-in slide-in-from-right-2 sm:w-auto"
+                disabled={bulkDeleting}
                 onClick={handleBulkDelete}
-                className="animate-in fade-in slide-in-from-right-2"
+                size="sm"
+                variant="destructive"
               >
-                <Trash2 className="mr-1 size-3.5" />
-                Delete Selected ({selectedIds.length})
+                {bulkDeleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                Delete selected ({selectedIds.length})
               </Button>
-            )}
-            
-            <Dialog open={isCreateOpen} onOpenChange={(open) => {
-              setIsCreateOpen(open);
-              if (!open) setEditingMonitor(null);
-            }}>
-              <DialogTrigger render={<Button size="sm">
-                <Plus className="mr-1 size-3.5" />
-                New Monitor
-              </Button>} />
-              <DialogContent className="sm:max-w-[425px]">
+            ) : null}
+
+            <Dialog
+              open={isCreateOpen}
+              onOpenChange={(open) => {
+                setIsCreateOpen(open);
+                if (!open) setEditingMonitor(null);
+              }}
+            >
+              <DialogTrigger
+                render={
+                  <Button className="w-full sm:w-auto" size="sm">
+                    <Plus className="size-3.5" />
+                    New monitor
+                  </Button>
+                }
+              />
+              <DialogContent className="sm:max-w-[440px]">
                 <form onSubmit={handleCreateOrUpdate}>
                   <DialogHeader>
-                    <DialogTitle>{editingMonitor ? "Edit Monitor" : "Create Monitor"}</DialogTitle>
+                    <DialogTitle>{editingMonitor ? "Edit monitor" : "Create monitor"}</DialogTitle>
                     <DialogDescription>
-                      {editingMonitor 
-                        ? "Update the monitor settings below." 
-                        : "Add a new Vinted search URL to monitor for new listings."}
+                      {editingMonitor
+                        ? "Update this monitor without changing ownership or notification safety."
+                        : "Add a Vinted search URL and choose how often it should be checked."}
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
-                      <Label htmlFor="name">Friendly Name</Label>
-                      <Input id="name" name="name" defaultValue={editingMonitor?.name} placeholder="e.g. Nike Dunk Low 42" required />
+                      <Label htmlFor="name">Name</Label>
+                      <Input
+                        disabled={isSubmitting}
+                        id="name"
+                        name="name"
+                        defaultValue={editingMonitor?.name}
+                        placeholder="Nike Dunk Low 42"
+                        required
+                      />
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="url">Vinted URL</Label>
-                      <Input id="url" name="url" defaultValue={editingMonitor?.original_url} placeholder="https://www.vinted.fr/catalog?..." required />
+                      <Input
+                        disabled={isSubmitting}
+                        id="url"
+                        name="url"
+                        defaultValue={editingMonitor?.original_url}
+                        placeholder="https://www.vinted.fr/catalog?..."
+                        required
+                      />
                     </div>
                     <div className="grid gap-2">
-                      <Label htmlFor="interval_sec">Check Interval (seconds)</Label>
-                      <Input id="interval_sec" name="interval_sec" type="number" defaultValue={editingMonitor?.interval_sec || "120"} min="60" max="3600" required />
+                      <Label htmlFor="interval_sec">Check interval in seconds</Label>
+                      <Input
+                        disabled={isSubmitting}
+                        id="interval_sec"
+                        name="interval_sec"
+                        type="number"
+                        defaultValue={editingMonitor?.interval_sec || "120"}
+                        min="60"
+                        max="3600"
+                        required
+                      />
                     </div>
                   </div>
                   <DialogFooter>
-                    <Button type="submit" disabled={isSubmitting}>
+                    <Button className="w-full sm:w-auto" type="submit" disabled={isSubmitting}>
                       {isSubmitting ? (
                         <>
-                          <Loader2 className="mr-2 size-4 animate-spin" />
-                          {editingMonitor ? "Updating..." : "Creating..."}
+                          <Loader2 className="size-4 animate-spin" />
+                          {editingMonitor ? "Updating" : "Creating"}
                         </>
+                      ) : editingMonitor ? (
+                        "Update monitor"
                       ) : (
-                        editingMonitor ? "Update Monitor" : "Create Monitor"
+                        "Create monitor"
                       )}
                     </Button>
                   </DialogFooter>
@@ -271,134 +329,157 @@ export function MonitorPreview() {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="grid gap-5 p-4 lg:grid-cols-[1fr_17rem]">
-        <div className="overflow-hidden rounded-2xl border border-white/10">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10">
-                  <input 
-                    type="checkbox" 
-                    className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
-                    checked={!!(monitors && monitors.length > 0 && selectedIds.length === monitors.length)}
-                    onChange={() => {
-                      if (monitors) {
-                        if (selectedIds.length === monitors.length) setSelectedIds([]);
-                        else setSelectedIds(monitors.map(m => m.id));
-                      }
-                    }}
-                  />
-                </TableHead>
-                <TableHead>Search</TableHead>
-                <TableHead>Domain</TableHead>
-                <TableHead>Interval</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
+      <CardContent className="grid gap-4 p-3 sm:p-5 xl:grid-cols-[minmax(0,1fr)_17rem]">
+        <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/10">
+          <div className="overflow-x-auto">
+            <Table className="min-w-[760px]">
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                    <Loader2 className="mx-auto size-6 animate-spin opacity-20" />
-                    <p className="mt-2">Loading monitors...</p>
-                  </TableCell>
+                  <TableHead className="w-10">
+                    <input
+                      aria-label="Select all monitors"
+                      checked={allSelected}
+                      className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
+                      disabled={!monitors?.length || loading}
+                      onChange={toggleAll}
+                      type="checkbox"
+                    />
+                  </TableHead>
+                  <TableHead>Search</TableHead>
+                  <TableHead>Domain</TableHead>
+                  <TableHead className="text-right">Interval</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ) : error ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="h-32 text-center text-red-400">
-                    Failed to load monitors.
-                  </TableCell>
-                </TableRow>
-              ) : monitors && monitors.length > 0 ? (
-                monitors.map((monitor) => (
-                  <TableRow key={monitor.id} className={!monitor.is_active ? "opacity-60" : ""}>
-                    <TableCell>
-                      <input 
-                        type="checkbox" 
-                        className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
-                        checked={selectedIds.includes(monitor.id)}
-                        onChange={() => {
-                          setSelectedIds(prev => 
-                            prev.includes(monitor.id) 
-                              ? prev.filter(i => i !== monitor.id) 
-                              : [...prev, monitor.id]
-                          );
-                        }}
-                      />
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="h-36 text-center text-muted-foreground">
+                      <Loader2 className="mx-auto size-5 animate-spin text-emerald-200" />
+                      <p className="mt-2 text-sm">Loading monitors</p>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2 font-medium">
-                        {monitor.name}
-                        {monitor.is_active ? null : <Badge variant="secondary">Paused</Badge>}
-                      </div>
-                      <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                        <ExternalLink className="size-3" />
-                        <a 
-                          href={monitor.original_url} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          className="hover:text-emerald-200"
-                        >
-                          View source
-                        </a>
-                      </div>
+                  </TableRow>
+                ) : error ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="h-36 text-center text-sm text-red-200">
+                      Monitors could not be loaded. Refresh the page or try again later.
                     </TableCell>
-                    <TableCell>{getDomain(monitor.original_url)}</TableCell>
-                    <TableCell>{formatInterval(monitor.interval_sec)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button 
-                          variant="ghost" 
-                          size="icon-xs" 
-                          title="Edit"
-                          onClick={() => {
-                            setEditingMonitor(monitor);
-                            setIsCreateOpen(true);
-                          }}
-                        >
-                          <MoreVertical className="size-3.5" />
-                        </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon-xs" 
-                          title="Check Now"
-                          onClick={() => handleAction(monitor.id, "check-now")}
-                          disabled={!monitor.is_active}
-                        >
-                          <RefreshCcw className="size-3.5" />
-                        </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon-xs" 
-                          title={monitor.is_active ? "Pause" : "Resume"}
-                          onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
-                        >
-                          {monitor.is_active ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-                        </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon-xs" 
-                          className="text-destructive hover:bg-destructive/10"
-                          title="Delete"
-                          onClick={() => handleAction(monitor.id, "delete")}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
+                  </TableRow>
+                ) : monitors && monitors.length > 0 ? (
+                  monitors.map((monitor) => {
+                    const checkKey = `${monitor.id}:check-now`;
+                    const pauseKey = `${monitor.id}:pause`;
+                    const resumeKey = `${monitor.id}:resume`;
+                    const deleteKey = `${monitor.id}:delete`;
+
+                    return (
+                      <TableRow key={monitor.id} className={!monitor.is_active ? "opacity-70" : ""}>
+                        <TableCell>
+                          <input
+                            aria-label={`Select monitor ${monitor.name}`}
+                            checked={selectedIds.includes(monitor.id)}
+                            className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
+                            onChange={() => toggleMonitor(monitor.id)}
+                            type="checkbox"
+                          />
+                        </TableCell>
+                        <TableCell className="max-w-[18rem]">
+                          <div className="flex min-w-0 items-center gap-2 font-medium">
+                            <span className="truncate">{monitor.name}</span>
+                            {monitor.is_active ? null : <Badge variant="secondary">Paused</Badge>}
+                          </div>
+                          <a
+                            aria-label={`Open source search for ${monitor.name}`}
+                            className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground hover:text-emerald-200"
+                            href={monitor.original_url}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            <ExternalLink className="size-3 shrink-0" />
+                            <span className="truncate">Open source URL</span>
+                          </a>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{getDomain(monitor.original_url)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatInterval(monitor.interval_sec)}</TableCell>
+                        <TableCell>
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              aria-label={`Edit monitor ${monitor.name}`}
+                              onClick={() => {
+                                setEditingMonitor(monitor);
+                                setIsCreateOpen(true);
+                              }}
+                              size="icon-xs"
+                              title="Edit"
+                              variant="ghost"
+                            >
+                              <MoreVertical className="size-3.5" />
+                            </Button>
+                            <Button
+                              aria-label={`Run monitor check for ${monitor.name}`}
+                              disabled={!monitor.is_active || actionKey === checkKey}
+                              onClick={() => handleAction(monitor.id, "check-now")}
+                              size="icon-xs"
+                              title="Check now"
+                              variant="ghost"
+                            >
+                              {actionKey === checkKey ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <RefreshCcw className="size-3.5" />
+                              )}
+                            </Button>
+                            <Button
+                              aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
+                              disabled={actionKey === pauseKey || actionKey === resumeKey}
+                              onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
+                              size="icon-xs"
+                              title={monitor.is_active ? "Pause" : "Resume"}
+                              variant="ghost"
+                            >
+                              {actionKey === pauseKey || actionKey === resumeKey ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : monitor.is_active ? (
+                                <Pause className="size-3.5" />
+                              ) : (
+                                <Play className="size-3.5" />
+                              )}
+                            </Button>
+                            <Button
+                              aria-label={`Delete monitor ${monitor.name}`}
+                              className="text-destructive hover:bg-destructive/10"
+                              disabled={actionKey === deleteKey}
+                              onClick={() => handleAction(monitor.id, "delete")}
+                              size="icon-xs"
+                              title="Delete"
+                              variant="ghost"
+                            >
+                              {actionKey === deleteKey ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="size-3.5" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={5} className="h-36 text-center text-muted-foreground">
+                      <div className="mx-auto max-w-sm space-y-2">
+                        <p className="text-sm font-medium text-foreground">No monitors yet</p>
+                        <p className="text-sm">Create a monitor to begin tracking a Vinted search URL.</p>
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                    No monitors found. Create one to start tracking.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </div>
-        <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
           {events.map((event) => (
             <div key={event.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
               <div className="mb-3 flex size-9 items-center justify-center rounded-xl bg-emerald-300/10 text-emerald-200">
@@ -406,7 +487,7 @@ export function MonitorPreview() {
               </div>
               <p className="text-sm font-medium">{event.label}</p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Verified status of the underlying monitoring engine.
+                Current controls preserve backend ownership, deduplication, and notification safety.
               </p>
             </div>
           ))}

@@ -35,8 +35,8 @@ const principles = [
     icon: Database,
   },
   {
-    title: "Safe migration",
-    value: "New routes stay visual until versioned API contracts exist.",
+    title: "Safe controls",
+    value: "Every workflow keeps auth, CSRF, ownership, and backend runtime boundaries intact.",
     icon: ShieldCheck,
   },
   {
@@ -54,26 +54,26 @@ export default function Home() {
         <div className="mx-auto grid min-h-screen max-w-7xl items-center gap-12 px-6 py-10 lg:grid-cols-[1fr_0.9fr] lg:px-10">
           <AnimatedSection className="space-y-8">
             <Badge className="w-fit border-emerald-300/20 bg-emerald-300/10 text-emerald-200">
-              Phase 1 frontend foundation
+              Live monitoring console
             </Badge>
             <div className="space-y-5">
               <h1 className="max-w-4xl text-5xl font-semibold tracking-tight text-balance sm:text-6xl lg:text-7xl">
                 Vinted Monitor dashboard, rebuilt for focused operations.
               </h1>
               <p className="max-w-2xl text-lg leading-8 text-muted-foreground">
-                A Next.js shell for the existing FastAPI service. Jinja pages stay online while the new frontend grows behind stable API boundaries.
+                A focused control surface for Vinted search monitors, Telegram delivery, and item discovery.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
               <Link href="/dashboard" className={cn(buttonVariants({ size: "lg" }), "h-11 px-5")}>
-                Open dashboard shell
+                Open dashboard
                 <ArrowRight className="size-4" />
               </Link>
               <Link
                 href="/login"
                 className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 px-5")}
               >
-                Preview login
+                Sign in
               </Link>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
@@ -99,7 +99,7 @@ export default function Home() {
           <SectionHeading
             eyebrow="Product concept"
             title="A command center for search monitoring, deduplication, and notifications."
-            description="This design starts with product-specific screens instead of generic marketing sections. Demo values are labeled and will be replaced by FastAPI JSON endpoints in later phases."
+            description="Review monitor health, recent findings, and notification readiness from one responsive interface."
           />
         </AnimatedSection>
         <AnimatedSection delay={0.08} className="mb-8">
@@ -115,15 +115,15 @@ export default function Home() {
             <div>
               <div className="mb-3 flex items-center gap-2 text-sm text-emerald-200">
                 <Sparkles className="size-4" />
-                Ready for incremental migration
+                Ready for daily operations
               </div>
-              <h2 className="text-2xl font-semibold tracking-tight">Backend behavior remains untouched.</h2>
+              <h2 className="text-2xl font-semibold tracking-tight">Backend-owned safety remains in place.</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                This frontend starts as a visual and routing foundation. Auth, CSRF, scheduler, scraper, Telegram, and deduplication stay in FastAPI until explicit API work begins.
+                Auth, CSRF, scheduler, scraper, Telegram, and deduplication stay in FastAPI while the frontend uses the versioned API surface.
               </p>
             </div>
             <Link href="/settings" className={buttonVariants({ variant: "secondary" })}>
-              View settings shell
+              View settings
             </Link>
           </div>
         </AnimatedSection>

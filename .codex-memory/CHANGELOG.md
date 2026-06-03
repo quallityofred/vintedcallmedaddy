@@ -53,3 +53,5 @@ tags:
 - 2026-06-03: Finished API-first migration cleanup by removing obsolete legacy backend route modules, moving invite-code consumption into a shared API-safe helper, keeping backend `/` as safe service JSON/production frontend redirect, and updating route-table/audit tests for the active `/api/v1/*` architecture.
 
 - 2026-06-03: Added Next.js auth guards for `/dashboard`, `/settings`, and `/admin`; unauthenticated users redirect to `/login?next=...`, login/register preserve sanitized `next` redirects, non-admin users cannot see admin content, and Playwright coverage was expanded.
+
+- 2026-06-03: Polished the Next.js frontend UI for dashboard/settings/admin workflows: standardized async loading and disabled states, improved monitor/item/invite table layouts, added accessible action labels, removed unfinished user-facing migration/legacy copy, and verified frontend lint/build/Playwright.

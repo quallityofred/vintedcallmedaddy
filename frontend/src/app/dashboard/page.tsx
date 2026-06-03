@@ -18,7 +18,7 @@ export default function DashboardPage() {
         <DashboardStats />
 
         <AnimatedSection delay={0.06}>
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 xl:grid-cols-2">
             <BackendHealthCard />
             <SystemStatusCard />
           </div>
@@ -31,7 +31,6 @@ export default function DashboardPage() {
         <AnimatedSection delay={0.10}>
           <FoundItemsList />
         </AnimatedSection>
-
       </PageShell>
     </AuthGuard>
   );

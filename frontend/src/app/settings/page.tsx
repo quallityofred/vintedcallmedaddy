@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { KeyRound, Loader2, Send, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { AnimatedSection } from "@/components/animated-section";
@@ -33,6 +33,8 @@ function SettingsContent() {
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [token, setToken] = useState("");
   const [chatId, setChatId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [actionInFlight, setActionInFlight] = useState<"start" | "stop" | "test" | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -68,6 +70,7 @@ function SettingsContent() {
   };
 
   const handleUpdate = async () => {
+    setSaving(true);
     try {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/settings/telegram", {
@@ -89,10 +92,13 @@ function SettingsContent() {
       void fetchStatus();
     } catch {
       toast.error("Failed to update settings");
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleAction = async (action: "start" | "stop" | "test") => {
+    setActionInFlight(action);
     try {
       const csrfToken = await getCsrfToken();
       const response = await fetch(`/api/v1/telegram/${action}`, {
@@ -105,49 +111,117 @@ function SettingsContent() {
       void fetchStatus();
     } catch {
       toast.error(`Failed to ${action} bot`);
+    } finally {
+      setActionInFlight(null);
     }
   };
-
-  if (loading) return <Loader2 className="animate-spin" />;
 
   return (
     <PageShell
       eyebrow="Settings"
       title="Telegram Controls"
-      description="Configure your Telegram bot for notifications."
+      description="Configure private notification delivery for this account."
     >
-      <AnimatedSection className="grid gap-5 lg:grid-cols-[1fr_0.8fr]">
+      <AnimatedSection className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <Card className="glass-panel">
-          <CardHeader>
+          <CardHeader className="border-b border-white/10 p-4 sm:p-6">
             <CardTitle className="flex items-center gap-2">
               <Send className="size-4 text-emerald-200" />
               Telegram Bot
             </CardTitle>
-            <CardDescription>
-              Configure credentials. Tokens are write-only.
-            </CardDescription>
+            <CardDescription>Tokens are write-only. Saved credentials are shown only as masked status.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="token">Bot token (leave empty to keep current)</Label>
-              <Input id="token" type="password" value={token} onChange={(e) => setToken(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="chat">Chat ID</Label>
-              <Input id="chat" value={chatId} onChange={(e) => setChatId(e.target.value)} />
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={handleUpdate}>Save Credentials</Button>
-              <Button variant="outline" onClick={() => handleAction("test")}>Send Test</Button>
-              {status?.bot_running
-                ? <Button variant="destructive" onClick={() => handleAction("stop")}>Stop Bot</Button>
-                : <Button onClick={() => handleAction("start")} disabled={!status?.token_configured}>Start Bot</Button>
-              }
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Saved token: {status?.token_configured ? status.token_masked : "not configured"}.
-              {" "}Saved chat: {status?.chat_id_configured ? status.chat_id_masked : "not configured"}.
-            </p>
+          <CardContent className="space-y-5 p-4 sm:p-6">
+            {loading ? (
+              <div className="flex h-40 flex-col items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-muted-foreground">
+                <Loader2 className="size-5 animate-spin text-emerald-200" />
+                <p className="mt-2 text-sm">Loading Telegram settings</p>
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="token">Bot token</Label>
+                    <Input
+                      autoComplete="off"
+                      disabled={saving}
+                      id="token"
+                      onChange={(event) => setToken(event.target.value)}
+                      placeholder="Leave empty to keep saved token"
+                      type="password"
+                      value={token}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="chat">Chat ID</Label>
+                    <Input
+                      autoComplete="off"
+                      disabled={saving}
+                      id="chat"
+                      onChange={(event) => setChatId(event.target.value)}
+                      placeholder="Leave empty to keep saved chat"
+                      value={chatId}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  <Button className="sm:w-auto" disabled={saving} onClick={handleUpdate}>
+                    {saving ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+                    {saving ? "Saving" : "Save credentials"}
+                  </Button>
+                  <Button
+                    disabled={actionInFlight !== null || !status?.token_configured || !status?.chat_id_configured}
+                    onClick={() => handleAction("test")}
+                    variant="outline"
+                  >
+                    {actionInFlight === "test" ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                    Send test
+                  </Button>
+                  {status?.bot_running ? (
+                    <Button
+                      disabled={actionInFlight !== null}
+                      onClick={() => handleAction("stop")}
+                      variant="destructive"
+                    >
+                      {actionInFlight === "stop" ? <Loader2 className="size-4 animate-spin" /> : null}
+                      Stop bot
+                    </Button>
+                  ) : (
+                    <Button
+                      disabled={actionInFlight !== null || !status?.token_configured}
+                      onClick={() => handleAction("start")}
+                    >
+                      {actionInFlight === "start" ? <Loader2 className="size-4 animate-spin" /> : null}
+                      Start bot
+                    </Button>
+                  )}
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm">
+                  <p className="font-medium">Saved credential status</p>
+                  <p className="mt-2 text-muted-foreground">
+                    Token: {status?.token_configured ? status.token_masked : "not configured"}
+                    {" | "}
+                    Chat: {status?.chat_id_configured ? status.chat_id_masked : "not configured"}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    Full token values are never rendered back into the browser after saving.
+                  </p>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        <Card className="glass-panel h-fit">
+          <CardHeader className="border-b border-white/10 p-4 sm:p-6">
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="size-4 text-emerald-200" />
+              Safety model
+            </CardTitle>
+            <CardDescription>Notification settings stay scoped to the current user.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 p-4 text-sm text-muted-foreground sm:p-6">
+            <p>Credentials are stored server-side and are never exposed through frontend environment variables.</p>
+            <p>Bot actions use CSRF-protected API calls through the same-origin `/api` rewrite.</p>
           </CardContent>
         </Card>
       </AnimatedSection>
