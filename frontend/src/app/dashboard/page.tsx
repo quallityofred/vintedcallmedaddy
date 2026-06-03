@@ -2,6 +2,7 @@ import { AnimatedSection } from "@/components/animated-section";
 import { BackendHealthCard } from "@/components/backend-health-card";
 import { DashboardStats } from "@/components/dashboard-stats";
 import { MonitorPreview } from "@/components/monitor-preview";
+import { FoundItemsList } from "@/components/found-items-list";
 import { PageShell } from "@/components/page-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,9 +10,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 export default function DashboardPage() {
   return (
     <PageShell
-      eyebrow="Dashboard shell"
+      eyebrow="Dashboard"
       title="Monitor operations"
-      description="A protected-layout preview for the future API-backed dashboard."
+      description="Manage your Vinted monitors and track findings."
     >
       <DashboardStats />
 
@@ -21,6 +22,10 @@ export default function DashboardPage() {
 
       <AnimatedSection delay={0.08}>
         <MonitorPreview />
+      </AnimatedSection>
+
+      <AnimatedSection delay={0.10}>
+        <FoundItemsList />
       </AnimatedSection>
 
       <AnimatedSection delay={0.12}>
@@ -37,7 +42,7 @@ export default function DashboardPage() {
             </Badge>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-3">
-            {["/api/v1/auth/me", "/api/v1/dashboard/stats", "/api/v1/monitors"].map((endpoint) => (
+            {["/api/v1/auth/me", "/api/v1/dashboard/stats", "/api/v1/monitors", "/api/v1/items"].map((endpoint) => (
               <div key={endpoint} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <p className="font-mono text-sm text-emerald-200">{endpoint}</p>
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -45,7 +50,9 @@ export default function DashboardPage() {
                     ? "Live data. Dashboard cards now consume this user-scoped JSON endpoint."
                     : endpoint === "/api/v1/auth/me"
                     ? "Live data. Used for session validation and user profile."
-                    : "Contract pending. This area still uses demo/placeholder data."}
+                    : endpoint === "/api/v1/items"
+                    ? "Live data. Found items list integrated."
+                    : "Contract pending."}
                 </p>
               </div>
             ))}
