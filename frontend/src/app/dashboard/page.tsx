@@ -1,5 +1,6 @@
 import { AnimatedSection } from "@/components/animated-section";
 import { BackendHealthCard } from "@/components/backend-health-card";
+import { SystemStatusCard } from "@/components/system-status";
 import { DashboardStats } from "@/components/dashboard-stats";
 import { MonitorPreview } from "@/components/monitor-preview";
 import { FoundItemsList } from "@/components/found-items-list";
@@ -17,7 +18,10 @@ export default function DashboardPage() {
       <DashboardStats />
 
       <AnimatedSection delay={0.06}>
-        <BackendHealthCard />
+        <div className="grid gap-4 md:grid-cols-2">
+          <BackendHealthCard />
+          <SystemStatusCard />
+        </div>
       </AnimatedSection>
 
       <AnimatedSection delay={0.08}>

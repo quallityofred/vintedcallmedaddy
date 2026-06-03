@@ -43,3 +43,5 @@ tags:
 - 2026-06-03: Implemented items and hidden-sellers API (list/detail/hide) and integrated items list into the dashboard with seller-hide action support.
 
 - 2026-06-03: Implemented system status API and admin-only invite management JSON APIs.
+
+- 2026-06-03: Integrated System Status card in dashboard and created Admin Invite management page.
