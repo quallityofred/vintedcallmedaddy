@@ -3,7 +3,7 @@ import secrets
 import os
 
 from fastapi import Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,7 +67,7 @@ def _secure_cookie_required() -> bool:
     return bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER"))
 
 
-def set_session_cookie(response: RedirectResponse, token: str) -> None:
+def set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
         token,
@@ -78,5 +78,5 @@ def set_session_cookie(response: RedirectResponse, token: str) -> None:
     )
 
 
-def clear_session_cookie(response: RedirectResponse) -> None:
+def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE)

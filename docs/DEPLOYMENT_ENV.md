@@ -84,6 +84,7 @@ Service:
 | --- | --- | --- | --- | --- |
 | `NEXT_PUBLIC_APP_NAME` | `Vinted Monitor` | no | Project default | Public UI label. |
 | `NEXT_PUBLIC_SPLINE_SCENE_URL` | empty | no | Spline export URL if used | Public URL only. Leave empty until a scene is ready. |
+| `NEXT_PUBLIC_LEGACY_LOGIN_URL` | empty | no | Backend public login URL if a temporary fallback link is needed | Optional public URL only. Leave empty to hide the fallback in production. |
 
 ## After Creating Railway Services
 

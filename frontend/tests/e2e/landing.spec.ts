@@ -32,3 +32,38 @@ test("placeholder app pages stay reachable", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Telegram and scraper controls" })).toBeVisible();
   await expect(page.getByText("Token values should stay write-only")).toBeVisible();
 });
+
+test("login page posts credentials and shows safe API errors", async ({ page }) => {
+  await page.route("**/api/v1/auth/csrf", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ csrf_token: "test-csrf-token" }),
+    });
+  });
+
+  await page.route("**/api/v1/auth/login", async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("POST");
+    expect(request.headers()["x-csrf-token"]).toBe("test-csrf-token");
+    expect(request.postDataJSON()).toEqual({
+      username: "wrong-user",
+      password: "wrong-password",
+    });
+
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Invalid username or password" }),
+    });
+  });
+
+  await page.goto("/login");
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
+
+  await page.getByLabel("Username").fill("wrong-user");
+  await page.getByLabel("Password").fill("wrong-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  await expect(page.getByRole("alert").filter({ hasText: "Invalid username or password." })).toBeVisible();
+});
