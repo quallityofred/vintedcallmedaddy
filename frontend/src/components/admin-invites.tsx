@@ -113,23 +113,22 @@ export function AdminInvites() {
         <CardDescription>Create single-use invite codes and revoke unused codes.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 p-3 sm:p-5">
-        <form className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3 sm:grid-cols-[1fr_auto]" onSubmit={handleCreate}>
+        <form className="grid gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:grid-cols-[1fr_auto] sm:items-end" onSubmit={handleCreate}>
           <div className="grid gap-2">
-            <Label htmlFor="invite-code">Invite code</Label>
+            <Label htmlFor="invite-code" className="text-xs text-muted-foreground uppercase tracking-wider">New invite code</Label>
             <Input
               disabled={creating}
               id="invite-code"
               onChange={(event) => setNewCode(event.target.value)}
-              placeholder="Leave blank to generate one"
+              placeholder="e.g., INV-ABC12345 (optional)"
               value={newCode}
+              className="bg-black/20"
             />
           </div>
-          <div className="flex items-end">
-            <Button className="w-full sm:w-auto" disabled={creating} type="submit">
-              {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-              {creating ? "Creating" : "Create invite"}
-            </Button>
-          </div>
+          <Button className="w-full sm:w-auto" disabled={creating} type="submit">
+            {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            {creating ? "Creating" : "Create invite"}
+          </Button>
         </form>
 
         {loading ? (
