@@ -72,20 +72,18 @@ def parse_vinted_url(url: str) -> dict:
 
         if normalised_key in _ARRAY_PARAMS or (key + "[]") in _ARRAY_PARAMS:
             array_key = normalised_key if normalised_key in _ARRAY_PARAMS else key + "[]"
-            int_values = []
-            for v in values:
-                try:
-                    int_values.append(int(v))
-                except (ValueError, TypeError):
-                    pass
-            if int_values:
-                params[array_key] = int_values
+            # Ensure array parameters are always lists, containing ints.
+            # Convert values (which is a list from parse_qs) to a list of ints.
+            params[array_key] = [int(v) for v in values if v.isdigit()]
+            # Re-verify it is a list
+            if not isinstance(params[array_key], list):
+                params[array_key] = list(params[array_key])
 
         elif key in _SCALAR_PARAMS:
             params[key] = values[0] if values else ""
 
-        elif key == "page":
-            # always start from page 1
+        elif key in {"page", "time", "search_id"}:
+            # Ignore junk parameters
             pass
 
         else:
