@@ -96,7 +96,7 @@ async def _update_monitor_interval(
 			monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
 
-async def check_monitor(monitor_id: int, client: VintedClient) -> None:
+async def check_monitor(monitor_id: int) -> None:
 	"""Main task: check a single monitor for new Vinted listings."""
 	try:
 		async with _new_session() as db:
@@ -105,6 +105,7 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 			if monitor is None or not monitor.is_active:
 				return
 
+			user = await db.get(User, monitor.user_id)
 			params = json.loads(monitor.params_json)
 			domains = json.loads(monitor.domains_json)
 			user_id = monitor.user_id
@@ -116,7 +117,26 @@ async def check_monitor(monitor_id: int, client: VintedClient) -> None:
 			)
 			hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
 
+			# Configure CF Worker for this user
+			from app.scraper.client import VintedClient, CloudflareFallback
+			from app.scraper.rate_limiter import TokenBucketLimiter
+
+			cf_fallback = None
+			if user and user.cf_worker_url:
+				cf_fallback = CloudflareFallback(
+					worker_url=user.cf_worker_url,
+					block_threshold=user.cf_worker_block_threshold,
+					recovery_minutes=user.cf_worker_recovery_minutes,
+				)
+			
+			rate_limiter = TokenBucketLimiter(
+				rate=float(settings.rate_limit_per_minute),
+				per=60.0,
+			)
+			client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
+
 		items = await client.search_all_domains(params, domains)
+		await client.close()
 
 		if not items:
 			async with _new_session() as db:
@@ -277,8 +297,7 @@ async def process_pending_notifications() -> None:
 class MonitorScheduler:
 	"""APScheduler wrapper that manages per-monitor polling jobs."""
 
-	def __init__(self, client: VintedClient) -> None:
-		self.client = client
+	def __init__(self) -> None:
 		self.scheduler = AsyncIOScheduler()
 		self.job_ids: dict[int, str] = {}
 
@@ -294,7 +313,7 @@ class MonitorScheduler:
 			job = self.scheduler.add_job(
 				check_monitor,
 				trigger=IntervalTrigger(seconds=effective),
-				args=[monitor.id, self.client],
+				args=[monitor.id],
 				id=f"monitor_{monitor.id}",
 				next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
 			)
@@ -314,8 +333,8 @@ class MonitorScheduler:
 		job = self.scheduler.add_job(
 			check_monitor,
 			trigger=IntervalTrigger(seconds=effective),
-			args=[monitor_id, self.client],
-			id=f"monitor_{monitor_id}",
+			args=[monitor_id],
+			id=f"monitor_{monitor.id}",
 		)
 		if job:
 			self.job_ids[monitor_id] = job.id
