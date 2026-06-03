@@ -50,13 +50,13 @@ export function DomainSelection({
   };
 
   return (
-    <div className="grid gap-2">
+    <div className="grid gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
       <div className="flex items-center justify-between">
-        <Label>Target Domains ({selectedDomains.length} / {domains.length})</Label>
+        <Label className="text-sm font-medium">Target Domains ({selectedDomains.length} / {domains.length})</Label>
         <button
           type="button"
           onClick={toggleAll}
-          className="text-xs text-emerald-200 hover:underline"
+          className="text-xs text-emerald-200 hover:text-emerald-100 hover:underline"
         >
           {selectedDomains.length === domains.length ? "Deselect all" : "Select all"}
         </button>
@@ -69,7 +69,7 @@ export function DomainSelection({
               checked={selectedDomains.includes(d.domain)}
               onCheckedChange={() => toggleDomain(d.domain)}
             />
-            <Label htmlFor={d.domain} className="font-normal">
+            <Label htmlFor={d.domain} className="text-sm font-normal cursor-pointer">
               {d.flag} {d.domain}
             </Label>
           </div>
