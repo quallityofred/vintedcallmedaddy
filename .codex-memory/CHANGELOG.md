@@ -47,3 +47,5 @@ tags:
 - 2026-06-03: Integrated System Status card in dashboard and created Admin Invite management page.
 
 - 2026-06-03: Performed end-to-end verification and frontend UI polish pass, including fixes for test data collisions and frontend type/lint errors.
+
+- 2026-06-03: Finalized legacy cleanup by removing Jinja2 templates, disabling legacy routes, and updating audit tests.

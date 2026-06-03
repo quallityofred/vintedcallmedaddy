@@ -200,25 +200,29 @@ async def test_settings_page_masks_saved_telegram_credentials(db_session):
 
 @pytest.mark.asyncio
 async def test_admin_invite_routes_are_registered_and_admin_only(db_session):
-    admin, admin_token = await _create_user_session(db_session, "admin_user", is_admin=True)
-    _, user_token = await _create_user_session(db_session, "regular_user", is_admin=False)
+    admin, admin_token = await _create_user_session(db_session, "admin_user_2", is_admin=True)
+    _, user_token = await _create_user_session(db_session, "regular_user_2", is_admin=False)
     _override_db(db_session)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Non-admin access
         client.cookies.set("session_token", user_token)
-        assert (await client.get("/admin/invites")).status_code == 403
+        assert (await client.get("/api/v1/admin/invites")).status_code == 403
 
+        # Admin access
         client.cookies.set("session_token", admin_token)
-        assert (await client.get("/admin/invites")).status_code == 200
+        assert (await client.get("/api/v1/admin/invites")).status_code == 200
+        
+        # Test creation
         response = await client.post(
-            "/admin/invites",
-            data={"_csrf_token": csrf_token_for_session(admin_token), "code": "audit-code", "max_uses": "2"},
-            follow_redirects=False,
+            "/api/v1/admin/invites",
+            headers={"X-CSRF-Token": csrf_token_for_session(admin_token)},
+            json={"code": "audit-code-2", "max_uses": 2},
         )
-        assert response.status_code == 303
+        assert response.status_code == 200
 
-    result = await db_session.execute(select(InviteCode).where(InviteCode.code == "audit-code"))
+    result = await db_session.execute(select(InviteCode).where(InviteCode.code == "audit-code-2"))
     invite = result.scalar_one()
     assert invite.created_by_id == admin.id
     assert invite.max_uses == 2
