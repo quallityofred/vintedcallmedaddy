@@ -60,30 +60,12 @@ async def lifespan(app: FastAPI):
         raise
 
     # 2. VintedClient
-    from app.scraper.client import VintedClient, CloudflareFallback
-    from app.scraper.rate_limiter import TokenBucketLimiter
-
-    rate_limiter = TokenBucketLimiter(
-        rate=float(settings.rate_limit_per_minute),
-        per=60.0,
-    )
-    cf_fallback = (
-        CloudflareFallback(
-            worker_url=settings.cf_worker_url,
-            block_threshold=settings.cf_worker_block_threshold,
-            recovery_minutes=settings.cf_worker_recovery_minutes,
-        )
-        if settings.cf_worker_url
-        else None
-    )
-
-    scraper_client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
-    app.state.scraper_client = scraper_client
-    logger.info("Scraper client created")
+    # Note: Scraper client is now created per-user inside check_monitor
+    logger.info("Scraper client ready (per-user)")
 
     # 3. Scheduler
     from app.scheduler.tasks import MonitorScheduler
-    scheduler = MonitorScheduler(scraper_client)
+    scheduler = MonitorScheduler()
     app.state.scheduler = scheduler
     try:
         await scheduler.start()
@@ -126,13 +108,6 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduler stopped")
     except Exception:
         logger.exception("Scheduler stop error")
-
-    # Close scraper sessions
-    try:
-        await scraper_client.close()
-        logger.info("Scraper client closed")
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
