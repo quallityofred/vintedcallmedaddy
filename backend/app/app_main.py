@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _is_production_runtime() -> bool:
+    return settings.environment.lower() in {"production", "prod"} or bool(
+        os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER")
+    )
+
+
+def _backend_root_payload() -> dict[str, object]:
+    return {
+        "service": "vintedbot-backend",
+        "status": "ok",
+        "frontend": settings.frontend_url or None,
+        "health": "/health",
+        "api_health": "/api/health",
+        "api": "/api/v1",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -153,11 +170,9 @@ def create_app() -> FastAPI:
     # в”Ђв”Ђ Routers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     from app.web.admin_api_router import router as admin_api_router
     from app.web.auth_api_router import router as auth_api_router
-    from app.web.auth_router import router as auth_router
     from app.web.dashboard_api_router import router as dashboard_api_router
     from app.web.items_api_router import router as items_api_router
     from app.web.monitors_api_router import router as monitors_api_router
-    from app.web.router import router as web_router
     from app.web.settings_api_router import router as settings_api_router
     from app.web.system_api_router import router as system_api_router
 
@@ -168,8 +183,6 @@ def create_app() -> FastAPI:
     app.include_router(monitors_api_router)
     app.include_router(settings_api_router)
     app.include_router(system_api_router)
-    app.include_router(auth_router)
-    app.include_router(web_router)
 
     # в”Ђв”Ђ Exception handlers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     @app.exception_handler(RequireLoginException)
@@ -190,6 +203,12 @@ def create_app() -> FastAPI:
     async def health_check():
         """Liveness probe – used by Railway / Docker healthchecks."""
         return {"status": "ok", "service": "vinted-monitor"}
+
+    @app.get("/")
+    async def backend_root():
+        if _is_production_runtime() and settings.frontend_url:
+            return RedirectResponse(url=settings.frontend_url, status_code=307)
+        return JSONResponse(_backend_root_payload())
 
     @app.get("/api/health")
     async def api_health(request: Request):

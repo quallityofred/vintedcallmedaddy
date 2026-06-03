@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User, UserSession
 from app.web.auth import clear_session_cookie, generate_session_token, get_current_user, set_session_cookie
-from app.web.auth_router import consume_invite_code
 from app.web.csrf import API_CSRF_COOKIE, api_csrf_token_for_request, csrf_token_for_session, require_api_csrf
 from app.web.dependencies import get_db
+from app.web.invite_codes import consume_invite_code
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 

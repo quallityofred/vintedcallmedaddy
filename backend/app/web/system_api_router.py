@@ -6,7 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.web.dependencies import get_db, get_scheduler, require_user
+from app.web.api_dependencies import require_api_user
+from app.web.dependencies import get_db, get_scheduler
 from app.models import User
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ class SystemStatusResponse(BaseModel):
 async def get_system_status(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_user),
+    user: User = Depends(require_api_user),
 ):
     """Return non-secret system status."""
     scheduler = get_scheduler(request)

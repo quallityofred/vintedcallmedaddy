@@ -27,8 +27,8 @@ def _override_db(db_session) -> None:
 
 @pytest.mark.asyncio
 async def test_items_api_scoping(db_session):
-    user1 = await _create_user(db_session, "user1")
-    user2 = await _create_user(db_session, "user2")
+    user1 = await _create_user(db_session, "item_user1")
+    user2 = await _create_user(db_session, "item_user2")
     _override_db(db_session)
 
     m1 = Monitor(user_id=user1.id, name="M1", original_url="u1", params_json="{}", domains_json="[]")
@@ -43,7 +43,7 @@ async def test_items_api_scoping(db_session):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        await _login_user(client, "user1")
+        await _login_user(client, "item_user1")
         response = await client.get("/api/v1/items")
         assert response.status_code == 200
         data = response.json()

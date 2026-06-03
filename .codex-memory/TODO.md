@@ -29,11 +29,10 @@ tags:
 - 2026-06-03: Auth/register/CSRF API phase completed in [[Issues/ISS-AUTH-002 Next frontend registration API missing|ISS-AUTH-002]].
 - 2026-06-03: [[API Contract]] created and [[Issues/ISS-API-001 Full Next frontend API contract missing|ISS-API-001]] opened for remaining Next-ready APIs.
 - 2026-06-03: Settings Telegram/CF Worker/scraper API phase completed in [[Issues/ISS-API-002 Settings Telegram CF Worker scraper API missing|ISS-API-002]].
-- Next API phase: monitors CRUD/control. Start with user-scoped `GET /api/v1/monitors`, `POST /api/v1/monitors`, `GET/PATCH/DELETE /api/v1/monitors/{id}`, then scheduler-safe trigger/control endpoints.
+- Next API phase status: monitors CRUD/control, dashboard stats, items/hidden sellers, system status, and admin invite APIs are implemented. Current follow-up is frontend page polish and API client extraction around the implemented contracts.
 - 2026-06-03: Backend `/` behavior decided and implemented in [[Issues/ISS-FE-006 Backend public root is confusing after split|ISS-FE-006]]: production redirects to `FRONTEND_URL` when configured, otherwise returns minimal JSON; legacy Jinja dashboard stays at `/dashboard`.
-- Consider extracting a small frontend API client now that login uses relative `/api/v1/auth/*` requests.
-- Replace dashboard/settings placeholders with API-backed flows after monitor/dashboard APIs are stable.
-- Keep all existing Jinja routes until the replacement page has equivalent behavior and E2E coverage.
+- Consider extracting a small frontend API client now that login/register, dashboard, settings, monitors, items, hidden sellers, system status, and admin invite pages use relative `/api/v1/*` requests.
+- Keep backend legacy Jinja route modules removed. If a missing legacy behavior is discovered, restore it only behind an explicit API-first compatibility decision and tests.
 - 2026-06-03: Railway two-service split implemented and documented with backend root `backend` and frontend root `frontend`.
 - After Railway service creation, paste backend URL into frontend `BACKEND_URL`, then paste frontend URL into backend `FRONTEND_URL` and `ALLOWED_ORIGINS`.
 - Rotate any previously exposed database password, `DATABASE_URL`, `SECRET_KEY`, Telegram token, proxy credential, or other credential before deployment.
@@ -45,6 +44,12 @@ tags:
 - 2026-06-03: Telegram credentials are per-user write-only/masked in the Jinja settings UI.
 - 2026-06-03: Cloudflare Worker and scraper defaults are admin/global DB settings.
 - Follow up after deployment: verify an admin can change CF Worker/scraper defaults in production without redeploying.
+
+## API-first Cleanup
+
+- 2026-06-03: [[Issues/ISS-FE-007 Protected frontend routes visible while unauthenticated|ISS-FE-007]] fixed with client-side auth guards for `/dashboard`, `/settings`, and `/admin`.
+- 2026-06-03: [[Issues/ISS-API-004 Legacy placeholder route modules remained after API-first migration|ISS-API-004]] fixed by removing obsolete legacy router modules and updating route-table/audit tests.
+- Follow up: after Railway redeploy, verify backend `/`, `/health`, `/api/health`, frontend login/register redirects, and unauthenticated protected-route redirects from the public frontend domain.
 
 ## Graph Metadata Validation
 

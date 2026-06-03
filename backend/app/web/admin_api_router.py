@@ -11,8 +11,9 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import InviteCode
-from app.web.csrf import require_csrf
-from app.web.dependencies import get_db, require_admin
+from app.web.api_dependencies import require_api_admin
+from app.web.csrf import require_api_csrf
+from app.web.dependencies import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -37,18 +38,18 @@ class InviteCodeCreate(BaseModel):
 @router.get("/invites", response_model=List[InviteCodeResponse])
 async def list_invites(
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_admin),
+    _user=Depends(require_api_admin),
 ):
     """List all invite codes."""
     result = await db.execute(select(InviteCode).order_by(InviteCode.created_at.desc()))
     return result.scalars().all()
 
 
-@router.post("/invites", response_model=InviteCodeResponse, dependencies=[Depends(require_csrf)])
+@router.post("/invites", response_model=InviteCodeResponse, dependencies=[Depends(require_api_csrf)])
 async def create_invite(
     data: InviteCodeCreate,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_admin),
+    user=Depends(require_api_admin),
 ):
     """Create a new invite code."""
     code = data.code.strip() or secrets.token_urlsafe(12)
@@ -71,11 +72,11 @@ async def create_invite(
     return invite
 
 
-@router.delete("/invites/{invite_id}", status_code=204, dependencies=[Depends(require_csrf)])
+@router.delete("/invites/{invite_id}", status_code=204, dependencies=[Depends(require_api_csrf)])
 async def delete_invite(
     invite_id: int,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_admin),
+    _user=Depends(require_api_admin),
 ):
     """Delete/revoke an invite code."""
     invite = await db.get(InviteCode, invite_id)
@@ -88,6 +89,6 @@ async def delete_invite(
 
 
 @router.get("/logs")
-async def get_admin_logs(_user=Depends(require_admin)):
+async def get_admin_logs(_user=Depends(require_api_admin)):
     """Placeholder for admin logs."""
     return {"message": "Logs access is restricted for security."}

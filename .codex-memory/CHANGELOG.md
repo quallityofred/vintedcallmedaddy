@@ -49,3 +49,7 @@ tags:
 - 2026-06-03: Performed end-to-end verification and frontend UI polish pass, including fixes for test data collisions and frontend type/lint errors.
 
 - 2026-06-03: Finalized legacy cleanup by removing Jinja2 templates, disabling legacy routes, and updating audit tests.
+
+- 2026-06-03: Finished API-first migration cleanup by removing obsolete legacy backend route modules, moving invite-code consumption into a shared API-safe helper, keeping backend `/` as safe service JSON/production frontend redirect, and updating route-table/audit tests for the active `/api/v1/*` architecture.
+
+- 2026-06-03: Added Next.js auth guards for `/dashboard`, `/settings`, and `/admin`; unauthenticated users redirect to `/login?next=...`, login/register preserve sanitized `next` redirects, non-admin users cannot see admin content, and Playwright coverage was expanded.

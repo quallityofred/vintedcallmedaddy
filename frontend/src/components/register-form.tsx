@@ -1,20 +1,17 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { AlertCircle, LoaderCircle, Lock, User } from "lucide-react";
+import { AlertCircle, LoaderCircle, LockKeyhole, Ticket, User } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { safeNextPath } from "@/lib/auth";
 
-type LoginFormProps = {
-  legacyLoginUrl?: string;
+type RegisterFormProps = {
   nextPath?: string;
 };
 
@@ -26,7 +23,7 @@ async function getCsrfToken() {
   });
 
   if (!response.ok) {
-    throw new Error("Unable to prepare secure login");
+    throw new Error("Unable to prepare secure registration");
   }
 
   const payload = (await response.json()) as { csrf_token?: string };
@@ -36,10 +33,12 @@ async function getCsrfToken() {
   return payload.csrf_token;
 }
 
-export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
+export function RegisterForm({ nextPath }: RegisterFormProps) {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -48,11 +47,16 @@ export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
     event.preventDefault();
     setError(null);
     setSuccess(false);
-    setIsSubmitting(true);
 
+    if (password !== passwordConfirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
       const csrfToken = await getCsrfToken();
-      const response = await fetch("/api/v1/auth/login", {
+      const response = await fetch("/api/v1/auth/register", {
         method: "POST",
         cache: "no-store",
         credentials: "same-origin",
@@ -61,11 +65,16 @@ export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken,
         },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({
+          username,
+          password,
+          password_confirm: passwordConfirm,
+          invite_code: inviteCode,
+        }),
       });
 
       if (!response.ok) {
-        setError(response.status === 401 ? "Invalid username or password." : "Login failed. Try again.");
+        setError(response.status === 400 ? "Invite code is invalid or already used." : "Registration failed.");
         return;
       }
 
@@ -73,7 +82,7 @@ export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
       router.push(safeNextPath(nextPath));
       router.refresh();
     } catch {
-      setError("Unable to reach the authentication API.");
+      setError("Unable to reach the registration API.");
     } finally {
       setIsSubmitting(false);
     }
@@ -83,12 +92,12 @@ export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
     <Card className="glass-panel">
       <CardHeader className="space-y-3">
         <div className="flex size-12 items-center justify-center rounded-2xl bg-emerald-300/10 text-emerald-200">
-          <Lock className="size-5" />
+          <LockKeyhole className="size-5" />
         </div>
         <div>
-          <h1 className="font-heading text-2xl font-medium leading-snug">Sign in</h1>
+          <h1 className="font-heading text-2xl font-medium leading-snug">Create account</h1>
           <CardDescription>
-            Use your Vinted Monitor account. Sessions are issued by the FastAPI backend through the `/api` proxy.
+            Register with an invite code. The backend creates the same secure session cookie used by login.
           </CardDescription>
         </div>
       </CardHeader>
@@ -104,23 +113,48 @@ export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
                 disabled={isSubmitting}
                 id="username"
                 onChange={(event) => setUsername(event.target.value)}
-                placeholder="username"
                 required
                 value={username}
               />
             </div>
           </div>
           <div className="space-y-2">
+            <Label htmlFor="invite-code">Invite code</Label>
+            <div className="relative">
+              <Ticket className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                autoComplete="one-time-code"
+                className="pl-9"
+                disabled={isSubmitting}
+                id="invite-code"
+                onChange={(event) => setInviteCode(event.target.value)}
+                required
+                value={inviteCode}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="password">Password</Label>
             <Input
-              autoComplete="current-password"
+              autoComplete="new-password"
               disabled={isSubmitting}
               id="password"
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="password"
               required
               type="password"
               value={password}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password-confirm">Confirm password</Label>
+            <Input
+              autoComplete="new-password"
+              disabled={isSubmitting}
+              id="password-confirm"
+              onChange={(event) => setPasswordConfirm(event.target.value)}
+              required
+              type="password"
+              value={passwordConfirm}
             />
           </div>
 
@@ -133,7 +167,7 @@ export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
 
           {success ? (
             <Alert className="border-emerald-300/20 bg-emerald-400/10 text-emerald-100">
-              <AlertDescription>Signed in. Opening dashboard...</AlertDescription>
+              <AlertDescription>Account created. Opening dashboard...</AlertDescription>
             </Alert>
           ) : null}
 
@@ -141,25 +175,13 @@ export function LoginForm({ legacyLoginUrl, nextPath }: LoginFormProps) {
             {isSubmitting ? (
               <>
                 <LoaderCircle className="size-4 animate-spin" />
-                Signing in
+                Creating account
               </>
             ) : (
-              "Sign in"
+              "Create account"
             )}
           </Button>
         </form>
-
-        {legacyLoginUrl ? (
-          <>
-            <Separator />
-            <p className="text-center text-sm text-muted-foreground">
-              Need the current backend page?{" "}
-              <Link href={legacyLoginUrl} className="text-emerald-200 hover:underline">
-                Open legacy login
-              </Link>
-            </p>
-          </>
-        ) : null}
       </CardContent>
     </Card>
   );

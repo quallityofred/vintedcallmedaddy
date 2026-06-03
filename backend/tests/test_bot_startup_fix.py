@@ -1,11 +1,10 @@
 ﻿# tests/test_bot_startup_fix.py
 import pytest
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy import select
 from app.main import app
 from app.models import User
 from app.web.csrf import csrf_token_for_session
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 @pytest.mark.asyncio
 async def test_start_bot_endpoint_success(db_session):
@@ -31,15 +30,20 @@ async def test_start_bot_endpoint_success(db_session):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         ac.cookies.set("session_token", token)
 
-        with patch("app.web.router.start_bot", AsyncMock(return_value="Р‘РѕС‚ СѓСЃРїРµС€РЅРѕ Р·Р°РїСѓС‰РµРЅ")):
+        response = await ac.patch(
+            "/api/v1/settings/telegram",
+            headers={"X-CSRF-Token": csrf_token_for_session(token)},
+            json={"telegram_bot_token": "123456:ABC-DEF", "telegram_chat_id": "123456789"},
+        )
+        assert response.status_code == 200
+
+        with patch("app.web.settings_api_router.start_bot", AsyncMock(return_value="started")):
             response = await ac.post(
-                "/settings/start-bot",
-                data={"telegram_token": "123456:ABC-DEF", "telegram_chat_id": "123456789"},
+                "/api/v1/telegram/start",
                 headers={"X-CSRF-Token": csrf_token_for_session(token)},
             )
             assert response.status_code == 200
-            # FastAPI returns strings as JSON-encoded strings by default (with quotes)
-            assert "Р‘РѕС‚ СѓСЃРїРµС€РЅРѕ Р·Р°РїСѓС‰РµРЅ" in response.json()["message"]
+            assert response.json()["message"] == "started"
 
             # Verify user settings updated in DB
             await db_session.refresh(user)
@@ -70,12 +74,11 @@ async def test_start_bot_endpoint_missing_token(db_session):
         ac.cookies.set("session_token", token)
 
         response = await ac.post(
-            "/settings/start-bot",
-            data={"telegram_token": "", "telegram_chat_id": "123456789"},
+            "/api/v1/telegram/start",
             headers={"X-CSRF-Token": csrf_token_for_session(token)},
         )
         assert response.status_code == 400
-        assert "РўРѕРєРµРЅ РЅРµ СѓРєР°Р·Р°РЅ" in response.json()["message"]
+        assert response.json()["detail"] == "Telegram bot token is not configured"
     
     app.dependency_overrides.clear()
 
@@ -100,13 +103,14 @@ async def test_start_bot_duplicate_start_prevention(db_session):
         ac.cookies.set("session_token", token)
 
         # Mock is_bot_running to return True
-        with patch("app.web.router.web_deps.is_bot_running", return_value=True):
+        with patch("app.web.settings_api_router.is_bot_running", return_value=True), patch(
+            "app.web.settings_api_router.start_bot", AsyncMock(return_value="already started")
+        ):
             response = await ac.post(
-                "/settings/start-bot",
-                data={"telegram_token": "", "telegram_chat_id": ""},
+                "/api/v1/telegram/start",
                 headers={"X-CSRF-Token": csrf_token_for_session(token)},
             )
             assert response.status_code == 200
-            assert "СѓР¶Рµ Р·Р°РїСѓС‰РµРЅ" in response.json()["message"]
+            assert response.json()["telegram"]["bot_running"] is True
     
     app.dependency_overrides.clear()

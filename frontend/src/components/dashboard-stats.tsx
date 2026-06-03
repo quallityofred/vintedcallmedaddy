@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Activity, Bell, Clock, Radar } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 
 import { AnimatedSection } from "@/components/animated-section";
 import { DashboardCard } from "@/components/dashboard-card";
@@ -20,7 +21,9 @@ interface Stats {
 
 export function DashboardStats() {
   const [stats, setStats] = useState<Stats | null>(null);
-  const [error, setError] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
+  const pathname = usePathname();
+  const router = useRouter();
 
   useEffect(() => {
     async function fetchStats() {
@@ -29,31 +32,35 @@ export function DashboardStats() {
           cache: "no-store",
           credentials: "same-origin",
         });
+        if (response.status === 401) {
+          router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+          return;
+        }
         if (!response.ok) {
           throw new Error("API error");
         }
         const data = (await response.json()) as Stats;
         setStats(data);
       } catch {
-        setError(true);
+        setErrorText("Unavailable");
       }
     }
     void fetchStats();
-  }, []);
+  }, [pathname, router]);
 
   const cards = [
     {
       title: "Active monitors",
       value: stats
         ? `${stats.active_monitors_count} / ${stats.active_monitors_count + stats.paused_monitors_count}`
-        : error
-          ? "Error"
+        : errorText
+          ? errorText
           : "Loading...",
       icon: Radar,
     },
     {
       title: "Items today",
-      value: stats ? stats.items_today_count.toString() : error ? "Error" : "Loading...",
+      value: stats ? stats.items_today_count.toString() : errorText ? errorText : "Loading...",
       icon: Activity,
     },
     {
@@ -64,8 +71,8 @@ export function DashboardStats() {
           : stats.telegram_status.configured
             ? "Stopped"
             : "Not set"
-        : error
-          ? "Error"
+        : errorText
+          ? errorText
           : "Loading...",
       icon: Bell,
     },
@@ -75,8 +82,8 @@ export function DashboardStats() {
         ? stats.last_found_at
           ? new Date(stats.last_found_at).toLocaleTimeString()
           : "Never"
-        : error
-          ? "Error"
+        : errorText
+          ? errorText
           : "Loading...",
       icon: Clock,
     },

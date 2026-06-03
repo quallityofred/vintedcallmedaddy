@@ -25,7 +25,7 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 - `frontend/next.config.ts` rewrites `/api/:path*` to `${BACKEND_URL}/api/:path*`.
 - FastAPI owns auth, sessions, CSRF, database access, scheduler state, scraper state, Telegram integration, and user isolation.
 - New Next-ready endpoints should use versioned `/api/v1/...` paths.
-- Existing Jinja/HTMX routes should remain stable until a Next replacement has equivalent behavior and tests.
+- Legacy Jinja/HTMX route modules were removed after Next replacements and API-first tests existed. Do not reintroduce them without an explicit compatibility decision and tests.
 - State-changing JSON endpoints must require `X-CSRF-Token`.
 - Token-like values must be masked or write-only; never return Telegram tokens, password hashes/salts, proxy credentials, cookies, or session values.
 
@@ -34,15 +34,22 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 - `frontend/src/components/login-form.tsx`
   - `GET /api/v1/auth/csrf`
   - `POST /api/v1/auth/login`
+- `frontend/src/components/register-form.tsx`
+  - `GET /api/v1/auth/csrf`
+  - `POST /api/v1/auth/register`
+- `frontend/src/lib/auth.ts`
+  - `GET /api/v1/auth/me`
 - `frontend/src/components/backend-health-card.tsx`
   - `GET /api/health`
 - `frontend/src/app/dashboard/page.tsx`
-  - still renders `API pending` dashboard cards.
-  - references future `/api/v1/monitors`.
+  - guarded by `GET /api/v1/auth/me`
+  - uses `/api/v1/dashboard/stats`, `/api/v1/monitors`, `/api/v1/items`, `/api/v1/hidden-sellers`, `/api/v1/system/status`, and monitor mutation/control endpoints.
 - `frontend/src/app/settings/page.tsx`
-  - still renders disabled placeholder settings UI.
-- `frontend/src/components/monitor-preview.tsx`
-  - demo placeholder; no backend calls.
+  - guarded by `GET /api/v1/auth/me`
+  - uses `/api/v1/telegram/status`, `/api/v1/settings/telegram`, and Telegram control endpoints.
+- `frontend/src/app/admin/page.tsx`
+  - guarded by `GET /api/v1/auth/me` and `user.is_admin`
+  - uses `/api/v1/admin/invites`.
 
 ## Existing Endpoints
 
@@ -52,7 +59,7 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | --- | --- | --- | --- | --- |
 | `GET` | `/health` | JSON | public | Liveness response: `status`, `service`. |
 | `GET` | `/api/health` | JSON | public | Extended health: `status`, `scheduler_jobs`, `bots_running`. Used by Next dashboard health card. |
-| `GET` | `/` | redirect/JSON | public | Production redirects to `FRONTEND_URL` when configured; otherwise minimal JSON backend status. Development redirects to `/dashboard`. |
+| `GET` | `/` | redirect/JSON | public | Production redirects to `FRONTEND_URL` when configured; otherwise minimal JSON backend status. Development returns safe JSON backend status. |
 
 ### Auth, CSRF, Me, Logout
 
@@ -63,59 +70,40 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | `POST` | `/api/v1/auth/login` | JSON | CSRF | Accepts JSON username/password. Creates existing `session_token` HttpOnly cookie. Returns safe user payload and session CSRF token. |
 | `POST` | `/api/v1/auth/register` | JSON | CSRF | Accepts JSON username/password confirmation/invite code. Consumes invite code atomically, creates user and session cookie, returns safe user payload and session CSRF token. |
 | `POST` | `/api/v1/auth/logout` | JSON | session + CSRF | Deletes DB session and clears cookies. |
-| `GET` | `/login` | HTML | public/session-aware | Legacy Jinja login. Redirects authenticated users to `/dashboard`. |
-| `POST` | `/login` | HTML form | public | Legacy Jinja login. Does not expose password hashes. |
-| `POST` | `/logout` | redirect | session + CSRF | Legacy logout. |
 
 ### Registration and Invites
 
 | Method | Path | Type | Auth | Notes |
 | --- | --- | --- | --- | --- |
-| `GET` | `/register` | HTML | public/session-aware | Legacy Jinja registration form. |
-| `POST` | `/register` | HTML form | public | Legacy registration with invite code. Uses atomic invite consumption helper. |
-| `GET` | `/admin/invites` | HTML | admin | Legacy admin invite management. |
-| `POST` | `/admin/invites` | redirect | admin + CSRF | Create invite. |
-| `POST` | `/admin/invites/{invite_id}/toggle` | redirect | admin + CSRF | Toggle invite active state. |
-| `DELETE` | `/admin/invites/{invite_id}` | empty | admin + CSRF | Delete invite. |
+| `GET` | `/api/v1/admin/invites` | JSON | admin | Lists invite codes without exposing secrets. |
+| `POST` | `/api/v1/admin/invites` | JSON | admin + CSRF | Creates invite code. |
+| `DELETE` | `/api/v1/admin/invites/{invite_id}` | JSON | admin + CSRF | Deletes invite code. |
 
 ### Dashboard and Logs
 
 | Method | Path | Type | Auth | Notes |
 | --- | --- | --- | --- | --- |
-| `GET` | `/dashboard` | HTML | session | Legacy dashboard. Computes active monitors, today items, total items, last found. |
-| GET | /api/stats | JSON | session | Unversioned dashboard helper with ctive_count, 	oday_items, 	otal_items. |
-| GET | /api/v1/dashboard/stats | JSON | session | User-scoped counts for monitors, items, last found, and Telegram status. |
-| `GET` | `/logs` | HTML | session | Legacy logs page. Current route passes log-manager entries. |
-| `GET` | `/api/logs?limit=100` | JSON | session | User-scoped logs; admins also receive limited system logs. |
+| `GET` | `/api/v1/dashboard/stats` | JSON | session | User-scoped counts for monitors, items, last found, and Telegram status. |
+| `GET` | `/api/v1/admin/logs` | JSON | admin | Admin-only safe log summary. |
 
 ### Monitors
 
 | Method | Path | Type | Auth | Notes |
 | --- | --- | --- | --- | --- |
-| `GET` | `/monitors` | HTML | session | Legacy monitor list, user-scoped. Also used by HTMX polling. |
-| `GET` | `/monitors/new` | HTML | session | Legacy create form. |
-| `POST` | `/monitors` | HTML form/redirect | session + CSRF | Create monitor, parse URL, schedule job. |
-| `GET` | `/monitors/{monitor_id}/edit` | HTML | session | User-scoped edit form. |
-| `POST` | `/monitors/{monitor_id}/edit` | HTML form/redirect | session + CSRF | Update monitor and scheduler job. |
-| `POST` | `/monitors/{monitor_id}/delete` | redirect | session + CSRF | User-scoped delete and scheduler removal. |
-| `POST` | `/monitors/bulk-delete` | redirect | session + CSRF | User-scoped bulk delete. |
-| `POST` | `/monitors/import` | HTML form/redirect | session + CSRF | Import JSON/TXT monitor definitions. |
-| `GET` | `/export/json` | JSON | session | Export user monitors as JSON array. |
-| `GET` | `/export/txt` | text | session | Export user monitor URLs. |
-| `POST` | `/api/monitors/{monitor_id}/trigger` | JSON | session + CSRF | Unversioned manual trigger helper. User-scoped. |
+| `GET` | `/api/v1/monitors` | JSON | session | User-scoped monitor list. |
+| `POST` | `/api/v1/monitors` | JSON | session + CSRF | Creates user-scoped monitor and schedules job. |
+| `GET` | `/api/v1/monitors/{monitor_id}` | JSON | session | User-scoped monitor detail. |
+| `PATCH` | `/api/v1/monitors/{monitor_id}` | JSON | session + CSRF | Updates user-scoped monitor and scheduler job. |
+| `DELETE` | `/api/v1/monitors/{monitor_id}` | JSON | session + CSRF | Deletes user-scoped monitor and removes scheduler job. |
+| `POST` | `/api/v1/monitors/bulk-delete` | JSON | session + CSRF | User-scoped bulk delete. |
+| `POST` | `/api/v1/monitors/{monitor_id}/pause` | JSON | session + CSRF | Pauses user-scoped monitor. |
+| `POST` | `/api/v1/monitors/{monitor_id}/resume` | JSON | session + CSRF | Resumes user-scoped monitor. |
+| `POST` | `/api/v1/monitors/{monitor_id}/check-now` | JSON | session + CSRF | Triggers user-scoped monitor check. |
 
 ### Settings, Telegram, CF Worker, Scraper Settings
 
 | Method | Path | Type | Auth | Notes |
 | --- | --- | --- | --- | --- |
-| `GET` | `/settings` | HTML | session | Legacy settings. Masks Telegram token/chat ID. Shows admin-only global settings fields. |
-| `POST` | `/settings` | HTML form | session + CSRF | Saves per-user Telegram values if submitted; admins can save global scraper/CF Worker settings. |
-| `POST` | `/settings/test-bot` | JSON | session + CSRF | Tests submitted or saved Telegram credentials. |
-| `POST` | `/settings/start-bot` | JSON | session + CSRF | Saves submitted Telegram values if present and starts current user's bot. |
-| `POST` | `/settings/stop-bot` | JSON | session + CSRF | Stops current user's bot. |
-| `POST` | `/api/bot/start` | JSON | session + CSRF | Unversioned start helper using saved per-user token. |
-| `POST` | `/api/bot/stop` | JSON | session + CSRF | Unversioned stop helper using saved per-user token. |
-| `POST` | `/api/bot/test` | JSON | session + CSRF | Unversioned test helper using saved per-user token/chat ID. |
 | `GET` | `/api/v1/settings` | JSON | session | Returns safe user payload, masked Telegram state, and admin-only global settings. Proxy values are masked/configured-only. |
 | `PATCH` | `/api/v1/settings/telegram` | JSON | session + CSRF | Write-only per-user Telegram token/chat ID update. Supports explicit clearing. Returns masked Telegram state only. |
 | `PATCH` | `/api/v1/settings/cloudflare-worker` | JSON | admin + CSRF | Updates admin/global CF Worker URL, block threshold, and recovery minutes; applies runtime settings. |
@@ -136,78 +124,43 @@ Current settings ownership:
 
 | Capability | Current State |
 | --- | --- |
-| Found items | Stored in `FoundItem`, exposed indirectly via dashboard stats and scheduler notifications. No Next-ready item list/detail API exists. |
-| Seen items | Stored in `SeenItem`, used by scheduler dedup/cold-start behavior. No web JSON API exists. |
-| Hidden sellers | Stored in `HiddenSeller`, created through Telegram callback `hide_seller_handler`, filtered in scheduler. No web JSON API exists. |
+| Found items | Stored in `FoundItem`; exposed through `GET /api/v1/items` and `GET /api/v1/items/{item_id}` with user scoping. |
+| Seen items | Stored in `SeenItem`, used by scheduler dedup/cold-start behavior; no direct public JSON API is currently needed. |
+| Hidden sellers | Stored in `HiddenSeller`; exposed through `GET /api/v1/hidden-sellers`, `POST /api/v1/hidden-sellers`, and `DELETE /api/v1/hidden-sellers/{seller_id}` with user scoping and CSRF on mutations. |
 
-## Missing Next-Ready Endpoints
+## Missing or Follow-up Next-Ready Endpoints
 
-### Auth and Registration
+Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Telegram/CF Worker/scraper, monitors, dashboard stats, items, hidden sellers, system status, and admin invites. Remaining API follow-up is mostly polish and expansion:
 
-- `GET /api/v1/admin/invites`
-- `POST /api/v1/admin/invites`
-- `PATCH /api/v1/admin/invites/{invite_id}`
-- `DELETE /api/v1/admin/invites/{invite_id}`
-
-### Dashboard
-
-- `GET /api/v1/dashboard/stats`
-  - user-scoped counts: active monitors, paused monitors, items today, total items, last discovery, Telegram status.
-- `GET /api/v1/dashboard/activity`
-  - recent user-scoped log/activity rows.
-
-### Monitors
-
-- `GET /api/v1/monitors`
-- `POST /api/v1/monitors`
-- `GET /api/v1/monitors/{monitor_id}`
-- `PATCH /api/v1/monitors/{monitor_id}`
-- `DELETE /api/v1/monitors/{monitor_id}`
-- `POST /api/v1/monitors/bulk-delete`
-- `POST /api/v1/monitors/import`
-- `GET /api/v1/monitors/export.json`
-- `GET /api/v1/monitors/export.txt`
-- `POST /api/v1/monitors/{monitor_id}/trigger`
-
-### Items and Hidden Sellers
-
-- `GET /api/v1/items`
-- `GET /api/v1/items/{item_id}`
-- `GET /api/v1/hidden-sellers`
-- `POST /api/v1/hidden-sellers`
-- `DELETE /api/v1/hidden-sellers/{seller_id}`
-
-### System Status
-
-- `GET /api/v1/system/status`
-  - safe aggregate status for frontend diagnostics.
-- `GET /api/v1/system/logs`
-  - admin-only system logs if needed; regular users must never receive shared system logs.
+- `GET /api/v1/dashboard/activity` for recent user-scoped activity/log rows.
+- `POST /api/v1/monitors/import`, `GET /api/v1/monitors/export.json`, and `GET /api/v1/monitors/export.txt` if import/export is migrated to Next.
+- `PATCH /api/v1/admin/invites/{invite_id}` if the Next admin UI needs toggle/edit semantics beyond create/delete.
+- `GET /api/v1/system/logs` as admin-only if the Next admin UI needs system log viewing.
 
 ## Frontend Pages Needing APIs
 
 - `/login`
-  - has JSON login; still needs optional session preflight redirect using `/api/v1/auth/me`.
+  - has JSON login and sanitized `next` redirect handling.
+- `/register`
+  - has JSON registration and sanitized `next` redirect handling.
 - `/dashboard`
-  - needs dashboard stats, recent activity/logs, real monitor summary, Telegram status.
+  - uses current dashboard/monitor/item/system APIs; follow-up is UI polish and API client extraction.
 - `/settings`
-  - backend settings/Telegram APIs now exist; frontend page still needs integration and forms.
-- Future monitor pages
-  - need monitor CRUD, import/export, manual trigger.
-- Future items/logs pages
-  - need item history, found item detail, user log feed, admin-only system logs.
-- Future admin pages
-  - need invite management JSON endpoints.
+  - uses current Telegram settings APIs; follow-up is full admin/global scraper and CF Worker form integration if needed in Next.
+- Monitor pages
+  - core CRUD/control exists; import/export remains optional follow-up.
+- Items/logs pages
+  - item history/detail exists; user activity feed and admin-only system logs remain optional follow-up.
+- Admin pages
+  - invite list/create/delete exists; invite toggle/edit remains optional follow-up.
 
 ## Safest Implementation Order
 
 1. Auth/register/CSRF phase is complete for backend JSON endpoints: CSRF, me, login, register, logout.
 2. Settings/Telegram/CF Worker/scraper phase is complete for backend JSON endpoints.
-3. Add monitor list/detail CRUD APIs with strict `Monitor.user_id == current_user.id` checks and scheduler job updates.
-4. Add manual trigger/import/export monitor APIs after CRUD tests are stable.
-5. Add dashboard stats/activity, item history APIs, hidden seller APIs, and safe system status APIs.
-6. Add frontend API client extraction and integrate final pages after backend contracts stabilize.
-7. Add admin invite APIs only when the Next admin UI is ready.
+3. Monitors CRUD/control phase is complete for list/detail/create/update/delete/bulk delete/pause/resume/check-now.
+4. Dashboard stats, item history/detail, hidden seller APIs, safe system status, and admin invite list/create/delete are complete.
+5. Next phase: frontend API client extraction, UI polish, optional monitor import/export, optional dashboard activity feed, and optional admin invite toggle/edit.
 
 ## Related
 
@@ -249,3 +202,20 @@ Current settings ownership:
 - POST /api/v1/admin/invites
 - DELETE /api/v1/admin/invites/{id}
 - GET /api/v1/admin/logs
+
+
+## [2026-06-03] Update: API-first legacy cleanup and frontend route guards
+
+- Legacy backend Jinja route modules were removed after source verification:
+  - `backend/app/web/router.py`
+  - `backend/app/web/auth_router.py`
+  - `backend/app/web/admin_router.py`
+  - `backend/app/web/app_web_router.py`
+- `backend/app/app_main.py` no longer registers legacy HTML routers. Backend `/` returns safe backend service JSON, or redirects to `FRONTEND_URL` in production when configured.
+- Active public endpoints remain `/`, `/health`, `/api/health`, and `GET /api/v1/auth/csrf`.
+- Active authenticated endpoints include `/api/v1/auth/me`, `/api/v1/auth/logout`, dashboard stats, monitors, items, hidden sellers, settings, Telegram controls, and system status.
+- Active admin endpoints are under `/api/v1/admin/*`.
+- CSRF-protected mutations include login/register/logout, settings updates, Telegram start/stop/test, monitor mutations/control, hidden seller mutations, and admin invite mutations.
+- Next.js protected routes now guard `/dashboard`, `/settings`, and `/admin` through `GET /api/v1/auth/me`.
+- Unauthenticated users redirect to `/login?next=/dashboard`, `/login?next=/settings`, or `/login?next=/admin`.
+- Login and registration preserve a sanitized same-origin `next` path and default to `/dashboard`.

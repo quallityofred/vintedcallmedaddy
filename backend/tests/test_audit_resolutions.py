@@ -14,8 +14,8 @@ from app.models import AppSettings, FoundItem, HiddenSeller, InviteCode, Monitor
 from app.scheduler.tasks import process_pending_notifications
 from app.telegram.handlers import hide_seller_handler
 from app.web.auth import generate_session_token, set_session_cookie
-from app.web.auth_router import consume_invite_code
 from app.web.csrf import csrf_token_for_session
+from app.web.invite_codes import consume_invite_code
 
 
 async def _create_user_session(db_session, username: str, *, is_admin: bool = False) -> tuple[User, str]:
@@ -53,17 +53,20 @@ async def test_route_table_has_no_duplicate_registrations():
         if count > 1
     }
     assert duplicates == {}
-    assert ("/admin/invites", ("GET",)) in pairs
-    assert ("/admin/invites", ("POST",)) in pairs
-    assert ("/admin/invites/{invite_id}", ("DELETE",)) in pairs
+    assert ("/api/v1/admin/invites", ("GET",)) in pairs
+    assert ("/api/v1/admin/invites", ("POST",)) in pairs
+    assert ("/api/v1/admin/invites/{invite_id}", ("DELETE",)) in pairs
+    assert ("/dashboard", ("GET",)) not in pairs
+    assert ("/login", ("GET",)) not in pairs
+    assert ("/settings", ("GET",)) not in pairs
 
 
 @pytest.mark.asyncio
 async def test_backend_root_returns_api_info_in_production_without_frontend(monkeypatch):
-    from app.web import router as web_router
+    import app.app_main as app_main
 
-    monkeypatch.setattr(web_router.settings, "environment", "production")
-    monkeypatch.setattr(web_router.settings, "frontend_url", "")
+    monkeypatch.setattr(app_main.settings, "environment", "production")
+    monkeypatch.setattr(app_main.settings, "frontend_url", "")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -78,16 +81,16 @@ async def test_backend_root_returns_api_info_in_production_without_frontend(monk
         "frontend": None,
         "health": "/health",
         "api_health": "/api/health",
-        "legacy_dashboard": "/dashboard",
+        "api": "/api/v1",
     }
 
 
 @pytest.mark.asyncio
 async def test_backend_root_redirects_to_frontend_in_production(monkeypatch):
-    from app.web import router as web_router
+    import app.app_main as app_main
 
-    monkeypatch.setattr(web_router.settings, "environment", "production")
-    monkeypatch.setattr(web_router.settings, "frontend_url", "https://frontend.example")
+    monkeypatch.setattr(app_main.settings, "environment", "production")
+    monkeypatch.setattr(app_main.settings, "frontend_url", "https://frontend.example")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -98,23 +101,30 @@ async def test_backend_root_redirects_to_frontend_in_production(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_backend_root_keeps_legacy_dashboard_reachable_in_development(monkeypatch):
-    from app.web import router as web_router
+async def test_backend_root_returns_api_info_in_development(monkeypatch):
+    import app.app_main as app_main
 
-    monkeypatch.setattr(web_router.settings, "environment", "development")
-    monkeypatch.setattr(web_router.settings, "frontend_url", "")
+    monkeypatch.setattr(app_main.settings, "environment", "development")
+    monkeypatch.setattr(app_main.settings, "frontend_url", "")
     monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
     monkeypatch.delenv("RENDER", raising=False)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/", follow_redirects=False)
-        dashboard_response = await client.get("/dashboard", follow_redirects=False)
 
-    assert response.status_code == 307
-    assert response.headers["location"] == "/dashboard"
-    assert dashboard_response.status_code == 303
-    assert dashboard_response.headers["location"] == "/login"
+    assert response.status_code == 200
+    assert response.json()["service"] == "vintedbot-backend"
+
+
+@pytest.mark.asyncio
+async def test_legacy_ui_routes_are_absent():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        for path in ("/dashboard", "/login", "/register", "/settings", "/monitors", "/logs", "/admin/invites"):
+            response = await client.get(path, follow_redirects=False)
+            assert response.status_code == 404
+            assert response.json() == {"detail": "Not found"}
 
 
 @pytest.mark.asyncio
@@ -133,52 +143,49 @@ async def test_health_endpoints_remain_public():
 
 
 @pytest.mark.asyncio
-async def test_settings_page_renders_and_persists_scraper_settings(db_session):
+async def test_settings_api_persists_admin_scraper_settings(db_session):
     user, token = await _create_user_session(db_session, "settings_user", is_admin=True)
     _override_db(db_session)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.cookies.set("session_token", token)
-        response = await client.get("/settings")
-        assert response.status_code == 200
-        assert "{{ user.username }}" not in response.text
-
-        response = await client.post(
-            "/settings",
-            data={
-                "_csrf_token": csrf_token_for_session(token),
-                "telegram_token": "token-one",
-                "telegram_chat_id": "123",
+        response = await client.patch(
+            "/api/v1/settings/scraper",
+            headers={"X-CSRF-Token": csrf_token_for_session(token)},
+            json={
                 "proxies": "http://proxy.example:8080",
-                "sessions_per_domain": "4",
-                "rate_limit_per_minute": "9",
-                "cf_worker_url": "https://worker.example.workers.dev",
-                "cf_worker_block_threshold": "3",
-                "cf_worker_recovery_minutes": "15",
-                "check_interval_seconds": "180",
-                "offpeak_interval_multiplier": "2.2",
-                "night_interval_multiplier": "4.5",
-                "peak_start_hour": "7",
-                "peak_end_hour": "22",
+                "sessions_per_domain": 4,
+                "rate_limit_per_minute": 9,
+                "check_interval_seconds": 180,
+                "offpeak_interval_multiplier": 2.2,
+                "night_interval_multiplier": 4.5,
+                "peak_start_hour": 7,
+                "peak_end_hour": 22,
             },
         )
         assert response.status_code == 200
-        assert "http://proxy.example:8080" in response.text
-        assert "token-one" not in response.text
-        assert "123\" name=\"telegram_chat_id" not in response.text
+        assert "http://proxy.example:8080" not in response.text
+        response = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            headers={"X-CSRF-Token": csrf_token_for_session(token)},
+            json={
+                "cf_worker_url": "https://worker.example.workers.dev",
+                "cf_worker_block_threshold": 3,
+                "cf_worker_recovery_minutes": 15,
+            },
+        )
+        assert response.status_code == 200
 
     result = await db_session.execute(select(AppSettings).where(AppSettings.key == "rate_limit_per_minute"))
     assert result.scalar_one().value == "9"
     result = await db_session.execute(select(AppSettings).where(AppSettings.key == "cf_worker_url"))
     assert result.scalar_one().value == "https://worker.example.workers.dev"
-    await db_session.refresh(user)
-    assert user.telegram_bot_token == "token-one"
     app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
-async def test_settings_page_masks_saved_telegram_credentials(db_session):
+async def test_settings_api_masks_saved_telegram_credentials(db_session):
     user, token = await _create_user_session(db_session, "masked_settings_user")
     user.telegram_bot_token = "123456:SECRET-TOKEN"
     user.telegram_chat_id = "987654321"
@@ -188,13 +195,12 @@ async def test_settings_page_masks_saved_telegram_credentials(db_session):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.cookies.set("session_token", token)
-        response = await client.get("/settings")
+        response = await client.get("/api/v1/settings")
         assert response.status_code == 200
         assert "123456:SECRET-TOKEN" not in response.text
         assert "987654321" not in response.text
         assert "******OKEN" in response.text
         assert "******4321" in response.text
-        assert "Global scraper and Cloudflare Worker settings are managed by admins." in response.text
     app.dependency_overrides.clear()
 
 
@@ -230,7 +236,7 @@ async def test_admin_invite_routes_are_registered_and_admin_only(db_session):
 
 
 @pytest.mark.asyncio
-async def test_api_logs_hides_system_logs_from_non_admin(db_session):
+async def test_admin_logs_reject_non_admin(db_session):
     user, user_token = await _create_user_session(db_session, "logs_user")
     _, admin_token = await _create_user_session(db_session, "logs_admin", is_admin=True)
     with log_manager.lock:
@@ -243,15 +249,13 @@ async def test_api_logs_hides_system_logs_from_non_admin(db_session):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.cookies.set("session_token", user_token)
-        response = await client.get("/api/logs")
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["logs"] == ["user event"]
-        assert payload["system"] == []
+        response = await client.get("/api/v1/admin/logs")
+        assert response.status_code == 403
 
         client.cookies.set("session_token", admin_token)
-        response = await client.get("/api/logs")
-        assert response.json()["system"] == ["system secret-ish operational event"]
+        response = await client.get("/api/v1/admin/logs")
+        assert response.status_code == 200
+        assert response.json()["message"] == "Logs access is restricted for security."
     app.dependency_overrides.clear()
 
 
@@ -346,7 +350,7 @@ async def test_csrf_required_for_authenticated_state_change(db_session):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.cookies.set("session_token", token)
-        response = await client.post("/settings/start-bot", data={"telegram_token": "token", "telegram_chat_id": "1"})
+        response = await client.post("/api/v1/telegram/start")
         assert response.status_code == 403
     app.dependency_overrides.clear()
 

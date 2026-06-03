@@ -6,10 +6,39 @@ test("landing page renders the frontend foundation", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /Vinted Monitor dashboard/i })).toBeVisible();
   await expect(page.getByRole("link", { name: /Open dashboard shell/i })).toBeVisible();
   await expect(page.getByText("Phase 1 frontend foundation")).toBeVisible();
-  await expect(page.getByText("Monitor command preview")).toBeVisible();
+  await expect(page.getByText("Product concept")).toBeVisible();
 });
 
-test("placeholder app pages stay reachable", async ({ page }) => {
+test("protected pages redirect unauthenticated users to login with next", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Not authenticated" }),
+    });
+  });
+
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/login\?next=%2Fdashboard$/);
+  await expect(page.getByRole("heading", { name: "Monitor operations" })).toHaveCount(0);
+
+  await page.goto("/settings");
+  await expect(page).toHaveURL(/\/login\?next=%2Fsettings$/);
+  await expect(page.getByRole("heading", { name: "Telegram Controls" })).toHaveCount(0);
+
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/login\?next=%2Fadmin$/);
+  await expect(page.getByRole("heading", { name: "Administration" })).toHaveCount(0);
+});
+
+test("authenticated app pages stay reachable", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ user: { id: 1, username: "admin", is_admin: true } }),
+    });
+  });
+
   await page.route("**/api/health", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -18,6 +47,62 @@ test("placeholder app pages stay reachable", async ({ page }) => {
         scheduler_jobs: 2,
         bots_running: 1,
       }),
+    });
+  });
+  await page.route("**/api/v1/dashboard/stats", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        active_monitors_count: 1,
+        paused_monitors_count: 1,
+        items_today_count: 2,
+        total_items_count: 5,
+        last_found_at: null,
+        telegram_status: { configured: true, running: false },
+      }),
+    });
+  });
+  await page.route("**/api/v1/system/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        scheduler_running: true,
+        active_jobs_count: 1,
+        bots_running_count: 0,
+        database_status: "ok",
+      }),
+    });
+  });
+  await page.route("**/api/v1/monitors", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    });
+  });
+  await page.route("**/api/v1/items?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], limit: 20, offset: 0, total: 0 }),
+    });
+  });
+  await page.route("**/api/v1/telegram/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        telegram: {
+          token_configured: true,
+          token_masked: "******1234",
+          chat_id_configured: true,
+          chat_id_masked: "******4321",
+          bot_running: false,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/v1/admin/invites", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([]),
     });
   });
 
@@ -29,8 +114,12 @@ test("placeholder app pages stay reachable", async ({ page }) => {
   await expect(page.getByText("Scheduler jobs").locator("..").getByText("2", { exact: true })).toBeVisible();
 
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Telegram and scraper controls" })).toBeVisible();
-  await expect(page.getByText("Token values should stay write-only")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Telegram Controls" })).toBeVisible();
+  await expect(page.getByText("Tokens are write-only")).toBeVisible();
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible();
+  await expect(page.getByText("Invite Management")).toBeVisible();
 });
 
 test("login page posts credentials and shows safe API errors", async ({ page }) => {
@@ -66,4 +155,66 @@ test("login page posts credentials and shows safe API errors", async ({ page }) 
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await expect(page.getByRole("alert").filter({ hasText: "Invalid username or password." })).toBeVisible();
+});
+
+test("login and register respect next redirect", async ({ page }) => {
+  await page.route("**/api/v1/auth/csrf", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ csrf_token: "test-csrf-token" }),
+    });
+  });
+
+  await page.route("**/api/v1/auth/login", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        user: { id: 1, username: "user", is_admin: false },
+        csrf_token: "session-csrf",
+      }),
+    });
+  });
+
+  await page.goto("/login?next=/settings");
+  await page.getByLabel("Username").fill("user");
+  await page.getByLabel("Password").fill("password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+
+  await page.route("**/api/v1/auth/register", async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      username: "new-user",
+      password_confirm: "password",
+      invite_code: "invite-code",
+    });
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        user: { id: 2, username: "new-user", is_admin: false },
+        csrf_token: "session-csrf",
+      }),
+    });
+  });
+
+  await page.goto("/register?next=/dashboard");
+  await page.getByLabel("Username").fill("new-user");
+  await page.getByLabel("Invite code").fill("invite-code");
+  await page.getByLabel("Password", { exact: true }).fill("password");
+  await page.getByLabel("Confirm password").fill("password");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+});
+
+test("non-admin users cannot see admin content", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ user: { id: 1, username: "user", is_admin: false } }),
+    });
+  });
+
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "Administration" })).toHaveCount(0);
 });

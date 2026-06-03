@@ -1,9 +1,11 @@
 ﻿# tests/test_admin_invite.py
-import asyncio
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
-from app.models import User, InviteCode, UserSession
-from app.web.auth import generate_session_token
+
+from app.main import app
+from app.models import User, InviteCode
+from app.web.dependencies import get_db
 
 @pytest.mark.asyncio
 async def test_invite_code_validation(db_session):
@@ -23,31 +25,44 @@ async def test_invite_code_validation(db_session):
 
 @pytest.mark.asyncio
 async def test_registration_requires_valid_invite(db_session):
-    """Integration test for registration flow with invite codes."""
-    from app.web.auth_router import register_submit
-    from unittest.mock import MagicMock
-    
-    request = MagicMock()
-    request.app.state.templates.TemplateResponse = MagicMock()
-    
-    # 1. Test invalid code
-    response = await register_submit(
-        request, db_session, "user1", "pass123", "pass123", "invalid-code"
-    )
-    assert "РќРµРІРµСЂРЅС‹Р№ РёР»Рё РёСЃРїРѕР»СЊР·РѕРІР°РЅРЅС‹Р№ РёРЅРІР°Р№С‚-РєРѕРґ" in request.app.state.templates.TemplateResponse.call_args[0][2]["error"]
+    """Integration test for JSON registration flow with invite codes."""
+    app.dependency_overrides[get_db] = lambda: db_session
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf = (await client.get("/api/v1/auth/csrf")).json()["csrf_token"]
+
+        response = await client.post(
+            "/api/v1/auth/register",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "username": "user1",
+                "password": "pass123",
+                "password_confirm": "pass123",
+                "invite_code": "invalid-code",
+            },
+        )
+        assert response.status_code == 400
 
     # 2. Test valid code
     invite = InviteCode(code="valid-code", max_uses=1, used_count=0, is_active=True)
     db_session.add(invite)
     await db_session.commit()
-    
-    with patch("app.web.auth_router.generate_session_token", return_value="test-token"), \
-         patch("app.web.auth_router.set_session_cookie", MagicMock()):
-        response = await register_submit(
-            request, db_session, "user2", "pass123", "pass123", "valid-code"
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf = (await client.get("/api/v1/auth/csrf")).json()["csrf_token"]
+        response = await client.post(
+            "/api/v1/auth/register",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "username": "user2",
+                "password": "pass123",
+                "password_confirm": "pass123",
+                "invite_code": "valid-code",
+            },
         )
-        assert response.status_code == 303
-        assert response.headers["location"] == "/dashboard"
+        assert response.status_code == 201
+        assert response.json()["user"]["username"] == "user2"
 
     # 3. Verify user created and code used
     result = await db_session.execute(select(User).where(User.username == "user2"))
@@ -57,6 +72,7 @@ async def test_registration_requires_valid_invite(db_session):
     await db_session.refresh(invite)
     assert invite.used_count == 1
     assert invite.is_valid is False
+    app.dependency_overrides.clear()
 
 @pytest.mark.asyncio
 async def test_admin_permissions(db_session):
