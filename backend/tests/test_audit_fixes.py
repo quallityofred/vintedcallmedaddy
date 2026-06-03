@@ -101,7 +101,6 @@ async def test_check_monitor_efficiency(db_session):
          patch("app.scheduler.tasks.send_item_notification", AsyncMock()):
         
         await check_monitor(monitor_id, mock_client)
-
     # Verify results in a fresh session
     async with session_factory() as verify_db:
         # Verify SeenItem created for THIS user

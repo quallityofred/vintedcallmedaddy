@@ -62,7 +62,7 @@ async def test_concurrent_monitor_execution(db_session):
         semaphore = asyncio.Semaphore(1)
         async def sem_check(mid):
             async with semaphore:
-                await check_monitor(mid, mock_client)
+                await check_monitor(mid)
         
         tasks = [sem_check(mid) for mid in monitor_ids]
         await asyncio.gather(*tasks)

@@ -96,7 +96,7 @@ async def _update_monitor_interval(
 			monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
 
-async def check_monitor(monitor_id: int) -> None:
+async def check_monitor(monitor_id: int, _test_client: VintedClient | None = None) -> None:
 	"""Main task: check a single monitor for new Vinted listings."""
 	try:
 		async with _new_session() as db:
@@ -117,26 +117,31 @@ async def check_monitor(monitor_id: int) -> None:
 			)
 			hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
 
-			# Configure CF Worker for this user
-			from app.scraper.client import VintedClient, CloudflareFallback
-			from app.scraper.rate_limiter import TokenBucketLimiter
+			if _test_client:
+				client = _test_client
+			else:
+				# Configure CF Worker for this user
+				from app.scraper.client import VintedClient, CloudflareFallback
+				from app.scraper.rate_limiter import TokenBucketLimiter
 
-			cf_fallback = None
-			if user and user.cf_worker_url:
-				cf_fallback = CloudflareFallback(
-					worker_url=user.cf_worker_url,
-					block_threshold=user.cf_worker_block_threshold,
-					recovery_minutes=user.cf_worker_recovery_minutes,
+				cf_fallback = None
+				if user and user.cf_worker_url:
+					cf_fallback = CloudflareFallback(
+						worker_url=user.cf_worker_url,
+						block_threshold=user.cf_worker_block_threshold,
+						recovery_minutes=user.cf_worker_recovery_minutes,
+					)
+				
+				rate_limiter = TokenBucketLimiter(
+					rate=float(settings.rate_limit_per_minute),
+					per=60.0,
 				)
+				client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
+				
+			items = await client.search_all_domains(params, domains)
 			
-			rate_limiter = TokenBucketLimiter(
-				rate=float(settings.rate_limit_per_minute),
-				per=60.0,
-			)
-			client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
-
-		items = await client.search_all_domains(params, domains)
-		await client.close()
+			if not _test_client:
+				await client.close()
 
 		if not items:
 			async with _new_session() as db:
@@ -334,7 +339,7 @@ class MonitorScheduler:
 			check_monitor,
 			trigger=IntervalTrigger(seconds=effective),
 			args=[monitor_id],
-			id=f"monitor_{monitor.id}",
+			id=f"monitor_{monitor_id}",
 		)
 		if job:
 			self.job_ids[monitor_id] = job.id

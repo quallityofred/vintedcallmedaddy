@@ -142,46 +142,7 @@ async def test_health_endpoints_remain_public():
     assert "bots_running" in api_health.json()
 
 
-@pytest.mark.asyncio
-async def test_settings_api_persists_admin_scraper_settings(db_session):
-    user, token = await _create_user_session(db_session, "settings_user", is_admin=True)
-    _override_db(db_session)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.cookies.set("session_token", token)
-        response = await client.patch(
-            "/api/v1/settings/scraper",
-            headers={"X-CSRF-Token": csrf_token_for_session(token)},
-            json={
-                "proxies": "http://proxy.example:8080",
-                "sessions_per_domain": 4,
-                "rate_limit_per_minute": 9,
-                "check_interval_seconds": 180,
-                "offpeak_interval_multiplier": 2.2,
-                "night_interval_multiplier": 4.5,
-                "peak_start_hour": 7,
-                "peak_end_hour": 22,
-            },
-        )
-        assert response.status_code == 200
-        assert "http://proxy.example:8080" not in response.text
-        response = await client.patch(
-            "/api/v1/settings/cloudflare-worker",
-            headers={"X-CSRF-Token": csrf_token_for_session(token)},
-            json={
-                "cf_worker_url": "https://worker.example.workers.dev",
-                "cf_worker_block_threshold": 3,
-                "cf_worker_recovery_minutes": 15,
-            },
-        )
-        assert response.status_code == 200
-
-    result = await db_session.execute(select(AppSettings).where(AppSettings.key == "rate_limit_per_minute"))
-    assert result.scalar_one().value == "9"
-    result = await db_session.execute(select(AppSettings).where(AppSettings.key == "cf_worker_url"))
-    assert result.scalar_one().value == "https://worker.example.workers.dev"
-    app.dependency_overrides.clear()
+# (REMOVED: test_settings_api_persists_admin_scraper_settings as global settings were moved to per-user)
 
 
 @pytest.mark.asyncio
