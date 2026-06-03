@@ -1,19 +1,6 @@
 # app/main.py
 """
 FastAPI application entry point for Vinted Monitor.
-
-Startup sequence:
-  1. Initialize database (create tables, run lightweight migrations)
-  2. Create VintedClient
-  3. Start MonitorScheduler
-  4. Restore persisted Telegram bots for all users
-  5. Mount static files and Jinja2 templates
-  6. Register routers and exception handlers
-
-Shutdown sequence:
-  1. Stop all Telegram bots
-  2. Stop scheduler
-  3. Close scraper sessions
 """
 from __future__ import annotations
 
@@ -23,9 +10,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
 from app.database import init_db
@@ -35,18 +21,6 @@ from app.web.dependencies import RequireLoginException, restore_persisted_bot
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# ---------------------------------------------------------------------------
-# Jinja2 custom filters
-# ---------------------------------------------------------------------------
-
-def _from_json_filter(value: str):
-    """Jinja2 filter: parse a JSON string to a Python object."""
-    import json
-    try:
-        return json.loads(value)
-    except Exception:
-        return []
-
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -55,7 +29,6 @@ def _from_json_filter(value: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle."""
-    # ── Startup ──────────────────────────────────────────────────────────
     logger.info("Starting Vinted Monitor...")
 
     # 1. Database
@@ -107,9 +80,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Bot restore failed")
 
-    yield  # ── Application running ──────────────────────────────────────
+    yield
 
-    # ── Shutdown ─────────────────────────────────────────────────────────
+    # в”Ђв”Ђ Shutdown в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     logger.info("Shutting down Vinted Monitor...")
 
     # Stop all bots
@@ -159,7 +132,7 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
-    # ── Middleware ────────────────────────────────────────────────────────
+    # в”Ђв”Ђ Middleware в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
     if settings.frontend_url:
         origins.append(settings.frontend_url.strip())
@@ -172,20 +145,12 @@ def create_app() -> FastAPI:
         allow_credentials=True,
     )
 
-    # ── Static files ──────────────────────────────────────────────────────
+    # в”Ђв”Ђ Static files в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.isdir(static_dir):
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-    # ── Templates ────────────────────────────────────────────────────────
-    templates_dir = os.path.join(os.path.dirname(__file__), "templates")
-    templates = Jinja2Templates(directory=templates_dir)
-    templates.env.filters["from_json"] = _from_json_filter
-    from app.web.csrf import csrf_token_for_request
-    templates.env.globals["csrf_token"] = csrf_token_for_request
-    app.state.templates = templates
-
-    # ── Routers ───────────────────────────────────────────────────────────
+    # в”Ђв”Ђ Routers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     from app.web.admin_api_router import router as admin_api_router
     from app.web.auth_api_router import router as auth_api_router
     from app.web.auth_router import router as auth_router
@@ -206,36 +171,21 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(web_router)
 
-    # Admin router (if it exists)
-    try:
-        from app.web.admin_router import router as admin_router  # type: ignore
-        app.include_router(admin_router, prefix="/admin")
-    except ImportError:
-        pass
-
-    # ── Exception handlers ────────────────────────────────────────────────
+    # в”Ђв”Ђ Exception handlers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     @app.exception_handler(RequireLoginException)
     async def require_login_handler(request: Request, exc: RequireLoginException):
         return RedirectResponse(url="/login", status_code=303)
 
     @app.exception_handler(404)
     async def not_found_handler(request: Request, exc):
-        if request.url.path.startswith("/api/"):
-            return JSONResponse({"detail": "Not found"}, status_code=404)
-        return templates.TemplateResponse(
-            request, "404.html", {"request": request}, status_code=404
-        ) if _template_exists(templates_dir, "404.html") else JSONResponse(
-            {"detail": "Not found"}, status_code=404
-        )
+        return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.exception_handler(500)
     async def server_error_handler(request: Request, exc):
         logger.exception("Unhandled server error for %s", request.url)
-        if request.url.path.startswith("/api/"):
-            return JSONResponse({"detail": "Internal server error"}, status_code=500)
         return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
-    # ── Health check ──────────────────────────────────────────────────────
+    # в”Ђв”Ђ Health check в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     @app.get("/health")
     async def health_check():
         """Liveness probe – used by Railway / Docker healthchecks."""
@@ -256,31 +206,11 @@ def create_app() -> FastAPI:
 
     return app
 
-
-def _template_exists(templates_dir: str, name: str) -> bool:
-    return os.path.isfile(os.path.join(templates_dir, name))
-
-
-# Module-level app instance (used by uvicorn / gunicorn)
 app = create_app()
-
-
-# ---------------------------------------------------------------------------
-# clean_startup_reset – exported for use by tests and lifespan
-# ---------------------------------------------------------------------------
 
 async def clean_startup_reset() -> None:
     """
     Reset application state to a cold-start baseline.
-
-    * Deletes all ``FoundItem`` and ``SeenItem`` rows so the first polling
-      cycle treats every listing as unseen (but silenced – no notification
-      on cold start).
-    * Resets ``last_check_at = None`` and ``items_found_count = 0`` on every
-      monitor so ``check_monitor`` knows it is a cold start.
-
-    Uses ``app.database.AsyncSessionLocal`` when tests patch it, otherwise
-    resolves the initialized session factory dynamically.
     """
     import app.database as _db_module
     from app.models import FoundItem, Monitor, SeenItem
