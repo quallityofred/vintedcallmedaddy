@@ -60,14 +60,14 @@ export function SystemStatusCard() {
       <CardHeader>
         <CardTitle>System Status</CardTitle>
       </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-4">
+      <CardContent className="grid grid-cols-2 gap-3">
         {items.map((item) => (
-          <div key={item.label} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-            <item.icon className="size-4 text-emerald-200" />
-            <div>
-              <p className="text-xs text-muted-foreground">{item.label}</p>
-              <p className="text-sm font-medium">{item.value}</p>
-            </div>
+          <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+              <item.icon className="size-3" />
+              {item.label}
+            </p>
+            <p className="mt-2 truncate text-lg font-semibold text-foreground">{item.value}</p>
           </div>
         ))}
       </CardContent>

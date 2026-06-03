@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import { ArrowRight, Bell, Database, Gauge, Radar, ShieldCheck, Sparkles } from "lucide-react";
 
@@ -9,6 +11,7 @@ import { SplineHero } from "@/components/spline-hero";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/context/auth-context";
 
 const features = [
   {
@@ -47,6 +50,8 @@ const principles = [
 ];
 
 export default function Home() {
+  const { user } = useAuth();
+  
   return (
     <main className="min-h-screen overflow-hidden">
       <section className="relative isolate soft-grid">
@@ -65,16 +70,24 @@ export default function Home() {
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
-              <Link href="/dashboard" className={cn(buttonVariants({ size: "lg" }), "h-11 px-5")}>
-                Open dashboard
-                <ArrowRight className="size-4" />
-              </Link>
-              <Link
-                href="/login"
-                className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 px-5")}
-              >
-                Sign in
-              </Link>
+              {user ? (
+                <Link href="/dashboard" className={cn(buttonVariants({ size: "lg" }), "h-11 px-5")}>
+                  Open dashboard
+                  <ArrowRight className="size-4" />
+                </Link>
+              ) : (
+                <>
+                  <Link href="/login" className={cn(buttonVariants({ size: "lg" }), "h-11 px-5")}>
+                    Sign in
+                  </Link>
+                  <Link
+                    href="/register"
+                    className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 px-5")}
+                  >
+                    Create account
+                  </Link>
+                </>
+              )}
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
               {features.map((feature) => (

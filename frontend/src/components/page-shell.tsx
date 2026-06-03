@@ -1,25 +1,40 @@
+"use client";
+
 import Link from "next/link";
-import { LayoutDashboard, LogIn, Radar, Settings } from "lucide-react";
+import { LayoutDashboard, LogIn, LogOut, Radar, Settings, ShieldCheck } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/context/auth-context";
+import { useRouter } from "next/navigation";
 
-const navItems = [
-  { href: "/", label: "Landing", icon: Radar },
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/settings", label: "Settings", icon: Settings },
-  { href: "/login", label: "Login", icon: LogIn },
-];
-
-type PageShellProps = {
+export function PageShell({ eyebrow, title, description, children }: {
   eyebrow: string;
   title: string;
   description: string;
   children: React.ReactNode;
-};
+}) {
+  const { user, refresh } = useAuth();
+  const router = useRouter();
 
-export function PageShell({ eyebrow, title, description, children }: PageShellProps) {
+  async function handleLogout() {
+    await fetch("/api/v1/auth/logout", { method: "POST" });
+    await refresh();
+    router.push("/");
+  }
+
+  const navItems = [
+    { href: "/", label: "Landing", icon: Radar },
+    ...(user ? [
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/settings", label: "Settings", icon: Settings },
+      ...(user.is_admin ? [{ href: "/admin", label: "Admin", icon: ShieldCheck }] : []),
+    ] : [
+      { href: "/login", label: "Login", icon: LogIn },
+    ]),
+  ];
+
   return (
     <main className="min-h-screen">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-4 sm:py-6 lg:px-6">
@@ -53,6 +68,18 @@ export function PageShell({ eyebrow, title, description, children }: PageShellPr
                   </Link>
                 );
               })}
+              {user && (
+                <button
+                  onClick={handleLogout}
+                  className={cn(
+                    buttonVariants({ variant: "ghost" }),
+                    "h-10 justify-start gap-3 px-3 text-muted-foreground hover:text-red-400",
+                  )}
+                >
+                  <LogOut className="size-4" />
+                  Logout
+                </button>
+              )}
             </nav>
           </aside>
           <section className="space-y-5 py-2 sm:space-y-6 lg:py-6">
