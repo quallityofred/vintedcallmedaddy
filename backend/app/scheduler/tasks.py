@@ -105,6 +105,10 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 			if monitor is None or not monitor.is_active:
 				return
 
+			if monitor.user_id is None:
+				logger.warning("Skipping monitor with missing user_id", extra={"monitor_id": monitor.id})
+				return
+
 			user = await db.get(User, monitor.user_id)
 			params = json.loads(monitor.params_json)
 			domains = json.loads(monitor.domains_json)
