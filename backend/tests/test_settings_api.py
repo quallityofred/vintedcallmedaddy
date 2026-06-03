@@ -155,7 +155,7 @@ async def test_settings_api_admin_updates_global_cf_worker_and_scraper_settings(
             },
         )
         assert cf_response.status_code == 200
-        cf_payload = cf_response.json()["global_settings"]["cloudflare_worker"]
+        cf_payload = cf_response.json()["cloudflare_worker"]
         assert cf_payload == {
             "url": "https://worker.example.com/proxy",
             "configured": True,

@@ -97,10 +97,22 @@ async def test_check_monitor_efficiency(db_session):
 
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
 
-    with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
-         patch("app.scheduler.tasks.send_item_notification", AsyncMock()):
+    with patch("app.scheduler.tasks.VintedClient") as MockClientClass:
+        mock_client = MagicMock()
+        mock_client.search_all_domains = AsyncMock(return_value=[
+            VintedItem(
+                id=item_id, title="Item 1", price=10.0, currency="EUR", brand="B",
+                size="S", condition="N", photo_url="p", item_url="u",
+                domain="vinted.fr", seller_id=456
+            )
+        ])
+        mock_client.close = AsyncMock()
         
-        await check_monitor(monitor_id, mock_client)
+        with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
+             patch("app.scheduler.tasks.send_item_notification", AsyncMock()):
+
+            await check_monitor(monitor_id, scraper_client=mock_client)
+
     # Verify results in a fresh session
     async with session_factory() as verify_db:
         # Verify SeenItem created for THIS user

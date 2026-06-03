@@ -31,13 +31,14 @@ async def test_duplicate_notification_prevention_same_user(db_session):
     # Mock VintedClient to return the same item for both monitors
     mock_client = MagicMock()
     mock_client.search_all_domains = AsyncMock(return_value=[item])
+    mock_client.close = AsyncMock()
 
     # Run check_monitor for M1
     with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
          patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
-        await check_monitor(m1.id)
+        await check_monitor(m1.id, scraper_client=mock_client)
         # Run check_monitor for M2
-        await check_monitor(m2.id)
+        await check_monitor(m2.id, scraper_client=mock_client)
 
     # Verify:
     # 1. SeenItem has only 1 entry for this user/item
@@ -71,17 +72,15 @@ async def test_cross_user_notifications(db_session):
     await db_session.commit()
 
     item = VintedItem(id=456, title="Cross Item", price=10.0, currency="PLN", brand="Nike", size="M", condition="New", photo_url="p", item_url="u", domain="vinted.pl", seller_id=999)
-    # The new check_monitor creates its own VintedClient internally
-    # We need to patch the VintedClient class to return a mocked instance
-    with patch("app.scheduler.tasks.VintedClient") as MockClientClass:
-        mock_client = MagicMock()
-        mock_client.search_all_domains = AsyncMock(return_value=[item])
-        MockClientClass.return_value = mock_client
 
-        with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
-             patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
-            await check_monitor(m1.id)
-            await check_monitor(m2.id)
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(return_value=[item])
+    mock_client.close = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
+        await check_monitor(m1.id, scraper_client=mock_client)
+        await check_monitor(m2.id, scraper_client=mock_client)
 
     # Verify:
     # Both users should have a FoundItem with notified=False
@@ -115,14 +114,13 @@ async def test_cold_start_on_restart(db_session):
     # Run check_monitor
     item = VintedItem(id=789, title="Initial Item", price=10.0, currency="PLN", brand="Nike", size="M", condition="New", photo_url="p", item_url="u", domain="vinted.pl", seller_id=999)
     
-    with patch("app.scheduler.tasks.VintedClient") as MockClientClass:
-        mock_client = MagicMock()
-        mock_client.search_all_domains = AsyncMock(return_value=[item])
-        MockClientClass.return_value = mock_client
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(return_value=[item])
+    mock_client.close = AsyncMock()
 
-        with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
-             patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
-            await check_monitor(monitor.id)
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
+        await check_monitor(monitor.id, scraper_client=mock_client)
 
     # Verify: notified should be True (SILENCED)
     found = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 789))

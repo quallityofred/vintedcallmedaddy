@@ -96,7 +96,7 @@ async def _update_monitor_interval(
 			monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
 
-async def check_monitor(monitor_id: int, _test_client: VintedClient | None = None) -> None:
+async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = None) -> None:
 	"""Main task: check a single monitor for new Vinted listings."""
 	try:
 		async with _new_session() as db:
@@ -117,10 +117,10 @@ async def check_monitor(monitor_id: int, _test_client: VintedClient | None = Non
 			)
 			hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
 
-			if _test_client:
-				client = _test_client
-			else:
-				# Configure CF Worker for this user
+			owns_client = scraper_client is None
+			client = scraper_client
+
+			if client is None:
 				from app.scraper.client import VintedClient, CloudflareFallback
 				from app.scraper.rate_limiter import TokenBucketLimiter
 
@@ -137,106 +137,111 @@ async def check_monitor(monitor_id: int, _test_client: VintedClient | None = Non
 					per=60.0,
 				)
 				client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
-				
-			items = await client.search_all_domains(params, domains)
 			
-			if not _test_client:
-				await client.close()
+			try:
+				items = await client.search_all_domains(params, domains)
+			finally:
+				if owns_client:
+					await client.close()
 
-		if not items:
-			async with _new_session() as db:
-				result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-				monitor = result.scalar_one_or_none()
-				if monitor and monitor.is_active:
-					await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
+			items = items or []
+
+			if not items:
+				async with _new_session() as db:
+					result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+					monitor = result.scalar_one_or_none()
+					if monitor and monitor.is_active:
+						await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
+						await db.commit()
+			else:
+				async with _new_session() as db:
+					result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+					monitor = result.scalar_one_or_none()
+					if monitor is None or not monitor.is_active:
+						return
+
+					# Items are available here, now process them
+					filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+
+					logger.debug(f"Filtered {len(items)} items down to {len(filtered_items)} based on hidden sellers")
+					new_items_to_notify: list[VintedItem] = []
+					is_pg = not settings.is_sqlite()
+
+					for item in filtered_items:
+						if is_pg:
+							stmt = pg_insert(SeenItem).values(
+								user_id=user_id,
+								vinted_item_id=item.id,
+								domain=item.domain,
+								seen_at=datetime.now(timezone.utc),
+							).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
+							res = await db.execute(stmt)
+							is_new_for_user = res.rowcount > 0
+						else:
+							stmt = insert(SeenItem).values(
+								user_id=user_id,
+								vinted_item_id=item.id,
+								domain=item.domain,
+								seen_at=datetime.now(timezone.utc),
+							).prefix_with("OR IGNORE")
+							res = await db.execute(stmt)
+							is_new_for_user = res.rowcount > 0
+
+						notified_status = is_cold_start or not is_new_for_user
+
+						if is_pg:
+							found_stmt = pg_insert(FoundItem).values(
+								monitor_id=monitor_id,
+								vinted_item_id=item.id,
+								domain=item.domain,
+								title=item.title,
+								price=item.price,
+								currency=item.currency,
+								brand=item.brand,
+								size=item.size,
+								condition=item.condition,
+								photo_url=item.photo_url,
+								item_url=item.item_url,
+								seller_id=item.seller_id,
+								found_at=datetime.now(timezone.utc),
+								notified=notified_status,
+							).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
+							found_res = await db.execute(found_stmt)
+							if found_res.rowcount > 0 and not notified_status:
+								new_items_to_notify.append(item)
+						else:
+							found_stmt = insert(FoundItem).values(
+								monitor_id=monitor_id,
+								vinted_item_id=item.id,
+								domain=item.domain,
+								title=item.title,
+								price=item.price,
+								currency=item.currency,
+								brand=item.brand,
+								size=item.size,
+								condition=item.condition,
+								photo_url=item.photo_url,
+								item_url=item.item_url,
+								seller_id=item.seller_id,
+								found_at=datetime.now(timezone.utc),
+								notified=notified_status,
+							).prefix_with("OR IGNORE")
+							found_res = await db.execute(found_stmt)
+							if found_res.rowcount > 0 and not notified_status:
+								new_items_to_notify.append(item)
+
+					await _update_monitor_interval(
+						db,
+						monitor,
+						len(new_items_to_notify) > 0 or not is_cold_start,
+						count=len(new_items_to_notify),
+						original_interval=original_interval,
+					)
+					monitor.last_check_at = datetime.now(timezone.utc)
 					await db.commit()
-			return
 
-		async with _new_session() as db:
-			result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-			monitor = result.scalar_one_or_none()
-			if monitor is None or not monitor.is_active:
-				return
-
-			filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
-			new_items_to_notify: list[VintedItem] = []
-			is_pg = not settings.is_sqlite()
-
-			for item in filtered_items:
-				if is_pg:
-					stmt = pg_insert(SeenItem).values(
-						user_id=user_id,
-						vinted_item_id=item.id,
-						domain=item.domain,
-						seen_at=datetime.now(timezone.utc),
-					).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
-					res = await db.execute(stmt)
-					is_new_for_user = res.rowcount > 0
-				else:
-					stmt = insert(SeenItem).values(
-						user_id=user_id,
-						vinted_item_id=item.id,
-						domain=item.domain,
-						seen_at=datetime.now(timezone.utc),
-					).prefix_with("OR IGNORE")
-					res = await db.execute(stmt)
-					is_new_for_user = res.rowcount > 0
-
-				notified_status = is_cold_start or not is_new_for_user
-
-				if is_pg:
-					found_stmt = pg_insert(FoundItem).values(
-						monitor_id=monitor_id,
-						vinted_item_id=item.id,
-						domain=item.domain,
-						title=item.title,
-						price=item.price,
-						currency=item.currency,
-						brand=item.brand,
-						size=item.size,
-						condition=item.condition,
-						photo_url=item.photo_url,
-						item_url=item.item_url,
-						seller_id=item.seller_id,
-						found_at=datetime.now(timezone.utc),
-						notified=notified_status,
-					).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
-					found_res = await db.execute(found_stmt)
-					if found_res.rowcount > 0 and not notified_status:
-						new_items_to_notify.append(item)
-				else:
-					found_stmt = insert(FoundItem).values(
-						monitor_id=monitor_id,
-						vinted_item_id=item.id,
-						domain=item.domain,
-						title=item.title,
-						price=item.price,
-						currency=item.currency,
-						brand=item.brand,
-						size=item.size,
-						condition=item.condition,
-						photo_url=item.photo_url,
-						item_url=item.item_url,
-						seller_id=item.seller_id,
-						found_at=datetime.now(timezone.utc),
-						notified=notified_status,
-					).prefix_with("OR IGNORE")
-					found_res = await db.execute(found_stmt)
-					if found_res.rowcount > 0 and not notified_status:
-						new_items_to_notify.append(item)
-
-			await _update_monitor_interval(
-				db,
-				monitor,
-				len(new_items_to_notify) > 0 or not is_cold_start,
-				count=len(new_items_to_notify),
-				original_interval=original_interval,
-			)
-			monitor.last_check_at = datetime.now(timezone.utc)
-			await db.commit()
-
-		if new_items_to_notify:
-			asyncio.create_task(process_pending_notifications())
+				if new_items_to_notify:
+					asyncio.create_task(process_pending_notifications())
 	except Exception as e:
 		logger.error(f"Error in check_monitor {monitor_id}: {e}")
 		raise
