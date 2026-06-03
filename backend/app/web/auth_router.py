@@ -44,7 +44,7 @@ async def consume_invite_code(db: AsyncSession, code: str) -> InviteCode | None:
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, user: User | None = Depends(get_current_user)):
     if user is not None:
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url="/dashboard", status_code=303)
     return request.app.state.templates.TemplateResponse(
         request, "auth/login.html", {"request": request, "error": None}
     )
@@ -72,7 +72,7 @@ async def login_submit(
     db.add(UserSession(user_id=user.id, token=token))
     await db.commit()
 
-    response = RedirectResponse(url="/", status_code=303)
+    response = RedirectResponse(url="/dashboard", status_code=303)
     set_session_cookie(response, token)
     return response
 
@@ -80,7 +80,7 @@ async def login_submit(
 @router.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request, user: User | None = Depends(get_current_user)):
     if user is not None:
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url="/dashboard", status_code=303)
     return request.app.state.templates.TemplateResponse(
         request, "auth/register.html", {"request": request, "error": None}
     )
@@ -149,7 +149,7 @@ async def register_submit(
     db.add(UserSession(user_id=user.id, token=token))
     await db.commit()
 
-    response = RedirectResponse(url="/", status_code=303)
+    response = RedirectResponse(url="/dashboard", status_code=303)
     set_session_cookie(response, token)
     return response
 

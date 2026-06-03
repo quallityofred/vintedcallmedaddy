@@ -1,6 +1,7 @@
 import { Activity, Bell, Clock, Radar } from "lucide-react";
 
 import { AnimatedSection } from "@/components/animated-section";
+import { BackendHealthCard } from "@/components/backend-health-card";
 import { DashboardCard } from "@/components/dashboard-card";
 import { MonitorPreview } from "@/components/monitor-preview";
 import { PageShell } from "@/components/page-shell";
@@ -27,6 +28,10 @@ export default function DashboardPage() {
         ))}
       </AnimatedSection>
 
+      <AnimatedSection delay={0.06}>
+        <BackendHealthCard />
+      </AnimatedSection>
+
       <AnimatedSection delay={0.08}>
         <MonitorPreview />
       </AnimatedSection>
@@ -41,7 +46,7 @@ export default function DashboardPage() {
               </CardDescription>
             </div>
             <Badge variant="outline" className="w-fit border-emerald-300/20 text-emerald-200">
-              No backend calls yet
+              Health endpoint only
             </Badge>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-3">
@@ -49,7 +54,7 @@ export default function DashboardPage() {
               <div key={endpoint} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <p className="font-mono text-sm text-emerald-200">{endpoint}</p>
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  Contract pending. Existing Jinja route remains the source of truth.
+                  Contract pending. The dashboard only calls the public health endpoint today.
                 </p>
               </div>
             ))}

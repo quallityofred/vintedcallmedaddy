@@ -28,7 +28,7 @@ NEXT_PUBLIC_SPLINE_SCENE_URL=
 
 Use this directory as the Railway frontend service root.
 
-- Build command: `npm ci && npm run build`
+- Build command: `npm run build`
 - Start command: `npm run start -- --hostname 0.0.0.0 --port $PORT`
 - Required variable: `BACKEND_URL=https://YOUR_BACKEND_SERVICE.up.railway.app`
 

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
@@ -79,11 +80,37 @@ def _fmt_interval(seconds: int) -> str:
 	return f"{seconds // 60}m{seconds % 60:02d}s"
 
 
+def _is_production_runtime() -> bool:
+	return settings.environment.lower() in {"production", "prod"} or bool(
+		os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER")
+	)
+
+
+def _backend_root_payload() -> dict[str, object]:
+	return {
+		"service": "vintedbot-backend",
+		"status": "ok",
+		"frontend": settings.frontend_url or None,
+		"health": "/health",
+		"api_health": "/api/health",
+		"legacy_dashboard": "/dashboard",
+	}
+
+
 # ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/")
+async def backend_root():
+	if _is_production_runtime():
+		if settings.frontend_url:
+			return RedirectResponse(url=settings.frontend_url, status_code=307)
+		return JSONResponse(_backend_root_payload())
+	return RedirectResponse(url="/dashboard", status_code=307)
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
 	request: Request,
 	db: AsyncSession = Depends(get_db),

@@ -59,6 +59,80 @@ async def test_route_table_has_no_duplicate_registrations():
 
 
 @pytest.mark.asyncio
+async def test_backend_root_returns_api_info_in_production_without_frontend(monkeypatch):
+    from app.web import router as web_router
+
+    monkeypatch.setattr(web_router.settings, "environment", "production")
+    monkeypatch.setattr(web_router.settings, "frontend_url", "")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    payload = response.json()
+    assert payload == {
+        "service": "vintedbot-backend",
+        "status": "ok",
+        "frontend": None,
+        "health": "/health",
+        "api_health": "/api/health",
+        "legacy_dashboard": "/dashboard",
+    }
+
+
+@pytest.mark.asyncio
+async def test_backend_root_redirects_to_frontend_in_production(monkeypatch):
+    from app.web import router as web_router
+
+    monkeypatch.setattr(web_router.settings, "environment", "production")
+    monkeypatch.setattr(web_router.settings, "frontend_url", "https://frontend.example")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://frontend.example"
+
+
+@pytest.mark.asyncio
+async def test_backend_root_keeps_legacy_dashboard_reachable_in_development(monkeypatch):
+    from app.web import router as web_router
+
+    monkeypatch.setattr(web_router.settings, "environment", "development")
+    monkeypatch.setattr(web_router.settings, "frontend_url", "")
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/", follow_redirects=False)
+        dashboard_response = await client.get("/dashboard", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/dashboard"
+    assert dashboard_response.status_code == 303
+    assert dashboard_response.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoints_remain_public():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        health = await client.get("/health")
+        api_health = await client.get("/api/health")
+
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok", "service": "vinted-monitor"}
+    assert api_health.status_code == 200
+    assert api_health.json()["status"] == "ok"
+    assert "scheduler_jobs" in api_health.json()
+    assert "bots_running" in api_health.json()
+
+
+@pytest.mark.asyncio
 async def test_settings_page_renders_and_persists_scraper_settings(db_session):
     user, token = await _create_user_session(db_session, "settings_user", is_admin=True)
     _override_db(db_session)

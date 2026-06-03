@@ -18,7 +18,12 @@ poetry run uvicorn app.main:app --host 0.0.0.0 --port 8080
 Use this directory as the Railway backend service root.
 
 - Build command: `poetry install --only main --no-root`
-- Start command: `poetry run uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Start command: `sh -c 'poetry run uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}'`
+- Healthcheck path: `/health`
+
+Railway provides `PORT`; do not add a manual `PORT=8080` variable unless you are intentionally overriding it for a non-Railway run.
+
+In production, backend `/` redirects to `FRONTEND_URL` when configured. If `FRONTEND_URL` is missing, `/` returns minimal JSON service information. The legacy Jinja dashboard remains available at `/dashboard`.
 
 Required production variables are documented in `../docs/DEPLOYMENT_ENV.md`.
 

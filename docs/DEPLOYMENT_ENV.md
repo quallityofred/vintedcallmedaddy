@@ -20,7 +20,12 @@ Service:
 - Platform: Railway
 - Root directory: `backend`
 - Build command: `poetry install --only main --no-root`
-- Start command: `poetry run uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Start command: `sh -c 'poetry run uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}'`
+- Healthcheck path: `/health`
+
+Railway provides `PORT` automatically. Do not set `PORT=8080` manually in Railway unless there is a special reason. The backend start command is shell-wrapped so Railway's `PORT` value is expanded before Uvicorn starts.
+
+In production, backend `/` redirects to `FRONTEND_URL` when configured. If `FRONTEND_URL` is not configured, `/` returns a minimal JSON service status without secrets. `/health` and `/api/health` are public, unauthenticated health probes.
 
 ### Required Variables
 
@@ -33,7 +38,7 @@ Service:
 | `ALLOWED_ORIGINS` | `https://YOUR_FRONTEND_SERVICE.up.railway.app,http://localhost:3000` | no | Frontend URL plus local dev origin if needed | Comma-separated. Keep specific in production. |
 | `SESSION_COOKIE_SECURE` | `true` | no | Set manually in Railway | Railway also implies secure cookies, but setting this explicitly is clearer. |
 | `NIXPACKS_PYTHON_VERSION` | `3.11` | no | Set manually in Railway if needed | Keeps the Railway Python runtime aligned with project support. |
-| `PORT` | Railway-provided | no | Railway injects this automatically | Do not hardcode it. The start command reads `$PORT`. |
+| `PORT` | Railway-provided | no | Railway injects this automatically | Do not hardcode or manually set it in normal Railway deploys. The shell-wrapped start command reads `${PORT:-8080}`. |
 
 ### Optional Defaults
 
@@ -64,7 +69,7 @@ Service:
 - Suggested name: `vintedbot-frontend`
 - Platform: Railway
 - Root directory: `frontend`
-- Build command: `npm ci && npm run build`
+- Build command: `npm run build`
 - Start command: `npm run start -- --hostname 0.0.0.0 --port $PORT`
 
 ### Required Variables

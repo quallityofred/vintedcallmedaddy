@@ -47,7 +47,7 @@ async def test_registration_requires_valid_invite(db_session):
             request, db_session, "user2", "pass123", "pass123", "valid-code"
         )
         assert response.status_code == 303
-        assert response.headers["location"] == "/"
+        assert response.headers["location"] == "/dashboard"
 
     # 3. Verify user created and code used
     result = await db_session.execute(select(User).where(User.username == "user2"))
