@@ -83,7 +83,7 @@ export function MonitorPreview() {
   const [error, setError] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [, setTopicsEnabled] = useState(false);
+  const [topicsEnabled, setTopicsEnabled] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);
@@ -102,6 +102,13 @@ export function MonitorPreview() {
       }
       const data = (await response.json()) as Monitor[];
       setMonitors(data);
+
+      const settingsResponse = await fetch("/api/v1/settings/telegram/topics");
+      if (settingsResponse.ok) {
+          const settings = await settingsResponse.json();
+          setTopicsEnabled(settings.telegram_topics_enabled);
+      }
+      
       setSelectedIds((current) => current.filter((id) => data.some((monitor) => monitor.id === id)));
     } catch {
       setError(true);
