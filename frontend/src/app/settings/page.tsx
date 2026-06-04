@@ -75,6 +75,7 @@ function SettingsContent() {
             setCfUrl(data.cloudflare_worker.url || "");
             setCfBlock(data.cloudflare_worker.block_threshold?.toString() || "");
             setCfRecovery(data.cloudflare_worker.recovery_minutes?.toString() || "");
+            setCfMode(data.cloudflare_worker.mode || "auto");
         }
       }
     } catch {
@@ -145,6 +146,24 @@ function SettingsContent() {
     setSavingCf(true);
     try {
       const csrfToken = await getCsrfToken();
+      
+      const payload: { 
+        cf_worker_url: string; 
+        cf_worker_mode: string; 
+        cf_worker_block_threshold?: number; 
+        cf_worker_recovery_minutes?: number 
+      } = {
+        cf_worker_url: cfUrl,
+        cf_worker_mode: cfMode,
+      };
+      
+      if (cfBlock !== "") {
+          payload.cf_worker_block_threshold = parseInt(cfBlock, 10);
+      }
+      if (cfRecovery !== "") {
+          payload.cf_worker_recovery_minutes = parseInt(cfRecovery, 10);
+      }
+      
       const response = await fetch("/api/v1/settings/cloudflare-worker", {
         method: "PATCH",
         credentials: "same-origin",
@@ -152,12 +171,7 @@ function SettingsContent() {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken,
         },
-        body: JSON.stringify({
-          cf_worker_url: cfUrl,
-          cf_worker_block_threshold: parseInt(cfBlock),
-          cf_worker_recovery_minutes: parseInt(cfRecovery),
-          cf_worker_mode: cfMode,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) throw new Error("Failed to update settings");
       toast.success("Settings updated");
