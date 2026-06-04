@@ -45,6 +45,7 @@ tags:
 - 2026-06-03: Frontend UI/UX polish pass standardized async states, improved dashboard/admin/settings layout rhythm, added action aria-labels, and removed unfinished migration/legacy user-facing copy.
 - 2026-06-04: Dashboard monitor management was split into a dedicated protected `/monitors` page; dashboard now stays an overview surface with a compact monitor summary and CTA.
 - 2026-06-04: Follow-up polish improved Telegram settings feedback, shared checkbox styling, domain marketplace cards, and compact monitor selection controls.
+- 2026-06-04: `/monitors` received a strict visual rework: raw table rows were replaced by responsive monitor cards with visible selection, metadata tiles, and labeled actions.
 
 ## Fixed Audit Issues
 

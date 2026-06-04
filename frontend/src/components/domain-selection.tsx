@@ -30,12 +30,14 @@ function getMarketplaceLabel(domain: Domain) {
   const code = domain.code?.toLowerCase();
   if (code && MARKETPLACE_LABELS[code]) {
     return {
-      title: `${code.toUpperCase()} - ${MARKETPLACE_LABELS[code]}`,
+      code: code.toUpperCase(),
+      title: `${code.toUpperCase()} — ${MARKETPLACE_LABELS[code]}`,
       subtitle: domain.host || domain.domain,
     };
   }
 
   return {
+    code: domain.code?.toUpperCase() || domain.domain.slice(0, 2).toUpperCase(),
     title: domain.label || domain.host || domain.domain,
     subtitle: domain.host && domain.label ? domain.host : domain.domain,
   };
@@ -148,7 +150,7 @@ export function DomainSelection({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {domains.map((d) => {
           const isSelected = selectedDomains.includes(d.domain);
-          const { title, subtitle } = getMarketplaceLabel(d);
+          const { code, title, subtitle } = getMarketplaceLabel(d);
           const id = getDomainId(d.domain);
           return (
             <label
@@ -157,16 +159,26 @@ export function DomainSelection({
               className={cn(
                 "group flex cursor-pointer items-start gap-3 rounded-2xl border p-3 transition-all focus-within:border-emerald-200/70 focus-within:ring-2 focus-within:ring-emerald-300/20",
                 isSelected
-                  ? "border-emerald-300/55 bg-emerald-300/12 shadow-lg shadow-emerald-950/20"
-                  : "border-white/10 bg-black/10 hover:border-emerald-200/35 hover:bg-white/[0.05]"
+                  ? "border-emerald-300/70 bg-emerald-300/[0.14] shadow-lg shadow-emerald-950/25"
+                  : "border-white/10 bg-black/15 hover:border-emerald-200/40 hover:bg-white/[0.06]"
               )}
             >
               <Checkbox
                 id={id}
                 checked={isSelected}
-                className="mt-0.5"
+                className="mt-1 size-5 rounded-md border-emerald-200/45 bg-black/30"
                 onCheckedChange={() => toggleDomain(d.domain)}
               />
+              <span
+                className={cn(
+                  "flex size-9 shrink-0 items-center justify-center rounded-xl border text-xs font-bold tracking-wide",
+                  isSelected
+                    ? "border-emerald-200/40 bg-emerald-200/20 text-emerald-50"
+                    : "border-white/10 bg-white/[0.04] text-emerald-100/80"
+                )}
+              >
+                {code}
+              </span>
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-foreground">{title}</span>
                 <span className="mt-0.5 block truncate text-xs text-muted-foreground">{subtitle}</span>

@@ -6,8 +6,8 @@ import {
   Clock3,
   ExternalLink,
   Loader2,
-  MoreVertical,
   Pause,
+  Pencil,
   Play,
   Plus,
   Radar,
@@ -32,8 +32,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DomainSelection } from "@/components/domain-selection";
+import { cn } from "@/lib/utils";
 
 interface Monitor {
   id: number;
@@ -217,6 +217,20 @@ export function MonitorPreview() {
     return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
   };
 
+  const formatLastCheck = (value: string | null) => {
+    if (!value) return "Not checked yet";
+    try {
+      return new Intl.DateTimeFormat("en", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(value));
+    } catch {
+      return "Unknown";
+    }
+  };
+
   const allSelected = Boolean(monitors?.length && selectedIds.length === monitors.length);
   const hasSelection = selectedIds.length > 0;
 
@@ -243,20 +257,6 @@ export function MonitorPreview() {
             <CardDescription>Manage search URLs, check cadence, and monitor controls.</CardDescription>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            {hasSelection && hasMonitors ? (
-              <Button
-                aria-label={`Delete ${selectedIds.length} selected monitors`}
-                className="w-full animate-in fade-in slide-in-from-right-2 sm:w-auto"
-                disabled={bulkDeleting}
-                onClick={handleBulkDelete}
-                size="sm"
-                variant="destructive"
-              >
-                {bulkDeleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                Delete selected ({selectedIds.length})
-              </Button>
-            ) : null}
-
             <Dialog
               open={isCreateOpen}
               onOpenChange={(open) => {
@@ -356,9 +356,14 @@ export function MonitorPreview() {
               Monitors could not be loaded. Refresh the page or try again later.
             </div>
         ) : !hasMonitors ? (
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-white/10 bg-black/10 p-12 text-center">
-            <p className="text-lg font-medium">No monitors yet</p>
-            <p className="mt-2 max-w-sm text-sm text-muted-foreground">Create your first Vinted search monitor to start tracking new items.</p>
+          <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-emerald-200/25 bg-emerald-300/[0.04] p-8 text-center sm:p-12">
+            <div className="mb-4 flex size-12 items-center justify-center rounded-2xl border border-emerald-200/20 bg-emerald-300/10 text-emerald-100">
+              <Radar className="size-5" />
+            </div>
+            <p className="text-lg font-semibold">No monitors yet</p>
+            <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
+              Create your first Vinted search monitor, choose target marketplaces, and let the scheduler handle checks.
+            </p>
             <Button
               className="mt-6"
               onClick={() => setIsCreateOpen(true)}
@@ -369,129 +374,196 @@ export function MonitorPreview() {
             </Button>
           </div>
         ) : (
-          <div className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/10">
-          <div className="max-w-full overflow-x-auto">
-                    <Table className="min-w-[760px]">
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead className="w-10">
-                                    <Checkbox
-                                        aria-label="Select all monitors"
-                                        checked={allSelected}
-                                        className="size-4"
-                                        disabled={!monitors?.length || loading}
-                                        onCheckedChange={toggleAll}
-                                    />
-                                </TableHead>
-                                <TableHead>Search</TableHead>
-                                <TableHead>Domain</TableHead>
-                                <TableHead className="text-right">Interval</TableHead>
-                                <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {monitors.map((monitor) => {
-                                const checkKey = `${monitor.id}:check-now`;
-                                const pauseKey = `${monitor.id}:pause`;
-                                const resumeKey = `${monitor.id}:resume`;
-                                const deleteKey = `${monitor.id}:delete`;
-
-                                return (
-                                <TableRow key={monitor.id} className={!monitor.is_active ? "opacity-70" : ""}>
-                                    <TableCell>
-                                    <Checkbox
-                                        aria-label={`Select monitor ${monitor.name}`}
-                                        checked={selectedIds.includes(monitor.id)}
-                                        className="size-4"
-                                        onCheckedChange={() => toggleMonitor(monitor.id)}
-                                    />
-                                    </TableCell>
-                                    <TableCell className="max-w-[18rem]">
-                                    <div className="flex min-w-0 items-center gap-2 font-medium">
-                                        <span className="truncate">{monitor.name}</span>
-                                        {monitor.is_active ? null : <Badge variant="secondary">Paused</Badge>}
-                                    </div>
-                                    <a
-                                        aria-label={`Open source search for ${monitor.name}`}
-                                        className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground hover:text-emerald-200"
-                                        href={monitor.original_url}
-                                        rel="noreferrer"
-                                        target="_blank"
-                                    >
-                                        <ExternalLink className="size-3 shrink-0" />
-                                        <span className="truncate">Open source URL</span>
-                                    </a>
-                                    </TableCell>
-                                    <TableCell className="text-muted-foreground">{getDomain(monitor.original_url)}</TableCell>
-                                    <TableCell className="text-right tabular-nums">{formatInterval(monitor.interval_sec)}</TableCell>
-                                    <TableCell>
-                                    <div className="flex justify-end gap-1">
-                                        <Button
-                                        aria-label={`Edit monitor ${monitor.name}`}
-                                        onClick={() => {
-                                            setEditingMonitor(monitor);
-                                            setIsCreateOpen(true);
-                                        }}
-                                        size="icon-xs"
-                                        title="Edit"
-                                        variant="ghost"
-                                        >
-                                        <MoreVertical className="size-3.5" />
-                                        </Button>
-                                        <Button
-                                        aria-label={`Run monitor check for ${monitor.name}`}
-                                        disabled={!monitor.is_active || actionKey === checkKey}
-                                        onClick={() => handleAction(monitor.id, "check-now")}
-                                        size="icon-xs"
-                                        title="Check now"
-                                        variant="ghost"
-                                        >
-                                        {actionKey === checkKey ? (
-                                            <Loader2 className="size-3.5 animate-spin" />
-                                        ) : (
-                                            <RefreshCcw className="size-3.5" />
-                                        )}
-                                        </Button>
-                                        <Button
-                                        aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
-                                        disabled={actionKey === pauseKey || actionKey === resumeKey}
-                                        onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
-                                        size="icon-xs"
-                                        title={monitor.is_active ? "Pause" : "Resume"}
-                                        variant="ghost"
-                                        >
-                                        {actionKey === pauseKey || actionKey === resumeKey ? (
-                                            <Loader2 className="size-3.5 animate-spin" />
-                                        ) : monitor.is_active ? (
-                                            <Pause className="size-3.5" />
-                                        ) : (
-                                            <Play className="size-3.5" />
-                                        )}
-                                        </Button>
-                                        <Button
-                                        aria-label={`Delete monitor ${monitor.name}`}
-                                        className="text-destructive hover:bg-destructive/10"
-                                        disabled={actionKey === deleteKey}
-                                        onClick={() => handleAction(monitor.id, "delete")}
-                                        size="icon-xs"
-                                        title="Delete"
-                                        variant="ghost"
-                                        >
-                                        {actionKey === deleteKey ? (
-                                            <Loader2 className="size-3.5 animate-spin" />
-                                        ) : (
-                                            <Trash2 className="size-3.5" />
-                                        )}
-                                        </Button>
-                                    </div>
-                                    </TableCell>
-                                </TableRow>
-                                );
-                            })}
-                        </TableBody>
-                    </Table>
-                </div>
+          <div className="grid gap-3">
+            <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/15 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <Checkbox
+                  aria-label="Select all monitors"
+                  checked={allSelected}
+                  className="size-5 rounded-md border-emerald-200/45 bg-black/30"
+                  disabled={!monitors?.length || loading}
+                  onCheckedChange={toggleAll}
+                />
+                <button
+                  className="text-left text-sm font-medium text-foreground transition hover:text-emerald-100"
+                  onClick={toggleAll}
+                  type="button"
+                >
+                  Select all monitors
+                </button>
+              </div>
+              {hasSelection ? (
+                <Button
+                  aria-label={`Delete ${selectedIds.length} selected monitors`}
+                  className="w-full sm:w-auto"
+                  disabled={bulkDeleting}
+                  onClick={handleBulkDelete}
+                  size="sm"
+                  variant="destructive"
+                >
+                  {bulkDeleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                  Delete selected ({selectedIds.length})
+                </Button>
+              ) : (
+                <p className="text-xs text-muted-foreground">{monitors?.length || 0} monitor records</p>
+              )}
             </div>
+
+            <div className="grid gap-3">
+              {monitors.map((monitor) => {
+                const checkKey = `${monitor.id}:check-now`;
+                const pauseKey = `${monitor.id}:pause`;
+                const resumeKey = `${monitor.id}:resume`;
+                const deleteKey = `${monitor.id}:delete`;
+                const isSelected = selectedIds.includes(monitor.id);
+
+                return (
+                  <article
+                    key={monitor.id}
+                    className={cn(
+                      "rounded-3xl border p-4 transition-all sm:p-5",
+                      isSelected
+                        ? "border-emerald-300/55 bg-emerald-300/[0.08] shadow-xl shadow-emerald-950/20"
+                        : "border-white/10 bg-white/[0.035] hover:border-emerald-200/30 hover:bg-white/[0.055]",
+                      monitor.is_active ? "" : "opacity-80"
+                    )}
+                  >
+                    <div className="flex items-start gap-3">
+                      <Checkbox
+                        aria-label={`Select monitor ${monitor.name}`}
+                        checked={isSelected}
+                        className="mt-1 size-5 rounded-md border-emerald-200/45 bg-black/30"
+                        onCheckedChange={() => toggleMonitor(monitor.id)}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="max-w-full truncate text-base font-semibold tracking-tight">
+                                {monitor.name}
+                              </h3>
+                              <Badge
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-[11px]",
+                                  monitor.is_active
+                                    ? "border-emerald-200/25 bg-emerald-300/10 text-emerald-100"
+                                    : "border-amber-200/25 bg-amber-300/10 text-amber-100"
+                                )}
+                                variant="secondary"
+                              >
+                                {monitor.is_active ? "Active" : "Paused"}
+                              </Badge>
+                            </div>
+                            <a
+                              aria-label={`Open source search for ${monitor.name}`}
+                              className="mt-2 inline-flex max-w-full items-center gap-1.5 truncate rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-xs text-muted-foreground transition hover:border-emerald-200/35 hover:text-emerald-100"
+                              href={monitor.original_url}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              <ExternalLink className="size-3 shrink-0" />
+                              <span className="truncate">Open source URL</span>
+                            </a>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              aria-label={`Edit monitor ${monitor.name}`}
+                              onClick={() => {
+                                setEditingMonitor(monitor);
+                                setIsCreateOpen(true);
+                              }}
+                              size="sm"
+                              title="Edit monitor"
+                              variant="secondary"
+                            >
+                              <Pencil className="size-3.5" />
+                              Edit
+                            </Button>
+                            <Button
+                              aria-label={`Run monitor check for ${monitor.name}`}
+                              disabled={!monitor.is_active || actionKey === checkKey}
+                              onClick={() => handleAction(monitor.id, "check-now")}
+                              size="sm"
+                              title="Check now"
+                              variant="outline"
+                            >
+                              {actionKey === checkKey ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <RefreshCcw className="size-3.5" />
+                              )}
+                              Check
+                            </Button>
+                            <Button
+                              aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
+                              disabled={actionKey === pauseKey || actionKey === resumeKey}
+                              onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
+                              size="sm"
+                              title={monitor.is_active ? "Pause monitor" : "Resume monitor"}
+                              variant="outline"
+                            >
+                              {actionKey === pauseKey || actionKey === resumeKey ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : monitor.is_active ? (
+                                <Pause className="size-3.5" />
+                              ) : (
+                                <Play className="size-3.5" />
+                              )}
+                              {monitor.is_active ? "Pause" : "Resume"}
+                            </Button>
+                            <Button
+                              aria-label={`Delete monitor ${monitor.name}`}
+                              disabled={actionKey === deleteKey}
+                              onClick={() => handleAction(monitor.id, "delete")}
+                              size="sm"
+                              title="Delete monitor"
+                              variant="destructive"
+                            >
+                              {actionKey === deleteKey ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="size-3.5" />
+                              )}
+                              Delete
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                          <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                              Marketplace
+                            </p>
+                            <p className="mt-1 truncate text-sm font-medium">{getDomain(monitor.original_url)}</p>
+                          </div>
+                          <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                              Interval
+                            </p>
+                            <p className="mt-1 text-sm font-medium tabular-nums">{formatInterval(monitor.interval_sec)}</p>
+                          </div>
+                          <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                              Found
+                            </p>
+                            <p className="mt-1 text-sm font-medium tabular-nums">
+                              {monitor.items_found_count} item{monitor.items_found_count === 1 ? "" : "s"}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                              Last check
+                            </p>
+                            <p className="mt-1 truncate text-sm font-medium">{formatLastCheck(monitor.last_check_at)}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
         )}
         <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
           {events.map((event) => (
