@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Info, Loader2 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 
 interface DebugData {
   explanation: string;
@@ -25,30 +25,54 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
-  const fetchDebug = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/v1/monitors/${monitorId}/debug`);
-      if (!response.ok) throw new Error("Failed to load debug data");
-      setData((await response.json()) as DebugData);
-    } catch {
-      setError("Could not load debug info.");
-    } finally {
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    const fetchDebug = async (isInitial = false) => {
+      if (isInitial) setLoading(true);
+      try {
+        const response = await fetch(`/api/v1/monitors/${monitorId}/debug`, { signal });
+        if (!response.ok) {
+          const errData = (await response.json().catch(() => ({}))) as { detail?: string };
+          throw new Error(errData.detail || "Failed to load debug data");
+        }
+        const result = (await response.json()) as DebugData;
+        setData(result);
+        setError(null);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        const message = err instanceof Error ? err.message : "Could not load debug info.";
+        setError(message);
+      } finally {
+        if (isInitial) setLoading(false);
+      }
+    };
+
+    fetchDebug(true);
+    const interval = setInterval(() => fetchDebug(false), 3000);
+
+    return () => {
+      controller.abort();
+      clearInterval(interval);
+    };
+  }, [open, monitorId]);
+
+  const handleOpenChange = (newOpen: boolean) => {
+    setOpen(newOpen);
+    if (!newOpen) {
+      setData(null);
+      setError(null);
       setLoading(false);
     }
-  }, [monitorId]);
-
-  useEffect(() => {
-    if (!open) return;
-    queueMicrotask(() => {
-        setLoading(true);
-        fetchDebug();
-    });
-    const interval = setInterval(fetchDebug, 3000);
-    return () => clearInterval(interval);
-  }, [open, fetchDebug]);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger render={<Button variant="ghost" size="icon-xs" title="Debug status" />}>
         <Info className="size-3.5" />
         <span className="sr-only">Debug status</span>

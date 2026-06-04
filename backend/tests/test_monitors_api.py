@@ -424,3 +424,110 @@ async def test_pause_resume_monitor(db_session):
         assert response.json()["domains"] == []
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_debug_monitor_masked_url_regression(db_session):
+    _override_db(db_session)
+    user = await _create_user(db_session, "debug_reg_user")
+    user.cf_worker_url = "https://worker-secret-token-12345678"
+    user.cf_worker_mode = "manual"
+    db_session.add(user)
+    
+    m1 = Monitor(user_id=user.id, name="Debug M1", original_url="u1", params_json="{}", domains_json="[]")
+    db_session.add(m1)
+    await db_session.commit()
+    await db_session.refresh(user)
+    await db_session.refresh(m1)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "debug_reg_user")
+        response = await client.get(f"/api/v1/monitors/{m1.id}/debug")
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Verify mask_secret works and no raw URL is leaked
+        assert data["cf_worker"]["configured"] is True
+        assert data["cf_worker"]["mode"] == "manual"
+        assert data["cf_worker"]["url_masked"] is not None
+        # mask_secret("...12345678", visible=8) -> "******12345678"
+        assert data["cf_worker"]["url_masked"] == "******12345678"
+        assert user.cf_worker_url not in response.text
+        
+    app.dependency_overrides.clear()
+
+@pytest.mark.asyncio
+async def test_debug_monitor_missing_worker_url(db_session):
+    _override_db(db_session)
+    user = await _create_user(db_session, "debug_no_worker")
+    user.cf_worker_url = ""
+    db_session.add(user)
+    
+    m1 = Monitor(user_id=user.id, name="Debug M2", original_url="u1", params_json="{}", domains_json="[]")
+    db_session.add(m1)
+    await db_session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await _login_user(client, "debug_no_worker")
+        response = await client.get(f"/api/v1/monitors/{m1.id}/debug")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cf_worker"]["configured"] is False
+        assert data["cf_worker"]["url_masked"] is None
+        
+    app.dependency_overrides.clear()
+
+@pytest.mark.asyncio
+async def test_debug_monitor_mode_normalization(db_session):
+    _override_db(db_session)
+    user = await _create_user(db_session, "debug_mode_norm")
+    # Simulate invalid mode in DB
+    user.cf_worker_mode = "invalid_mode"
+    db_session.add(user)
+    
+    m1 = Monitor(user_id=user.id, name="Debug M3", original_url="u1", params_json="{}", domains_json="[]")
+    db_session.add(m1)
+    await db_session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await _login_user(client, "debug_mode_norm")
+        response = await client.get(f"/api/v1/monitors/{m1.id}/debug")
+        
+        assert response.status_code == 200
+        data = response.json()
+        # Should normalize to "auto"
+        assert data["cf_worker"]["mode"] == "auto"
+        
+    app.dependency_overrides.clear()
+
+@pytest.mark.asyncio
+async def test_debug_monitor_scoping_and_auth(db_session):
+    _override_db(db_session)
+    user1 = await _create_user(db_session, "debug_scope_u1")
+    user2 = await _create_user(db_session, "debug_scope_u2")
+    
+    m1 = Monitor(user_id=user1.id, name="M1", original_url="u1", params_json="{}", domains_json="[]")
+    db_session.add(m1)
+    await db_session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Unauthenticated -> 401
+        resp = await client.get(f"/api/v1/monitors/{m1.id}/debug")
+        assert resp.status_code == 401
+        
+        # 2. Other user -> 404
+        await _login_user(client, "debug_scope_u2")
+        resp = await client.get(f"/api/v1/monitors/{m1.id}/debug")
+        assert resp.status_code == 404
+        
+        # 3. Non-existent -> 404
+        resp = await client.get("/api/v1/monitors/99999/debug")
+        assert resp.status_code == 404
+        
+    app.dependency_overrides.clear()

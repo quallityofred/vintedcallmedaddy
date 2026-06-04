@@ -19,6 +19,7 @@ from app.scraper.url_parser import extract_domains_from_url, parse_vinted_url
 from app.web.auth import get_current_user
 from app.web.csrf import require_csrf
 from app.web.dependencies import get_db, get_scheduler
+from app.runtime_settings import mask_secret
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/monitors", tags=["monitors"])
@@ -460,7 +461,7 @@ async def debug_monitor(
         "scheduler": job_info,
         "explanation": status_notes.get(monitor.last_check_status, "Status unknown."),
         "cf_worker": {
-            "mode": user.cf_worker_mode,
+            "mode": user.cf_worker_mode if user.cf_worker_mode in ["auto", "manual", "off"] else "auto",
             "configured": bool(user.cf_worker_url),
             "url_masked": mask_secret(user.cf_worker_url, visible=8) if user.cf_worker_url else None,
         },
