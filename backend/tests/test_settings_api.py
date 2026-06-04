@@ -7,6 +7,7 @@ from app.models import AppSettings, User, UserSession
 from app.web import settings_api_router
 from app.web.csrf import csrf_token_for_session
 from app.web.dependencies import get_db
+from app.web.app_web_dependencies import BotLifecycleResult
 
 
 async def _create_user(
@@ -64,8 +65,9 @@ async def test_settings_api_requires_session(db_session):
 async def test_settings_api_masks_and_updates_user_telegram_credentials(db_session, monkeypatch):
     stopped_tokens: list[str] = []
 
-    async def fake_stop_bot(token: str) -> None:
+    async def fake_stop_bot(token: str) -> BotLifecycleResult:
         stopped_tokens.append(token)
+        return BotLifecycleResult(ok=True, state="stopped", message="Telegram bot stopped", running=False)
 
     monkeypatch.setattr(settings_api_router, "stop_bot", fake_stop_bot)
 
@@ -218,8 +220,9 @@ async def test_telegram_api_controls_are_user_scoped_and_do_not_expose_token(db_
         running.add(token)
         return "started"
 
-    async def fake_stop_bot(token: str) -> None:
+    async def fake_stop_bot(token: str) -> BotLifecycleResult:
         running.discard(token)
+        return BotLifecycleResult(ok=True, state="stopped", message="Telegram bot stopped", running=False)
 
     def fake_is_bot_running(token: str) -> bool:
         return token in running
@@ -275,6 +278,47 @@ async def test_telegram_api_controls_are_user_scoped_and_do_not_expose_token(db_
         assert stop_response.json()["telegram"]["bot_running"] is False
         assert "telegram-secret-abcdef" not in stop_response.text
 
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_telegram_stop_timeout_returns_safe_failure(db_session, monkeypatch):
+    async def fake_stop_bot(token: str) -> BotLifecycleResult:
+        return BotLifecycleResult(
+            ok=False,
+            state="stop_timeout",
+            message="Telegram bot did not stop within the timeout. It may still be shutting down.",
+            running=True,
+        )
+
+    def fake_is_bot_running(token: str) -> bool:
+        return True
+
+    monkeypatch.setattr(settings_api_router, "stop_bot", fake_stop_bot)
+    monkeypatch.setattr(settings_api_router, "is_bot_running", fake_is_bot_running)
+
+    user = await _create_user(
+        db_session,
+        username="telegram_stop_timeout_user",
+        telegram_bot_token="telegram-secret-abcdef",
+        telegram_chat_id="555123456",
+    )
+    _override_db(db_session)
+
+    client, csrf_token = await _authenticated_client(user, db_session, "telegram-stop-timeout-session")
+    async with client:
+        response = await client.post(
+            "/api/v1/telegram/stop",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+
+    payload = response.json()
+    assert response.status_code == 503
+    assert payload["ok"] is False
+    assert payload["code"] == "stop_timeout"
+    assert payload["telegram"]["bot_running"] is True
+    assert "telegram-secret-abcdef" not in response.text
+    assert "555123456" not in response.text
     app.dependency_overrides.clear()
 
 

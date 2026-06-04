@@ -98,6 +98,8 @@ async def lifespan(app: FastAPI):
                 await bot.session.close()
             except Exception:
                 pass
+        _polling_tasks.clear()
+        _bots.clear()
         logger.info("All bots stopped")
     except Exception:
         logger.exception("Bot shutdown error")
@@ -189,9 +191,9 @@ def create_app() -> FastAPI:
     async def api_health(request: Request):
         """Extended health with scheduler + bot status."""
         scheduler = getattr(request.app.state, "scheduler", None)
-        job_count = len(scheduler.job_ids) if scheduler else 0
-        from app.telegram.bot import _polling_tasks
-        bots_running = sum(1 for t in _polling_tasks.values() if not t.done())
+        job_count = len(getattr(scheduler, "job_ids", [])) if scheduler else 0
+        from app.web.dependencies import count_running_bots
+        bots_running = count_running_bots()
         return {
             "status": "ok",
             "scheduler_jobs": job_count,

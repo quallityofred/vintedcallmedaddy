@@ -30,6 +30,8 @@ tags:
 - New item notifications are sent with the monitor owner's saved Telegram token/chat ID, not deployment-global credentials when user credentials exist.
 - Notification messages use safe HTML escaping and include monitor name, item title, price, optional brand/size/condition/seller, source domain, and item URL.
 - Failed notification sends leave the `FoundItem` pending for retry instead of marking it notified.
+- Telegram long-polling runtime is tracked by live asyncio tasks keyed by bot token. Stop waits for task termination before clearing runtime state; timeout/incomplete stops remain reported as running.
+- `backend/scripts/cleanup_telegram_bot_connections.py` can clear Telegram webhook/pending-update state using `TELEGRAM_BOT_TOKEN` from the process environment only. It must not print token/chat values.
 
 ## Audit Notes
 
@@ -46,3 +48,4 @@ tags:
 - 2026-06-03: Added versioned Telegram JSON APIs for status/start/stop/test and write-only credential updates through `/api/v1/settings/telegram`. Responses return masked/configured state only and state-changing calls require API CSRF.
 - 2026-06-04: Fixed [[Issues/ISS-TG-001 Telegram test returns vague 502|ISS-TG-001]]. `/api/v1/telegram/test` now classifies missing credentials, invalid token/chat, chat-not-found, blocked bot, bot busy/polling conflict, rate limit, timeout/unavailable, and unknown failures into safe `code`/`detail` responses without returning token/chat values.
 - 2026-06-04: Runtime notification formatting was rebuilt around safe HTML and per-user delivery. `process_pending_notifications()` passes monitor names into the formatter and leaves failed sends unnotified for retry.
+- 2026-06-04: Telegram Stop behavior was hardened so UI/status cannot report stopped while a polling task is still alive. `/api/health` now counts live tasks through the same runtime helper.

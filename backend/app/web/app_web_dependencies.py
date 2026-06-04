@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "session_token"
+
+
+@dataclass(frozen=True)
+class BotLifecycleResult:
+    ok: bool
+    state: str
+    message: str
+    running: bool
 
 
 # ---------------------------------------------------------------------------
@@ -124,24 +133,48 @@ def get_scraper_client(request: Request) -> "VintedClient | None":
 # Bot lifecycle helpers
 # ---------------------------------------------------------------------------
 
+def _live_polling_task(token: str) -> asyncio.Task | None:
+    """Return the active polling task for *token*, pruning stale completed tasks."""
+    from app.telegram.bot import _polling_tasks
+
+    task = _polling_tasks.get(token)
+    if task is not None and task.done():
+        _polling_tasks.pop(token, None)
+        return None
+    return task
+
+
 def is_bot_running(token: str) -> bool:
     """Return True if there is an active polling task for *token*."""
+    return _live_polling_task(token) is not None
+
+
+def count_running_bots() -> int:
+    """Return the number of active polling tasks, pruning completed tasks first."""
     from app.telegram.bot import _polling_tasks
-    task = _polling_tasks.get(token)
-    return task is not None and not task.done()
+
+    running = 0
+    for token, task in list(_polling_tasks.items()):
+        if task.done():
+            _polling_tasks.pop(token, None)
+        else:
+            running += 1
+    return running
 
 
 async def _polling_wrapper(bot, dp, token: str) -> None:
     """Internal coroutine that runs polling and cleans up _polling_tasks on exit."""
     import app.telegram.bot as bot_module
+    current_task = asyncio.current_task()
     try:
         await dp.start_polling(bot)
     except asyncio.CancelledError:
         pass
     except Exception:
-        logger.exception("Telegram polling crashed for token=...%s", token[-6:])
+        logger.exception("Telegram polling crashed")
     finally:
-        bot_module._polling_tasks.pop(token, None)
+        if bot_module._polling_tasks.get(token) is current_task:
+            bot_module._polling_tasks.pop(token, None)
 
 
 async def start_bot(token: str, owner_user_id: int | None = None) -> str:
@@ -176,28 +209,60 @@ async def start_bot(token: str, owner_user_id: int | None = None) -> str:
         # Yield control so the task can start running
         await asyncio.sleep(0.05)
 
-        logger.info("Bot started (token=...%s, user_id=%s)", token[-6:], owner_user_id)
+        logger.info("Telegram bot polling started for user_id=%s", owner_user_id)
         return "Бот успешно запущен"
     except Exception as exc:
         logger.exception("Failed to start bot")
+        try:
+            bot_module._polling_tasks.pop(token, None)
+        except Exception:
+            pass
         return f"Ошибка запуска: {exc}"
 
 
-async def stop_bot(token: str) -> None:
+async def stop_bot(token: str, timeout: float = 5.0) -> BotLifecycleResult:
     """Cancel the polling task for *token* and close the bot session."""
     from app.telegram.bot import _polling_tasks, _bots
 
-    task = _polling_tasks.get(token)
-    if task:
-        if not task.done():
-            task.cancel()
+    task = _live_polling_task(token)
+    if task is None:
+        bot = _bots.pop(token, None)
+        if bot:
             try:
-                # Await termination without shielding to ensure it actually finishes
-                await asyncio.wait_for(task, timeout=5.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
-        
-        # Now it's safe to pop
+                await bot.session.close()
+            except Exception:
+                logger.debug("Ignoring error while closing stopped Telegram bot session", exc_info=True)
+        return BotLifecycleResult(
+            ok=True,
+            state="already_stopped",
+            message="Telegram bot is already stopped",
+            running=False,
+        )
+
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+    except asyncio.TimeoutError:
+        return BotLifecycleResult(
+            ok=False,
+            state="stop_timeout",
+            message="Telegram bot did not stop within the timeout. It may still be shutting down.",
+            running=not task.done(),
+        )
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("Telegram polling task ended with an error during stop")
+
+    if not task.done():
+        return BotLifecycleResult(
+            ok=False,
+            state="stop_incomplete",
+            message="Telegram bot stop did not complete. Try again in a moment.",
+            running=True,
+        )
+
+    if _polling_tasks.get(token) is task:
         _polling_tasks.pop(token, None)
 
     bot = _bots.pop(token, None)
@@ -205,9 +270,15 @@ async def stop_bot(token: str) -> None:
         try:
             await bot.session.close()
         except Exception:
-            pass
+            logger.debug("Ignoring error while closing Telegram bot session", exc_info=True)
 
-    logger.info("Bot stopped (token=...%s)", token[-6:])
+    logger.info("Telegram bot polling stopped")
+    return BotLifecycleResult(
+        ok=True,
+        state="stopped",
+        message="Telegram bot stopped",
+        running=False,
+    )
 
 
 async def restore_persisted_bot(app_state) -> None:

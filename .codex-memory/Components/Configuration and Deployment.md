@@ -1,0 +1,87 @@
+﻿---
+type: component
+project: vintedbot
+tags:
+  - vintedbot
+  - component/configuration
+---
+
+# Configuration and Deployment
+
+## Purpose
+
+- Documents environment configuration, container setup, and deployment-sensitive runtime rules.
+
+## Key Files
+
+- `backend/app/app_config.py`
+- `backend/.env.example`
+- `backend/Dockerfile`
+- `backend/docker-compose.yml`
+- `backend/railway.json`
+- `frontend/railway.json`
+- `docs/DEPLOYMENT_ENV.md`
+
+## Audit Notes
+
+- Production validation requires `SECRET_KEY` in some hosted environments.
+- `.env.example` does not currently reflect that requirement.
+- The settings page exposes some runtime knobs that are not persisted into app settings storage.
+
+## Related Issues
+
+- [[Issues/ISS-006 Scraper settings form does not persist or apply values|ISS-006]]
+- [[Issues/ISS-010 .env.example misses production security settings|ISS-010]]
+- [[Issues/ISS-RWY-001 Railway PostgreSQL startup failure|ISS-RWY-001]]
+- [[Issues/ISS-RWY-002 AsyncSessionLocal None after startup|ISS-RWY-002]]
+
+- 2026-06-02: `.env.example` documents `SECRET_KEY` and `SESSION_COOKIE_SECURE`; session cookies become secure in production envs.
+- 2026-06-02: Railway startup error was confirmed as an environment issue: the PostgreSQL service was down/unavailable, not a regression from recent code fixes. See [[Issues/ISS-RWY-001 Railway PostgreSQL startup failure|ISS-RWY-001]].
+- 2026-06-02: Later Railway logs showed startup completion but `GET /` failed because of stale database session factory imports; this was tracked separately as source issue [[Issues/ISS-RWY-002 AsyncSessionLocal None after startup|ISS-RWY-002]].
+
+## Frontend Migration Notes
+
+- 2026-06-02: Recommended Railway migration shape is two services: existing FastAPI backend service plus a new `frontend/` Next.js service. The frontend should proxy `/api/*` to the backend through `BACKEND_URL` so browser calls remain same-origin to the frontend.
+- 2026-06-02: Avoid a combined Python+Node runtime until operationally necessary; FastAPI continues to own scheduler, scraper, Telegram bot restoration, and database initialization.
+- 2026-06-02: `frontend/.env.example` now documents safe frontend placeholders: `BACKEND_URL`, `NEXT_PUBLIC_APP_NAME`, and `NEXT_PUBLIC_SPLINE_SCENE_URL`. No secrets are stored there.
+- 2026-06-02: `frontend/next.config.ts` defaults `BACKEND_URL` to `http://localhost:8080` and rewrites `/api/:path*` to the FastAPI backend.
+
+## Railway Split
+
+- 2026-06-03: Repo split into `backend/`, `frontend/`, and `docs/`.
+- Backend Railway root: `backend`; build `poetry install --only main --no-root`; start `sh -c 'poetry run uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}'`.
+- Backend Railway healthcheck path: `/health`.
+- Railway provides `PORT`; do not manually set `PORT=8080` for normal Railway deploys.
+- Frontend Railway root: `frontend`; build `npm run build`; start `npm run start -- --hostname 0.0.0.0 --port $PORT`.
+- Required backend deployment env is limited to deployment-level config such as `DATABASE_URL`, `SECRET_KEY`, `ENVIRONMENT`, `FRONTEND_URL`, `ALLOWED_ORIGINS`, and secure cookie/runtime hints.
+- Telegram bot token/chat ID are per-user settings configured in the UI, not required backend deployment env.
+- Cloudflare Worker and scraper defaults are admin/global DB settings configured in the UI, with env vars only as optional bootstrap defaults.
+- Telegram long polling should run in only one Railway backend replica/process for a given bot token. Multiple replicas or a stale old deployment can make Stop/status appear inconsistent; use webhook architecture or a distributed runtime lock before scaling polling horizontally.
+- See [[Decisions/DEC-005 Railway Split Frontend Backend Deployment|DEC-005]] and `Projects/vintedbot/docs/DEPLOYMENT_ENV.md`.
+
+## Split Deployment Audit
+
+- 2026-06-03: Frontend `/api/*` rewrite is configured to `BACKEND_URL` and is used for health, auth, dashboard, settings, monitor, item, hidden-seller, system, and admin calls.
+- 2026-06-03: Backend CORS allows `ALLOWED_ORIGINS` and `FRONTEND_URL`; this helps direct cross-origin calls, though the preferred frontend path is same-origin `/api/*` through Next rewrites.
+- 2026-06-03: CSRF/session flow needs JSON endpoints before the standalone frontend can safely authenticate and mutate backend state.
+- 2026-06-03: Backend `/` now redirects to `FRONTEND_URL` in production when configured, otherwise returns minimal JSON service info. Legacy Jinja route modules were removed in the API-first cleanup.
+- Related: [[Issues/ISS-FE-005 Frontend backend integration incomplete|ISS-FE-005]]
+- Related: [[Issues/ISS-FE-006 Backend public root is confusing after split|ISS-FE-006]]
+
+## API-first Deployment Notes
+
+- 2026-06-03: Backend legacy route modules were removed. The backend public domain should show only safe backend service behavior on `/`, public health probes, and JSON APIs.
+- 2026-06-03: Frontend protected pages rely on same-origin `/api/v1/auth/me` through the Next rewrite. Railway frontend must keep `BACKEND_URL` pointed at the backend service URL.
+- 2026-06-03: After Railway redeploy, verify protected frontend redirects and backend health/root behavior from public domains.
+
+## API Contract Notes
+
+- 2026-06-03: [[API Contract]] confirms the frontend should continue using relative `/api/...` paths through the Next rewrite. No backend secrets should be exposed through `NEXT_PUBLIC_` env vars.
+- 2026-06-03: Versioned settings APIs now expose admin/global CF Worker and scraper defaults through `/api/v1/settings/*`. Telegram credentials remain per-user, write-only/masked, and are still not required deployment env variables.
+- 2026-06-03: Frontend lint needed generated Playwright output ignored in `frontend/eslint.config.mjs` so missing/ignored `test-results/` does not break validation.
+
+## Related Plans
+
+- [[Frontend Migration Plan]]
+- [[Components/Frontend Next.js]]
+

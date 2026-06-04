@@ -127,6 +127,9 @@ tags:
   - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
   - `git diff --check` -> passed with line-ending warnings only.
   - Frontend was not changed in this pass, so frontend lint/build/e2e were not run.
+- Telegram bot stop/status snapshot on `2026-06-04`:
+  - Added `backend/tests/test_telegram_runtime.py` for idempotent start, stop cleanup, stop timeout truthfulness, `/api/health` live task counting, and cleanup-script secret-safe output.
+  - Expanded `backend/tests/test_settings_api.py` to assert stop timeout returns a safe failure instead of false success.
 
 ## Coverage Gaps
 

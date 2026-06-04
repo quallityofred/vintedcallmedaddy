@@ -111,10 +111,10 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | `PATCH` | `/api/v1/settings/scraper` | JSON | admin + CSRF | Updates admin/global scraper defaults such as sessions, rate limit, intervals, peak hours, and write-only/masked proxies; applies runtime settings. |
 | `GET` | `/api/v1/telegram/status` | JSON | session | Returns masked/configured Telegram state and whether the current user's bot is running. |
 | `POST` | `/api/v1/telegram/start` | JSON | session + CSRF | Starts the current user's saved Telegram bot token without returning the token. |
-| `POST` | `/api/v1/telegram/stop` | JSON | session + CSRF | Stops the current user's Telegram bot without returning the token. |
+| `POST` | `/api/v1/telegram/stop` | JSON | session + CSRF | Stops the current user's Telegram bot without returning the token. Successful stops return masked state. Stop timeout/incomplete cases return safe `ok: false`, `code`, and `detail` while leaving `bot_running: true`. |
 | `POST` | `/api/v1/telegram/test` | JSON | session + CSRF | Sends a test message using saved per-user credentials; failures return safe structured `code` and `detail` fields without exposing token/chat values. |
 
-Telegram test error codes currently used by the frontend:
+Telegram API error codes currently used by the frontend:
 
 - `telegram_credentials_missing`
 - `telegram_invalid_token`
@@ -125,6 +125,8 @@ Telegram test error codes currently used by the frontend:
 - `telegram_unavailable`
 - `telegram_rate_limited`
 - `telegram_test_failed`
+- `stop_timeout`
+- `stop_incomplete`
 
 Current settings ownership:
 
@@ -229,6 +231,13 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - Truly new post-baseline items create `FoundItem(notified=False)` and are picked up by the notification worker.
 - Notification delivery uses the monitor owner's saved Telegram token/chat ID. Message text uses safe HTML escaping and includes monitor name, item title, price, optional brand/size/condition/seller, source domain, and item URL.
 - Failed Telegram sends leave the item pending instead of marking it notified.
+
+## [2026-06-04] Update: Telegram bot stop/status contract
+
+- Telegram long-polling stop now waits for the polling task to finish before removing runtime state.
+- If stop times out or remains incomplete, `/api/v1/telegram/stop` returns a safe failure response instead of reporting stopped.
+- `GET /api/v1/telegram/status` and `/api/health` count only live polling tasks and prune completed stale tasks.
+- Telegram long polling remains a single-process/replica runtime. Multiple Railway replicas or another environment using the same token can still cause stop/status mismatch until a webhook or distributed-lock architecture is introduced.
 
 
 ## [2026-06-03] Update: Found Items and Hidden Sellers APIs implemented.

@@ -60,6 +60,19 @@ These are bootstrap/default values only. They are not required for normal user s
 
 Telegram bot token and Telegram chat ID are intentionally not required backend deployment variables. Each user configures them in the authenticated web settings UI. Saved token and chat ID fields are masked/write-only in the UI.
 
+Telegram long polling must run in only one backend process/replica for a given bot token. Keep Railway backend replicas at `1` while using polling. Multiple replicas, a stale old deployment, or another environment using the same bot token can make Start/Stop/status inconsistent because one process cannot cancel another process's polling task. If horizontal scaling is needed later, switch to a webhook architecture or add a distributed runtime lock. If a stale process cannot be stopped, rotate the token in BotFather.
+
+Safe Telegram connection cleanup can be run manually without storing credentials:
+
+```powershell
+Set-Location backend
+$env:TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN"
+poetry run python scripts/cleanup_telegram_bot_connections.py
+Remove-Item Env:\TELEGRAM_BOT_TOKEN
+```
+
+The cleanup script deletes any webhook with pending updates dropped and attempts a safe pending-update cleanup. It prints only safe status text and must not be used with real tokens in committed files or docs.
+
 Cloudflare Worker URL and scraper defaults are intentionally not required backend deployment variables. Admins configure them in the web settings UI without redeploying.
 
 ## Frontend Railway Service

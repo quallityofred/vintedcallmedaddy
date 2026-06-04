@@ -364,8 +364,18 @@ async def telegram_stop(
     token = user.telegram_bot_token or ""
     if not token:
         raise HTTPException(status_code=400, detail="Telegram bot token is not configured")
-    await stop_bot(token)
-    return {"ok": True, "message": "Telegram bot stopped", "telegram": _telegram_payload(user)}
+    result = await stop_bot(token)
+    if not result.ok:
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": result.state,
+                "detail": result.message,
+                "telegram": _telegram_payload(user),
+            },
+            status_code=503,
+        )
+    return {"ok": True, "message": result.message, "telegram": _telegram_payload(user)}
 
 
 async def _send_telegram_test_message(token: str, chat_id: str) -> None:
