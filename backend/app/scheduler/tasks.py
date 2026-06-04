@@ -199,76 +199,52 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                             filtered_items.append(item)
 
                         logger.debug(f"Filtered {len(items)} items down to {len(filtered_items)} based on hidden sellers")
-                        new_items_to_notify: list[VintedItem] = []
-                        is_pg = not settings.is_sqlite()
 
+                        seen_items_to_insert = []
+                        found_items_to_insert = []
+                        new_items_to_notify: list[VintedItem] = []
+
+                        now = datetime.now(timezone.utc)
                         for item in filtered_items:
                             already_seen = await _has_seen_item(db, user_id, item.id)
                             if already_seen:
                                 continue
 
-                            if is_pg:
-                                stmt = pg_insert(SeenItem).values(
-                                    user_id=user_id,
-                                    vinted_item_id=item.id,
-                                    domain=item.domain,
-                                    seen_at=datetime.now(timezone.utc),
-                                ).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
-                                res = await db.execute(stmt)
-                                is_new_for_user = res.rowcount > 0
-                            else:
-                                stmt = insert(SeenItem).values(
-                                    user_id=user_id,
-                                    vinted_item_id=item.id,
-                                    domain=item.domain,
-                                    seen_at=datetime.now(timezone.utc),
-                                ).prefix_with("OR IGNORE")
-                                res = await db.execute(stmt)
-                                is_new_for_user = res.rowcount > 0
+                            seen_items_to_insert.append({
+                                "user_id": user_id,
+                                "vinted_item_id": item.id,
+                                "domain": item.domain,
+                                "seen_at": now,
+                            })
 
-                            if is_cold_start or not is_new_for_user:
+                            if is_cold_start:
                                 continue
 
-                            if is_pg:
-                                found_stmt = pg_insert(FoundItem).values(
-                                    monitor_id=monitor_id,
-                                    vinted_item_id=item.id,
-                                    domain=item.domain,
-                                    title=item.title,
-                                    price=item.price,
-                                    currency=item.currency,
-                                    brand=item.brand,
-                                    size=item.size,
-                                    condition=item.condition,
-                                    photo_url=item.photo_url,
-                                    item_url=item.item_url,
-                                    seller_id=item.seller_id,
-                                    found_at=datetime.now(timezone.utc),
-                                    notified=False,
-                                ).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
-                                found_res = await db.execute(found_stmt)
-                                if found_res.rowcount > 0:
-                                    new_items_to_notify.append(item)
-                            else:
-                                found_stmt = insert(FoundItem).values(
-                                    monitor_id=monitor_id,
-                                    vinted_item_id=item.id,
-                                    domain=item.domain,
-                                    title=item.title,
-                                    price=item.price,
-                                    currency=item.currency,
-                                    brand=item.brand,
-                                    size=item.size,
-                                    condition=item.condition,
-                                    photo_url=item.photo_url,
-                                    item_url=item.item_url,
-                                    seller_id=item.seller_id,
-                                    found_at=datetime.now(timezone.utc),
-                                    notified=False,
-                                ).prefix_with("OR IGNORE")
-                                found_res = await db.execute(found_stmt)
-                                if found_res.rowcount > 0:
-                                    new_items_to_notify.append(item)
+                            found_items_to_insert.append({
+                                "monitor_id": monitor_id,
+                                "vinted_item_id": item.id,
+                                "domain": item.domain,
+                                "title": item.title,
+                                "price": item.price,
+                                "currency": item.currency,
+                                "brand": item.brand,
+                                "size": item.size,
+                                "condition": item.condition,
+                                "photo_url": item.photo_url,
+                                "item_url": item.item_url,
+                                "seller_id": item.seller_id,
+                                "found_at": now,
+                                "notified": False,
+                            })
+                            new_items_to_notify.append(item)
+
+                        if seen_items_to_insert:
+                            stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
+                            await db.execute(stmt)
+
+                        if found_items_to_insert:
+                            found_stmt = pg_insert(FoundItem).values(found_items_to_insert).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
+                            await db.execute(found_stmt)
 
                         await _update_monitor_interval(
                             db,
@@ -283,10 +259,9 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 
                         monitor.last_check_status = "baseline_created" if is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
 
-                    monitor.last_check_at = datetime.now(timezone.utc)
+                        monitor.last_check_at = datetime.now(timezone.utc)
                     monitor.last_check_completed_at = datetime.now(timezone.utc)
                     await db.commit()
-
         except Exception as e:
             logger.error(f"Error in check_monitor {monitor_id}: {e}")
             async with _new_session() as db:
@@ -323,6 +298,7 @@ async def process_pending_notifications() -> None:
 			if not pending_items:
 				return
 
+			notified_ids = []
 			for fi in pending_items:
 				item = VintedItem(
 					id=fi.vinted_item_id,
@@ -359,10 +335,12 @@ async def process_pending_notifications() -> None:
 					if bot_to_use and chat_id_to_use is not None:
 						await send_item_notification(bot_to_use, chat_id_to_use, item, monitor_name=monitor_name)
 						fi.notified = True
-						await db.commit()
+						notified_ids.append(fi.id)
 				except Exception:
 					logger.exception("Notification failed for item %s", fi.vinted_item_id)
-					break
+			
+			if notified_ids:
+				await db.commit()
 
 
 class MonitorScheduler:
