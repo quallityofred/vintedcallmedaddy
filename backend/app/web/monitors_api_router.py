@@ -457,4 +457,9 @@ async def debug_monitor(
         "items_found_count": monitor.items_found_count,
         "scheduler": job_info,
         "explanation": status_notes.get(monitor.last_check_status, "Status unknown."),
+        "cf_worker": {
+            "mode": user.cf_worker_mode,
+            "configured": bool(user.cf_worker_url),
+            "url_masked": mask_secret(user.cf_worker_url, visible=8) if user.cf_worker_url else None,
+        },
     }

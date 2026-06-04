@@ -39,9 +39,10 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
 
   useEffect(() => {
     if (!open) return;
-    queueMicrotask(() => setLoading(true));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    fetchDebug();
+    queueMicrotask(() => {
+        setLoading(true);
+        fetchDebug();
+    });
     const interval = setInterval(fetchDebug, 3000);
     return () => clearInterval(interval);
   }, [open, fetchDebug]);

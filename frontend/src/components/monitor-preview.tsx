@@ -109,22 +109,24 @@ export function MonitorPreview() {
   }, []);
 
   useEffect(() => {
-    fetchMonitors();
-    
+    queueMicrotask(() => fetchMonitors());
+
     const handleVisibilityChange = () => {
         if (document.visibilityState === 'visible') fetchMonitors();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    
+
     const interval = setInterval(() => {
         if (document.visibilityState === 'visible') fetchMonitors();
     }, 5000);
-    
+
     return () => {
         clearInterval(interval);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchMonitors]);
+
 
   const getCsrfToken = async () => {
     const response = await fetch("/api/v1/auth/csrf", {
