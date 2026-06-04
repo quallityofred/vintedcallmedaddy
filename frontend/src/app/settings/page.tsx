@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { AlertTriangle, CheckCircle2, Cog, Globe, KeyRound, Loader2, Send } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
+import { getTelegramTopicSettings, patchTelegramTopicSettings, verifyTelegramTopicGroup, TelegramTopicSettings } from "@/lib/telegram-topics";
 
 import { AnimatedSection } from "@/components/animated-section";
 import { AuthGuard } from "@/components/auth-guard";
@@ -80,6 +82,60 @@ function SettingsContent() {
   const [cfMode, setCfMode] = useState<CfWorkerMode>("auto");
   const [cfNotice, setCfNotice] = useState<Notice | null>(null);
 
+  const [topicSettings, setTopicSettings] = useState<TelegramTopicSettings | null>(null);
+  const [targetChatId, setTargetChatId] = useState("");
+  const [topicSaving, setTopicSaving] = useState(false);
+  const [verifyingGroup, setVerifyingGroup] = useState(false);
+  const [topicNotice, setTopicNotice] = useState<Notice | null>(null);
+
+  const fetchTopicSettings = useCallback(async () => {
+      try {
+          const settings = await getTelegramTopicSettings();
+          setTopicSettings(settings);
+          setTargetChatId(settings.telegram_topics_chat_id || "");
+      } catch {
+          toast.error("Failed to load Telegram topic settings");
+      }
+  }, []);
+
+  const handleUpdateTopicSettings = async () => {
+      setTopicSaving(true);
+      setTopicNotice(null);
+      try {
+          const csrfToken = await getCsrfToken();
+          const settings = await patchTelegramTopicSettings({
+              telegram_topics_enabled: topicSettings?.telegram_topics_enabled,
+              telegram_topics_chat_id: targetChatId || undefined,
+              telegram_topics_auto_create: topicSettings?.telegram_topics_auto_create,
+              telegram_topics_recreate_deleted: topicSettings?.telegram_topics_recreate_deleted,
+              telegram_topics_fallback_to_main_chat: topicSettings?.telegram_topics_fallback_to_main_chat,
+          }, csrfToken);
+          setTopicSettings(settings);
+          toast.success("Topic settings updated");
+      } catch (err) {
+          const message = err instanceof Error ? err.message : "Failed to update topic settings";
+          setTopicNotice({ type: "error", text: message });
+      } finally {
+          setTopicSaving(false);
+      }
+  };
+
+  const handleVerifyGroup = async () => {
+    setVerifyingGroup(true);
+    setTopicNotice(null);
+    try {
+        const csrfToken = await getCsrfToken();
+        const { message } = await verifyTelegramTopicGroup(targetChatId, csrfToken);
+        toast.success(message);
+        setTopicNotice({ type: "success", text: message });
+    } catch (err) {
+        const message = err instanceof Error ? err.message : "Verification failed";
+        setTopicNotice({ type: "error", text: message });
+    } finally {
+        setVerifyingGroup(false);
+    }
+  };
+
   const applyCloudflareWorkerState = useCallback((payload: CloudflareWorkerPayload) => {
     setCfUrl(payload.url || "");
     setCfBlock(payload.block_threshold?.toString() || "");
@@ -109,9 +165,11 @@ function SettingsContent() {
   }, [applyCloudflareWorkerState]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchSettings();
-  }, [fetchSettings]);
+    queueMicrotask(() => {
+        fetchSettings();
+        fetchTopicSettings();
+    });
+  }, [fetchSettings, fetchTopicSettings]);
 
   const getCsrfToken = async () => {
     const response = await fetch("/api/v1/auth/csrf", {
@@ -269,6 +327,82 @@ function SettingsContent() {
       description="Manage your notification and personal scraper settings."
     >
       <AnimatedSection className="grid gap-5">
+        <Card className="glass-panel">
+          <CardHeader className="border-b border-white/10 p-4 sm:p-6">
+            <CardTitle className="flex items-center gap-2">
+              <Send className="size-4 text-emerald-200" />
+              Telegram Topics
+            </CardTitle>
+            <CardDescription>Send each monitor’s notifications into a separate Telegram group topic.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5 p-4 sm:p-6">
+              {topicSettings ? (
+                  <>
+                    <div className="flex items-center space-x-2">
+                        <Checkbox 
+                            id="topicsEnabled" 
+                            checked={topicSettings.telegram_topics_enabled}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_enabled: !!checked} : null)}
+                        />
+                        <Label htmlFor="topicsEnabled">Enable Telegram Topics</Label>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                            <Label htmlFor="targetChat">Target group chat ID</Label>
+                            <Input
+                                disabled={topicSaving}
+                                id="targetChat"
+                                value={targetChatId}
+                                onChange={(e) => setTargetChatId(e.target.value)}
+                                placeholder="e.g. -100xxxxxxxxx"
+                            />
+                        </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <Checkbox 
+                            id="autoCreate" 
+                            checked={topicSettings.telegram_topics_auto_create}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_auto_create: !!checked} : null)}
+                        />
+                        <Label htmlFor="autoCreate">Auto-create topics</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <Checkbox 
+                            id="recreateDeleted" 
+                            checked={topicSettings.telegram_topics_recreate_deleted}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_recreate_deleted: !!checked} : null)}
+                        />
+                        <Label htmlFor="recreateDeleted">Recreate deleted topics</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <Checkbox 
+                            id="fallback" 
+                            checked={topicSettings.telegram_topics_fallback_to_main_chat}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_fallback_to_main_chat: !!checked} : null)}
+                        />
+                        <Label htmlFor="fallback">Fallback to main chat</Label>
+                    </div>
+                    
+                    {topicNotice ? (
+                        <div className={topicNotice.type === "error" ? "text-red-500 text-sm" : "text-emerald-500 text-sm"}>
+                            {topicNotice.text}
+                        </div>
+                    ) : null}
+
+                    <div className="flex gap-2">
+                        <Button disabled={topicSaving || verifyingGroup} onClick={handleVerifyGroup}>
+                            {verifyingGroup ? "Verifying..." : "Verify group"}
+                        </Button>
+                        <Button disabled={topicSaving || verifyingGroup} onClick={handleUpdateTopicSettings}>
+                            {topicSaving ? "Saving..." : "Save settings"}
+                        </Button>
+                    </div>
+                  </>
+              ) : (
+                  <Loader2 className="size-5 animate-spin" />
+              )}
+          </CardContent>
+        </Card>
         <Card className="glass-panel">
           <CardHeader className="border-b border-white/10 p-4 sm:p-6">
             <CardTitle className="flex items-center gap-2">

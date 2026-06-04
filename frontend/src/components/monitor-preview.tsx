@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DomainSelection } from "@/components/domain-selection";
 import { MonitorDebugPanel } from "@/components/monitor-debug-panel";
+import { MonitorTelegramTopicPanel } from "@/components/monitor-telegram-topic-panel";
 import { cn } from "@/lib/utils";
 
 interface Monitor {
@@ -82,6 +83,7 @@ export function MonitorPreview() {
   const [error, setError] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [topicsEnabled, setTopicsEnabled] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);
@@ -570,6 +572,7 @@ export function MonitorPreview() {
                               Check
                             </Button>
                             <MonitorDebugPanel monitorId={monitor.id} name={monitor.name} />
+                            <MonitorTelegramTopicPanel monitorId={monitor.id} topicsEnabled={topicsEnabled} />
                             <Button
                               aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
                               disabled={actionKey === pauseKey || actionKey === resumeKey}
