@@ -228,6 +228,8 @@ export function MonitorPreview() {
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   };
 
+  const hasMonitors = monitors && monitors.length > 0;
+
   return (
     <Card className="glass-panel overflow-hidden">
       <CardHeader className="border-b border-white/10 p-4 sm:p-6">
@@ -240,7 +242,7 @@ export function MonitorPreview() {
             <CardDescription>Manage search URLs, check cadence, and monitor controls.</CardDescription>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            {hasSelection ? (
+            {hasSelection && hasMonitors ? (
               <Button
                 aria-label={`Delete ${selectedIds.length} selected monitors`}
                 className="w-full animate-in fade-in slide-in-from-right-2 sm:w-auto"
@@ -343,157 +345,155 @@ export function MonitorPreview() {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="grid gap-4 p-3 sm:p-5 xl:grid-cols-[minmax(0,1fr)_17rem]">
-        <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/10">
-          <div className="overflow-x-auto">
-            <Table className="min-w-[760px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10">
-                    <input
-                      aria-label="Select all monitors"
-                      checked={allSelected}
-                      className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
-                      disabled={!monitors?.length || loading}
-                      onChange={toggleAll}
-                      type="checkbox"
-                    />
-                  </TableHead>
-                  <TableHead>Search</TableHead>
-                  <TableHead>Domain</TableHead>
-                  <TableHead className="text-right">Interval</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="h-36 text-center text-muted-foreground">
-                      <Loader2 className="mx-auto size-5 animate-spin text-emerald-200" />
-                      <p className="mt-2 text-sm">Loading monitors</p>
-                    </TableCell>
-                  </TableRow>
-                ) : error ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="h-36 text-center text-sm text-red-200">
-                      Monitors could not be loaded. Refresh the page or try again later.
-                    </TableCell>
-                  </TableRow>
-                ) : monitors && monitors.length > 0 ? (
-                  monitors.map((monitor) => {
-                    const checkKey = `${monitor.id}:check-now`;
-                    const pauseKey = `${monitor.id}:pause`;
-                    const resumeKey = `${monitor.id}:resume`;
-                    const deleteKey = `${monitor.id}:delete`;
-
-                    return (
-                      <TableRow key={monitor.id} className={!monitor.is_active ? "opacity-70" : ""}>
-                        <TableCell>
-                          <input
-                            aria-label={`Select monitor ${monitor.name}`}
-                            checked={selectedIds.includes(monitor.id)}
-                            className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
-                            onChange={() => toggleMonitor(monitor.id)}
-                            type="checkbox"
-                          />
-                        </TableCell>
-                        <TableCell className="max-w-[18rem]">
-                          <div className="flex min-w-0 items-center gap-2 font-medium">
-                            <span className="truncate">{monitor.name}</span>
-                            {monitor.is_active ? null : <Badge variant="secondary">Paused</Badge>}
-                          </div>
-                          <a
-                            aria-label={`Open source search for ${monitor.name}`}
-                            className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground hover:text-emerald-200"
-                            href={monitor.original_url}
-                            rel="noreferrer"
-                            target="_blank"
-                          >
-                            <ExternalLink className="size-3 shrink-0" />
-                            <span className="truncate">Open source URL</span>
-                          </a>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{getDomain(monitor.original_url)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatInterval(monitor.interval_sec)}</TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-1">
-                            <Button
-                              aria-label={`Edit monitor ${monitor.name}`}
-                              onClick={() => {
-                                setEditingMonitor(monitor);
-                                setIsCreateOpen(true);
-                                // Note: In a full impl, we'd also load the existing domains
-                              }}
-                              size="icon-xs"
-                              title="Edit"
-                              variant="ghost"
-                            >
-                              <MoreVertical className="size-3.5" />
-                            </Button>
-                            <Button
-                              aria-label={`Run monitor check for ${monitor.name}`}
-                              disabled={!monitor.is_active || actionKey === checkKey}
-                              onClick={() => handleAction(monitor.id, "check-now")}
-                              size="icon-xs"
-                              title="Check now"
-                              variant="ghost"
-                            >
-                              {actionKey === checkKey ? (
-                                <Loader2 className="size-3.5 animate-spin" />
-                              ) : (
-                                <RefreshCcw className="size-3.5" />
-                              )}
-                            </Button>
-                            <Button
-                              aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
-                              disabled={actionKey === pauseKey || actionKey === resumeKey}
-                              onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
-                              size="icon-xs"
-                              title={monitor.is_active ? "Pause" : "Resume"}
-                              variant="ghost"
-                            >
-                              {actionKey === pauseKey || actionKey === resumeKey ? (
-                                <Loader2 className="size-3.5 animate-spin" />
-                              ) : monitor.is_active ? (
-                                <Pause className="size-3.5" />
-                              ) : (
-                                <Play className="size-3.5" />
-                              )}
-                            </Button>
-                            <Button
-                              aria-label={`Delete monitor ${monitor.name}`}
-                              className="text-destructive hover:bg-destructive/10"
-                              disabled={actionKey === deleteKey}
-                              onClick={() => handleAction(monitor.id, "delete")}
-                              size="icon-xs"
-                              title="Delete"
-                              variant="ghost"
-                            >
-                              {actionKey === deleteKey ? (
-                                <Loader2 className="size-3.5 animate-spin" />
-                              ) : (
-                                <Trash2 className="size-3.5" />
-                              )}
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={5} className="h-36 text-center text-muted-foreground">
-                      <div className="mx-auto max-w-sm space-y-2">
-                        <p className="text-sm font-medium text-foreground">No monitors yet</p>
-                        <p className="text-sm">Create a monitor to begin tracking a Vinted search URL.</p>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+      <CardContent className="p-3 sm:p-5">
+        {loading ? (
+            <div className="flex h-36 items-center justify-center rounded-2xl border border-white/10 bg-black/10">
+                <Loader2 className="size-5 animate-spin text-emerald-200" />
+            </div>
+        ) : error ? (
+            <div className="flex h-36 items-center justify-center rounded-2xl border border-red-300/20 bg-red-400/10 text-center text-sm text-red-100">
+              Monitors could not be loaded. Refresh the page or try again later.
+            </div>
+        ) : !hasMonitors ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-white/10 bg-black/10 p-12 text-center">
+            <p className="text-lg font-medium">No monitors yet</p>
+            <p className="mt-2 max-w-sm text-sm text-muted-foreground">Create your first Vinted search monitor to start tracking new items.</p>
+            <Button
+              className="mt-6"
+              onClick={() => setIsCreateOpen(true)}
+              size="sm"
+            >
+              <Plus className="size-3.5" />
+              New monitor
+            </Button>
           </div>
-        </div>
+        ) : (
+            <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/10">
+                <div className="overflow-x-auto">
+                    <Table className="min-w-[760px]">
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead className="w-10">
+                                    <input
+                                        aria-label="Select all monitors"
+                                        checked={allSelected}
+                                        className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
+                                        disabled={!monitors?.length || loading}
+                                        onChange={toggleAll}
+                                        type="checkbox"
+                                    />
+                                </TableHead>
+                                <TableHead>Search</TableHead>
+                                <TableHead>Domain</TableHead>
+                                <TableHead className="text-right">Interval</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {monitors.map((monitor) => {
+                                const checkKey = `${monitor.id}:check-now`;
+                                const pauseKey = `${monitor.id}:pause`;
+                                const resumeKey = `${monitor.id}:resume`;
+                                const deleteKey = `${monitor.id}:delete`;
+
+                                return (
+                                <TableRow key={monitor.id} className={!monitor.is_active ? "opacity-70" : ""}>
+                                    <TableCell>
+                                    <input
+                                        aria-label={`Select monitor ${monitor.name}`}
+                                        checked={selectedIds.includes(monitor.id)}
+                                        className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
+                                        onChange={() => toggleMonitor(monitor.id)}
+                                        type="checkbox"
+                                    />
+                                    </TableCell>
+                                    <TableCell className="max-w-[18rem]">
+                                    <div className="flex min-w-0 items-center gap-2 font-medium">
+                                        <span className="truncate">{monitor.name}</span>
+                                        {monitor.is_active ? null : <Badge variant="secondary">Paused</Badge>}
+                                    </div>
+                                    <a
+                                        aria-label={`Open source search for ${monitor.name}`}
+                                        className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground hover:text-emerald-200"
+                                        href={monitor.original_url}
+                                        rel="noreferrer"
+                                        target="_blank"
+                                    >
+                                        <ExternalLink className="size-3 shrink-0" />
+                                        <span className="truncate">Open source URL</span>
+                                    </a>
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground">{getDomain(monitor.original_url)}</TableCell>
+                                    <TableCell className="text-right tabular-nums">{formatInterval(monitor.interval_sec)}</TableCell>
+                                    <TableCell>
+                                    <div className="flex justify-end gap-1">
+                                        <Button
+                                        aria-label={`Edit monitor ${monitor.name}`}
+                                        onClick={() => {
+                                            setEditingMonitor(monitor);
+                                            setIsCreateOpen(true);
+                                        }}
+                                        size="icon-xs"
+                                        title="Edit"
+                                        variant="ghost"
+                                        >
+                                        <MoreVertical className="size-3.5" />
+                                        </Button>
+                                        <Button
+                                        aria-label={`Run monitor check for ${monitor.name}`}
+                                        disabled={!monitor.is_active || actionKey === checkKey}
+                                        onClick={() => handleAction(monitor.id, "check-now")}
+                                        size="icon-xs"
+                                        title="Check now"
+                                        variant="ghost"
+                                        >
+                                        {actionKey === checkKey ? (
+                                            <Loader2 className="size-3.5 animate-spin" />
+                                        ) : (
+                                            <RefreshCcw className="size-3.5" />
+                                        )}
+                                        </Button>
+                                        <Button
+                                        aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
+                                        disabled={actionKey === pauseKey || actionKey === resumeKey}
+                                        onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
+                                        size="icon-xs"
+                                        title={monitor.is_active ? "Pause" : "Resume"}
+                                        variant="ghost"
+                                        >
+                                        {actionKey === pauseKey || actionKey === resumeKey ? (
+                                            <Loader2 className="size-3.5 animate-spin" />
+                                        ) : monitor.is_active ? (
+                                            <Pause className="size-3.5" />
+                                        ) : (
+                                            <Play className="size-3.5" />
+                                        )}
+                                        </Button>
+                                        <Button
+                                        aria-label={`Delete monitor ${monitor.name}`}
+                                        className="text-destructive hover:bg-destructive/10"
+                                        disabled={actionKey === deleteKey}
+                                        onClick={() => handleAction(monitor.id, "delete")}
+                                        size="icon-xs"
+                                        title="Delete"
+                                        variant="ghost"
+                                        >
+                                        {actionKey === deleteKey ? (
+                                            <Loader2 className="size-3.5 animate-spin" />
+                                        ) : (
+                                            <Trash2 className="size-3.5" />
+                                        )}
+                                        </Button>
+                                    </div>
+                                    </TableCell>
+                                </TableRow>
+                                );
+                            })}
+                        </TableBody>
+                    </Table>
+                </div>
+            </div>
+        )}
         <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
           {events.map((event) => (
             <div key={event.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
