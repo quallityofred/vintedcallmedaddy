@@ -143,11 +143,12 @@ function SettingsContent() {
         credentials: "same-origin",
         headers: { "X-CSRF-Token": csrfToken },
       });
-      if (!response.ok) throw new Error(`Failed to ${action} bot`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || `Failed to ${action} bot`);
       toast.success(`Action ${action} successful`);
       void fetchSettings();
-    } catch {
-      toast.error(`Failed to ${action} bot`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to ${action} bot`);
     } finally {
       setActionInFlight(null);
     }

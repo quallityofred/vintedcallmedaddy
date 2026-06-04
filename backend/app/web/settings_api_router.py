@@ -292,7 +292,7 @@ async def telegram_test(
     token = user.telegram_bot_token or ""
     chat_id = user.telegram_chat_id or ""
     if not token or not chat_id:
-        raise HTTPException(status_code=400, detail="Telegram bot token and chat ID are required")
+        raise HTTPException(status_code=400, detail="Telegram bot token and chat ID are not configured")
 
     try:
         await _send_telegram_test_message(token, chat_id)
