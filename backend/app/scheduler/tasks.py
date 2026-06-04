@@ -31,6 +31,7 @@ INTERVAL_STEP_DOWN_FAST = 0.7
 
 _telegram_bot: Bot | None = None
 _notification_lock = asyncio.Lock()
+_running_checks: set[int] = set()
 AsyncSessionLocal = None
 
 
@@ -107,17 +108,12 @@ async def _has_seen_item(db, user_id: int, item_id: int) -> bool:
 
 async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = None) -> None:
     """Main task: check a single monitor for new Vinted listings."""
-    async with _new_session() as db:
-        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-        monitor = result.scalar_one_or_none()
-        if monitor is None or not monitor.is_active:
-            return
-
-        monitor.last_check_started_at = datetime.now(timezone.utc)
-        monitor.last_check_status = "running"
-        monitor.last_error = None
-        await db.commit()
-
+    
+    if monitor_id in _running_checks:
+        logger.debug(f"Monitor {monitor_id} check already in progress, skipping.")
+        return
+    _running_checks.add(monitor_id)
+    
     try:
         async with _new_session() as db:
             result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
@@ -125,171 +121,185 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
             if monitor is None or not monitor.is_active:
                 return
 
-            if monitor.user_id is None:
-                logger.warning("Skipping monitor with missing user_id", extra={"monitor_id": monitor.id})
-                return
+            monitor.last_check_started_at = datetime.now(timezone.utc)
+            monitor.last_check_status = "running"
+            monitor.last_error = None
+            await db.commit()
 
-            user = await db.get(User, monitor.user_id)
-            params = json.loads(monitor.params_json)
-            domains = json.loads(monitor.domains_json)
-            user_id = monitor.user_id
-            is_cold_start = monitor.last_check_at is None
-            original_interval = params.get("_original_interval", monitor.interval_sec)
-
-            hidden_result = await db.execute(
-                select(HiddenSeller.seller_id).where(HiddenSeller.user_id == user_id)
-            )
-            hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
-
-            owns_client = scraper_client is None
-            client = scraper_client
-
-            if client is None:
-                from app.scraper.client import VintedClient, CloudflareFallback
-                from app.scraper.rate_limiter import TokenBucketLimiter
-
-                cf_fallback = None
-                if user and user.cf_worker_url:
-                    cf_fallback = CloudflareFallback(
-                        worker_url=user.cf_worker_url,
-                        block_threshold=user.cf_worker_block_threshold,
-                        recovery_minutes=user.cf_worker_recovery_minutes,
-                    )
-
-                rate_limiter = TokenBucketLimiter(
-                    rate=float(settings.rate_limit_per_minute),
-                    per=60.0,
-                )
-                client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
-
-            try:
-                items = await client.search_all_domains(params, domains)
-            finally:
-                if owns_client:
-                    await client.close()
-
-            items = items or []
-
+        try:
             async with _new_session() as db:
                 result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
                 monitor = result.scalar_one_or_none()
                 if monitor is None or not monitor.is_active:
                     return
 
-                if not items:
-                    await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
-                    monitor.last_check_status = "success_zero_items"
-                else:
-                    # Items are available here, now process them.
-                    # Keep the first copy of a Vinted item ID across selected domains.
-                    filtered_items: list[VintedItem] = []
-                    seen_item_ids: set[int] = set()
-                    for item in items:
-                        if item.seller_id in hidden_seller_ids or item.id in seen_item_ids:
-                            continue
-                        seen_item_ids.add(item.id)
-                        filtered_items.append(item)
+                if monitor.user_id is None:
+                    logger.warning("Skipping monitor with missing user_id", extra={"monitor_id": monitor.id})
+                    return
 
-                    logger.debug(f"Filtered {len(items)} items down to {len(filtered_items)} based on hidden sellers")
-                    new_items_to_notify: list[VintedItem] = []
-                    is_pg = not settings.is_sqlite()
+                user = await db.get(User, monitor.user_id)
+                params = json.loads(monitor.params_json)
+                domains = json.loads(monitor.domains_json)
+                user_id = monitor.user_id
+                is_cold_start = monitor.last_check_at is None
+                original_interval = params.get("_original_interval", monitor.interval_sec)
 
-                    for item in filtered_items:
-                        already_seen = await _has_seen_item(db, user_id, item.id)
-                        if already_seen:
-                            continue
+                hidden_result = await db.execute(
+                    select(HiddenSeller.seller_id).where(HiddenSeller.user_id == user_id)
+                )
+                hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
 
-                        if is_pg:
-                            stmt = pg_insert(SeenItem).values(
-                                user_id=user_id,
-                                vinted_item_id=item.id,
-                                domain=item.domain,
-                                seen_at=datetime.now(timezone.utc),
-                            ).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
-                            res = await db.execute(stmt)
-                            is_new_for_user = res.rowcount > 0
-                        else:
-                            stmt = insert(SeenItem).values(
-                                user_id=user_id,
-                                vinted_item_id=item.id,
-                                domain=item.domain,
-                                seen_at=datetime.now(timezone.utc),
-                            ).prefix_with("OR IGNORE")
-                            res = await db.execute(stmt)
-                            is_new_for_user = res.rowcount > 0
+                owns_client = scraper_client is None
+                client = scraper_client
 
-                        if is_cold_start or not is_new_for_user:
-                            continue
+                if client is None:
+                    from app.scraper.client import VintedClient, CloudflareFallback
+                    from app.scraper.rate_limiter import TokenBucketLimiter
 
-                        if is_pg:
-                            found_stmt = pg_insert(FoundItem).values(
-                                monitor_id=monitor_id,
-                                vinted_item_id=item.id,
-                                domain=item.domain,
-                                title=item.title,
-                                price=item.price,
-                                currency=item.currency,
-                                brand=item.brand,
-                                size=item.size,
-                                condition=item.condition,
-                                photo_url=item.photo_url,
-                                item_url=item.item_url,
-                                seller_id=item.seller_id,
-                                found_at=datetime.now(timezone.utc),
-                                notified=False,
-                            ).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
-                            found_res = await db.execute(found_stmt)
-                            if found_res.rowcount > 0:
-                                new_items_to_notify.append(item)
-                        else:
-                            found_stmt = insert(FoundItem).values(
-                                monitor_id=monitor_id,
-                                vinted_item_id=item.id,
-                                domain=item.domain,
-                                title=item.title,
-                                price=item.price,
-                                currency=item.currency,
-                                brand=item.brand,
-                                size=item.size,
-                                condition=item.condition,
-                                photo_url=item.photo_url,
-                                item_url=item.item_url,
-                                seller_id=item.seller_id,
-                                found_at=datetime.now(timezone.utc),
-                                notified=False,
-                            ).prefix_with("OR IGNORE")
-                            found_res = await db.execute(found_stmt)
-                            if found_res.rowcount > 0:
-                                new_items_to_notify.append(item)
+                    cf_fallback = None
+                    if user and user.cf_worker_url:
+                        cf_fallback = CloudflareFallback(
+                            worker_url=user.cf_worker_url,
+                            block_threshold=user.cf_worker_block_threshold,
+                            recovery_minutes=user.cf_worker_recovery_minutes,
+                        )
 
-                    await _update_monitor_interval(
-                        db,
-                        monitor,
-                        len(new_items_to_notify) > 0 or not is_cold_start,
-                        count=len(new_items_to_notify),
-                        original_interval=original_interval,
+                    rate_limiter = TokenBucketLimiter(
+                        rate=float(settings.rate_limit_per_minute),
+                        per=60.0,
                     )
+                    client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
 
-                    if new_items_to_notify:
-                        asyncio.create_task(process_pending_notifications())
+                try:
+                    items = await client.search_all_domains(params, domains)
+                finally:
+                    if owns_client:
+                        await client.close()
 
-                    monitor.last_check_status = "baseline_created" if is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
+                items = items or []
 
-                monitor.last_check_at = datetime.now(timezone.utc)
-                monitor.last_check_completed_at = datetime.now(timezone.utc)
-                await db.commit()
+                async with _new_session() as db:
+                    result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+                    monitor = result.scalar_one_or_none()
+                    if monitor is None or not monitor.is_active:
+                        return
 
-    except Exception as e:
-        logger.error(f"Error in check_monitor {monitor_id}: {e}")
-        async with _new_session() as db:
-            result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-            monitor = result.scalar_one_or_none()
-            if monitor:
-                monitor.last_check_status = "failed"
-                monitor.last_error = str(e)[:255]
-                monitor.last_check_completed_at = datetime.now(timezone.utc)
-                await db.commit()
-        raise
+                    if not items:
+                        await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
+                        monitor.last_check_status = "success_zero_items"
+                    else:
+                        # Items are available here, now process them.
+                        # Keep the first copy of a Vinted item ID across selected domains.
+                        filtered_items: list[VintedItem] = []
+                        seen_item_ids: set[int] = set()
+                        for item in items:
+                            if item.seller_id in hidden_seller_ids or item.id in seen_item_ids:
+                                continue
+                            seen_item_ids.add(item.id)
+                            filtered_items.append(item)
+
+                        logger.debug(f"Filtered {len(items)} items down to {len(filtered_items)} based on hidden sellers")
+                        new_items_to_notify: list[VintedItem] = []
+                        is_pg = not settings.is_sqlite()
+
+                        for item in filtered_items:
+                            already_seen = await _has_seen_item(db, user_id, item.id)
+                            if already_seen:
+                                continue
+
+                            if is_pg:
+                                stmt = pg_insert(SeenItem).values(
+                                    user_id=user_id,
+                                    vinted_item_id=item.id,
+                                    domain=item.domain,
+                                    seen_at=datetime.now(timezone.utc),
+                                ).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
+                                res = await db.execute(stmt)
+                                is_new_for_user = res.rowcount > 0
+                            else:
+                                stmt = insert(SeenItem).values(
+                                    user_id=user_id,
+                                    vinted_item_id=item.id,
+                                    domain=item.domain,
+                                    seen_at=datetime.now(timezone.utc),
+                                ).prefix_with("OR IGNORE")
+                                res = await db.execute(stmt)
+                                is_new_for_user = res.rowcount > 0
+
+                            if is_cold_start or not is_new_for_user:
+                                continue
+
+                            if is_pg:
+                                found_stmt = pg_insert(FoundItem).values(
+                                    monitor_id=monitor_id,
+                                    vinted_item_id=item.id,
+                                    domain=item.domain,
+                                    title=item.title,
+                                    price=item.price,
+                                    currency=item.currency,
+                                    brand=item.brand,
+                                    size=item.size,
+                                    condition=item.condition,
+                                    photo_url=item.photo_url,
+                                    item_url=item.item_url,
+                                    seller_id=item.seller_id,
+                                    found_at=datetime.now(timezone.utc),
+                                    notified=False,
+                                ).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
+                                found_res = await db.execute(found_stmt)
+                                if found_res.rowcount > 0:
+                                    new_items_to_notify.append(item)
+                            else:
+                                found_stmt = insert(FoundItem).values(
+                                    monitor_id=monitor_id,
+                                    vinted_item_id=item.id,
+                                    domain=item.domain,
+                                    title=item.title,
+                                    price=item.price,
+                                    currency=item.currency,
+                                    brand=item.brand,
+                                    size=item.size,
+                                    condition=item.condition,
+                                    photo_url=item.photo_url,
+                                    item_url=item.item_url,
+                                    seller_id=item.seller_id,
+                                    found_at=datetime.now(timezone.utc),
+                                    notified=False,
+                                ).prefix_with("OR IGNORE")
+                                found_res = await db.execute(found_stmt)
+                                if found_res.rowcount > 0:
+                                    new_items_to_notify.append(item)
+
+                        await _update_monitor_interval(
+                            db,
+                            monitor,
+                            len(new_items_to_notify) > 0 or not is_cold_start,
+                            count=len(new_items_to_notify),
+                            original_interval=original_interval,
+                        )
+
+                        if new_items_to_notify:
+                            asyncio.create_task(process_pending_notifications())
+
+                        monitor.last_check_status = "baseline_created" if is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
+
+                    monitor.last_check_at = datetime.now(timezone.utc)
+                    monitor.last_check_completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+
+        except Exception as e:
+            logger.error(f"Error in check_monitor {monitor_id}: {e}")
+            async with _new_session() as db:
+                result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+                monitor = result.scalar_one_or_none()
+                if monitor:
+                    monitor.last_check_status = "failed"
+                    monitor.last_error = str(e)[:255]
+                    monitor.last_check_completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+            raise
+    finally:
+        _running_checks.remove(monitor_id)
 
 
 
