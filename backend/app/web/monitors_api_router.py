@@ -420,6 +420,8 @@ async def debug_monitor(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
     
+    await db.refresh(user)
+    
     scheduler = get_scheduler(request)
     job_info = {"job_exists": False}
     if scheduler:
