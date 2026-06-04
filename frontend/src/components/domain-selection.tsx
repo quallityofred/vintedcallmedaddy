@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 interface Domain {
@@ -31,7 +31,7 @@ function getMarketplaceLabel(domain: Domain) {
   if (code && MARKETPLACE_LABELS[code]) {
     return {
       code: code.toUpperCase(),
-      title: `${code.toUpperCase()} — ${MARKETPLACE_LABELS[code]}`,
+      title: MARKETPLACE_LABELS[code],
       subtitle: domain.host || domain.domain,
     };
   }
@@ -114,13 +114,11 @@ export function DomainSelection({
   };
 
   return (
-    <div className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.025] p-3 sm:p-4">
+    <div className="grid gap-2.5 rounded-2xl border border-white/10 bg-white/[0.025] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <Label className="text-sm font-medium">{statusLabel}</Label>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Select the unique Vinted marketplaces this monitor should check.
-          </p>
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">Choose the marketplaces to check.</p>
         </div>
         <button
           type="button"
@@ -147,31 +145,35 @@ export function DomainSelection({
         </p>
       ) : null}
 
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {domains.map((d) => {
           const isSelected = selectedDomains.includes(d.domain);
           const { code, title, subtitle } = getMarketplaceLabel(d);
           const id = getDomainId(d.domain);
+          const optionTitle =
+            d.aliases && d.aliases.length > 0 ? `${subtitle}. Aliases: ${d.aliases.join(", ")}` : subtitle;
+
           return (
             <label
               key={d.domain}
               htmlFor={id}
+              title={optionTitle}
               className={cn(
-                "group flex cursor-pointer items-start gap-3 rounded-2xl border p-3 transition-all focus-within:border-emerald-200/70 focus-within:ring-2 focus-within:ring-emerald-300/20",
+                "group flex cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-all focus-within:border-emerald-200/70 focus-within:ring-2 focus-within:ring-emerald-300/20",
                 isSelected
-                  ? "border-emerald-300/70 bg-emerald-300/[0.14] shadow-lg shadow-emerald-950/25"
-                  : "border-white/10 bg-black/15 hover:border-emerald-200/40 hover:bg-white/[0.06]"
+                  ? "border-emerald-300/60 bg-emerald-300/[0.12]"
+                  : "border-white/10 bg-black/15 hover:border-emerald-200/35 hover:bg-white/[0.05]"
               )}
             >
               <Checkbox
                 id={id}
                 checked={isSelected}
-                className="mt-1 size-5 rounded-md border-emerald-200/45 bg-black/30"
+                className="size-4 rounded-md border-emerald-200/45 bg-black/30"
                 onCheckedChange={() => toggleDomain(d.domain)}
               />
               <span
                 className={cn(
-                  "flex size-9 shrink-0 items-center justify-center rounded-xl border text-xs font-bold tracking-wide",
+                  "flex size-7 shrink-0 items-center justify-center rounded-lg border text-[11px] font-bold tracking-wide",
                   isSelected
                     ? "border-emerald-200/40 bg-emerald-200/20 text-emerald-50"
                     : "border-white/10 bg-white/[0.04] text-emerald-100/80"
@@ -179,15 +181,7 @@ export function DomainSelection({
               >
                 {code}
               </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold text-foreground">{title}</span>
-                <span className="mt-0.5 block truncate text-xs text-muted-foreground">{subtitle}</span>
-                {d.aliases && d.aliases.length > 0 ? (
-                  <span className="mt-1 block text-[11px] text-emerald-100/65">
-                    Includes {d.aliases.length} alias{d.aliases.length === 1 ? "" : "es"}
-                  </span>
-                ) : null}
-              </span>
+              <span className="min-w-0 truncate text-sm font-medium text-foreground">{title}</span>
             </label>
           );
         })}

@@ -61,6 +61,7 @@ tags:
 - After Railway redeploy, verify `/dashboard` no longer shows the full monitor table and `/monitors` supports create/edit/pause/resume/check-now/delete/bulk-delete with real user data.
 - After Railway redeploy, open `/monitors`, create a monitor, and confirm `GET /api/v1/monitors/domains` returns unique representatives with no 500 and no `Target Domains (0 / 0)` failure state.
 - After Railway redeploy, verify the new `/monitors` responsive card/list UI with real monitor data on desktop and mobile.
+- After Railway redeploy, verify `/monitors` info-card spacing and the compact domain selector in the create/edit dialog.
 - After Railway redeploy, verify `/settings` shows classified Telegram test errors for missing/invalid credentials without exposing token or chat values.
 - Consider extracting a typed frontend API client to reduce duplicated CSRF/fetch/error handling across components.
 

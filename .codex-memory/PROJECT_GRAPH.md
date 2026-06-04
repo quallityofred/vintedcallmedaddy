@@ -46,6 +46,7 @@ tags:
 - 2026-06-04: Dashboard monitor management was split into a dedicated protected `/monitors` page; dashboard now stays an overview surface with a compact monitor summary and CTA.
 - 2026-06-04: Follow-up polish improved Telegram settings feedback, shared checkbox styling, domain marketplace cards, and compact monitor selection controls.
 - 2026-06-04: `/monitors` received a strict visual rework: raw table rows were replaced by responsive monitor cards with visible selection, metadata tiles, and labeled actions.
+- 2026-06-04: `/monitors` spacing and domain selector were refined with a compact minimal selector and clearer separation before informational cards.
 
 ## Fixed Audit Issues
 

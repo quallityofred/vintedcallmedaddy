@@ -565,7 +565,7 @@ export function MonitorPreview() {
             </div>
           </div>
         )}
-        <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+        <div className="mt-6 grid gap-3 sm:mt-8 sm:grid-cols-3 xl:grid-cols-1">
           {events.map((event) => (
             <div key={event.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
               <div className="mb-3 flex size-9 items-center justify-center rounded-xl bg-emerald-300/10 text-emerald-200">

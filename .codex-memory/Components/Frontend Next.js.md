@@ -152,6 +152,7 @@ updated: 2026-06-04
 - 2026-06-04: `DomainSelection` now loads unique marketplace representatives from `/api/v1/monitors/domains`, preserves selected representative payloads, shows a clean retry state on endpoint failure, and no longer silently presents `0 / 0` on backend errors.
 - 2026-06-04: Follow-up polish updated the shared checkbox primitive, rendered domain marketplaces as selectable cards, switched monitor row/bulk selection to the shared checkbox, and improved `/settings` Telegram masked status plus safe action feedback.
 - 2026-06-04: `/monitors` was visually reworked from a table into responsive monitor cards/list rows. Each card shows a clear square selection checkbox, monitor name, source URL link, active/paused status, marketplace, interval, found count, last check, and labeled Edit/Check/Pause/Resume/Delete buttons. The list toolbar owns select-all and bulk delete.
+- 2026-06-04: `/monitors` follow-up refinement added intentional spacing before informational cards and simplified `DomainSelection` to compact rows: checkbox, country code badge, and marketplace name. Hosts/aliases stay out of the main visual and are available only as option title metadata.
 
 ## Settings Feedback
 
