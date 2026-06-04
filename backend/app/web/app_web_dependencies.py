@@ -146,6 +146,9 @@ def _live_polling_task(token: str) -> asyncio.Task | None:
 
 def is_bot_running(token: str) -> bool:
     """Return True if there is an active polling task for *token*."""
+    from app.telegram.bot import _polling_errors
+    if token in _polling_errors:
+        return False
     return _live_polling_task(token) is not None
 
 
@@ -170,8 +173,10 @@ async def _polling_wrapper(bot, dp, token: str) -> None:
         await dp.start_polling(bot)
     except asyncio.CancelledError:
         pass
-    except Exception:
-        logger.exception("Telegram polling crashed")
+    except Exception as e:
+        error_msg = f"Polling crashed: {type(e).__name__}"
+        bot_module._polling_errors[token] = error_msg
+        logger.exception("Telegram polling crashed for token=...%s", token[-6:])
     finally:
         if bot_module._polling_tasks.get(token) is current_task:
             bot_module._polling_tasks.pop(token, None)
@@ -197,7 +202,8 @@ async def start_bot(token: str, owner_user_id: int | None = None) -> str:
     try:
         import app.telegram.bot as bot_module
         from app.telegram.bot import get_or_create_bot, terminate_all_sessions
-
+        
+        bot_module._polling_errors.pop(token, None)
         await terminate_all_sessions(token)
         bot, dp = get_or_create_bot(token)
 
@@ -207,13 +213,20 @@ async def start_bot(token: str, owner_user_id: int | None = None) -> str:
         bot_module._polling_tasks[token] = task
 
         # Yield control so the task can start running
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.1)
+        
+        if task.done():
+            exc = task.exception()
+            if exc:
+                raise exc
+            raise Exception("Polling task exited immediately")
 
         logger.info("Telegram bot polling started for user_id=%s", owner_user_id)
         return "Бот успешно запущен"
     except Exception as exc:
         logger.exception("Failed to start bot")
         try:
+            import app.telegram.bot as bot_module
             bot_module._polling_tasks.pop(token, None)
         except Exception:
             pass
@@ -241,15 +254,8 @@ async def stop_bot(token: str, timeout: float = 5.0) -> BotLifecycleResult:
 
     task.cancel()
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-    except asyncio.TimeoutError:
-        return BotLifecycleResult(
-            ok=False,
-            state="stop_timeout",
-            message="Telegram bot did not stop within the timeout. It may still be shutting down.",
-            running=not task.done(),
-        )
-    except asyncio.CancelledError:
+        await asyncio.wait_for(task, timeout=timeout)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
         pass
     except Exception:
         logger.exception("Telegram polling task ended with an error during stop")

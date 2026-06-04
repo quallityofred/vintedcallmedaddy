@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 _bots: dict[str, Bot] = {}
 _shared_dispatcher: Dispatcher | None = None
 _polling_tasks: dict[str, asyncio.Task] = {}
+_polling_errors: dict[str, str] = {}
 
 
 def get_shared_dispatcher() -> Dispatcher:
@@ -23,15 +24,17 @@ def get_shared_dispatcher() -> Dispatcher:
 
 async def terminate_all_sessions(token: str) -> None:
     """Kill ALL bot sessions on Telegram servers before starting a new one."""
+    bot = Bot(token=token)
     try:
         # Use context manager for temporary bot to ensure session closure
-        bot = Bot(token=token)
         await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook deleted for bot session termination")
+    except Exception as e:
+        logger.exception("Failed to terminate previous bot sessions")
+        raise
+    finally:
         await bot.session.close()
         await asyncio.sleep(1.0)
-        logger.info("All previous bot sessions terminated")
-    except Exception:
-        logger.exception("Failed to terminate previous bot sessions")
 
 
 def get_or_create_bot(token: str) -> tuple[Bot, Dispatcher]:
