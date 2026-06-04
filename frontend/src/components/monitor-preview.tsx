@@ -33,6 +33,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DomainSelection } from "@/components/domain-selection";
+import { MonitorDebugPanel } from "@/components/monitor-debug-panel";
 import { cn } from "@/lib/utils";
 
 interface Monitor {
@@ -548,6 +549,7 @@ export function MonitorPreview() {
                               )}
                               Check
                             </Button>
+                            <MonitorDebugPanel monitorId={monitor.id} name={monitor.name} />
                             <Button
                               aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
                               disabled={actionKey === pauseKey || actionKey === resumeKey}

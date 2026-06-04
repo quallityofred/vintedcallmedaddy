@@ -349,6 +349,7 @@ async def resume_monitor(
     return _monitor_response(monitor)
 
 
+
 @router.post("/{monitor_id}/check-now", dependencies=[Depends(require_csrf)])
 async def check_monitor_now(
     request: Request,
@@ -372,3 +373,58 @@ async def check_monitor_now(
         return {"ok": True, "message": "Check triggered"}
     
     raise HTTPException(status_code=503, detail="Scheduler unavailable or monitor not scheduled")
+
+
+@router.get("/{monitor_id}/debug")
+async def debug_monitor(
+    request: Request,
+    monitor_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Get diagnostic info for a specific monitor."""
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+    
+    scheduler = get_scheduler(request)
+    job_info = {"job_exists": False}
+    if scheduler:
+        job_id = scheduler.job_ids.get(monitor.id)
+        if job_id:
+            job = scheduler.scheduler.get_job(job_id)
+            if job:
+                job_info = {
+                    "job_exists": True,
+                    "job_id": job.id,
+                    "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None
+                }
+    
+    status_notes = {
+        None: "This monitor has not been checked yet.",
+        "running": "Check is currently running.",
+        "baseline_created": "Tracking baseline initialized. Future new items will appear here.",
+        "success_zero_items": "Checked successfully, but scraper returned 0 items.",
+        "success_no_new_items": "Checked successfully. No new items found.",
+        "success_new_items": "Checked successfully. New items were found.",
+        "failed": f"Check failed: {monitor.last_error or 'Unknown error'}",
+    }
+
+    return {
+        "monitor_id": monitor.id,
+        "name": monitor.name,
+        "is_active": monitor.is_active,
+        "interval_sec": monitor.interval_sec,
+        "domains": _monitor_domains(monitor),
+        "last_check_at": monitor.last_check_at,
+        "last_check_started_at": monitor.last_check_started_at,
+        "last_check_completed_at": monitor.last_check_completed_at,
+        "last_check_status": monitor.last_check_status,
+        "last_error": monitor.last_error,
+        "items_found_count": monitor.items_found_count,
+        "scheduler": job_info,
+        "explanation": status_notes.get(monitor.last_check_status, "Status unknown."),
+    }
