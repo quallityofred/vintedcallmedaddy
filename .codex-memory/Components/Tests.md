@@ -109,6 +109,15 @@ tags:
   - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
   - `cd frontend && npm run test:e2e` -> 8 passed with known Node `DEP0205` warning and expected isolated local backend proxy noise.
   - `git diff --check` -> passed with line-ending warnings only.
+- Monitor edit/domains UI snapshot on `2026-06-04`:
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 14 passed.
+  - `cd backend && poetry run pytest -q` -> 73 passed when run alone. A parallel run with backend import smoke failed from shared SQLite test setup (`no such table: users`), then passed on isolated rerun.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 8 passed with known Node `DEP0205` warning.
+  - Playwright MCP verified `/monitors` edit opens with persisted name/URL/interval/domains, Escape close does not send `PATCH`, reopening restores persisted values, selected domains are visible, and desktop/mobile scroll width matches viewport.
+  - `git diff --check` -> passed with line-ending warnings only.
 
 ## Coverage Gaps
 

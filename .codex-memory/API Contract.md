@@ -91,10 +91,10 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | Method | Path | Type | Auth | Notes |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/monitors/domains` | JSON | public | Returns unique user-selectable Vinted marketplace representatives plus alias metadata. Aliases are not selectable monitor targets. |
-| `GET` | `/api/v1/monitors` | JSON | session | User-scoped monitor list. |
+| `GET` | `/api/v1/monitors` | JSON | session | User-scoped monitor list. Returns selected representative `domains` for each monitor. |
 | `POST` | `/api/v1/monitors` | JSON | session + CSRF | Creates user-scoped monitor and schedules job. |
-| `GET` | `/api/v1/monitors/{monitor_id}` | JSON | session | User-scoped monitor detail. |
-| `PATCH` | `/api/v1/monitors/{monitor_id}` | JSON | session + CSRF | Updates user-scoped monitor and scheduler job. |
+| `GET` | `/api/v1/monitors/{monitor_id}` | JSON | session | User-scoped monitor detail. Returns selected representative `domains`. |
+| `PATCH` | `/api/v1/monitors/{monitor_id}` | JSON | session + CSRF | Updates user-scoped monitor, selected representative `domains`, and scheduler job. |
 | `DELETE` | `/api/v1/monitors/{monitor_id}` | JSON | session + CSRF | Deletes user-scoped monitor and removes scheduler job. |
 | `POST` | `/api/v1/monitors/bulk-delete` | JSON | session + CSRF | User-scoped bulk delete. |
 | `POST` | `/api/v1/monitors/{monitor_id}/pause` | JSON | session + CSRF | Pauses user-scoped monitor. |
@@ -215,6 +215,12 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - `POST /api/v1/telegram/test` now classifies common Telegram setup/runtime failures into safe user-facing errors instead of returning one vague `502`.
 - Missing credentials, invalid token, invalid chat ID, chat-not-found, blocked bot, bot busy/polling conflict, upstream timeout/unavailable, rate limit, and unknown failures are covered.
 - Responses include only safe `code` and `detail` fields plus `ok: false`; token/chat values and raw upstream payloads are not returned.
+
+## [2026-06-04] Update: Monitor selected domains response
+
+- Monitor list/detail/create/update/pause/resume responses now include selected representative `domains`.
+- The Next `/monitors` edit dialog uses those persisted domains to initialize a local draft and only sends updates on explicit submit.
+- Closing the edit dialog with Escape/outside click/close discards unsaved draft changes and does not call `PATCH`.
 
 
 ## [2026-06-03] Update: Found Items and Hidden Sellers APIs implemented.

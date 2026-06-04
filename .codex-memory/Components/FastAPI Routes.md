@@ -81,6 +81,7 @@ tags:
 - 2026-06-04: `/api/v1/telegram/test` returns safe structured error `code`/`detail` payloads for missing credentials, invalid token/chat, chat access issues, bot conflicts, rate limits, upstream timeouts, and unknown failures.
 - 2026-06-03: [[API Contract]] inventories all current route surfaces. Current versioned API covers auth/register/CSRF, dashboard stats, monitors, items, hidden sellers, settings/Telegram, system status, and admin invites.
 - 2026-06-04: `GET /api/v1/monitors/domains` now returns unique Vinted marketplace representatives and cannot fail from the old missing `get_flag` import. Monitor create/update validates representatives and rejects empty/unknown selected domains with `400`.
+- 2026-06-04: Monitor response payloads for list/detail/create/update/pause/resume now include selected representative `domains`, allowing the Next `/monitors` edit form to initialize from persisted state instead of stale frontend draft state.
 - 2026-06-03: Removed obsolete legacy placeholder route modules: `router.py`, `auth_router.py`, `admin_router.py`, and `app_web_router.py`.
 - 2026-06-03: Added API dependency helpers so admin/system APIs return JSON `401`/`403` behavior instead of legacy redirects.
 

@@ -77,7 +77,8 @@ export function DomainSelection({
         throw new Error("Unable to load target domains");
       }
       const data = (await response.json()) as Domain[] | { domains?: Domain[] };
-      const nextDomains = Array.isArray(data) ? data : data.domains || [];
+      const rawDomains = Array.isArray(data) ? data : data.domains || [];
+      const nextDomains = rawDomains.filter((item) => typeof item.domain === "string");
       setDomains(nextDomains);
       onSelectionChange(selectedDomains.filter((domain) => nextDomains.some((item) => item.domain === domain)));
     } catch {
@@ -118,7 +119,7 @@ export function DomainSelection({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <Label className="text-sm font-medium">{statusLabel}</Label>
-          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">Choose the marketplaces to check.</p>
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">Choose the target domains to check.</p>
         </div>
         <button
           type="button"
@@ -141,7 +142,7 @@ export function DomainSelection({
 
       {!loading && !error && domains.length === 0 ? (
         <p className="rounded-lg border border-white/10 bg-black/10 p-3 text-sm text-muted-foreground">
-          No target marketplaces are currently available.
+          No target domains are currently available.
         </p>
       ) : null}
 

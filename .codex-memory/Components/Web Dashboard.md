@@ -65,6 +65,7 @@ tags:
   - unauthenticated users redirect to `/login?next=...`.
 - 2026-06-03: UI polish pass improved dashboard rhythm, monitor table controls, recent item states, settings token messaging, and admin invite management states. Icon-only/destructive actions now have explicit labels.
 - 2026-06-04: Dashboard no longer embeds the full monitor management table. It shows a compact monitor summary card with counts and a `Manage monitors` CTA. Full monitor CRUD/control UI is now on protected `/monitors`.
+- 2026-06-04: `/monitors` edit/create dialog now keeps unsaved draft state isolated from persisted monitor data. Closing the dialog without `Update monitor` discards edits; reopening shows saved name, URL, interval, and selected domains. Monitor cards now label selected targets as `Domains` instead of `Marketplace`.
 - 2026-06-04: Settings page now shows masked Telegram credential status cards, disabled-action help, safe classified test errors, and clearer save/test/start/stop loading states. Checkbox polish keeps domain selection card-like and monitor selection compact.
 
 ## Related Plans

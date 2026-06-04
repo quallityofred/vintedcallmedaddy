@@ -62,6 +62,8 @@ tags:
 - After Railway redeploy, open `/monitors`, create a monitor, and confirm `GET /api/v1/monitors/domains` returns unique representatives with no 500 and no `Target Domains (0 / 0)` failure state.
 - After Railway redeploy, verify the new `/monitors` responsive card/list UI with real monitor data on desktop and mobile.
 - After Railway redeploy, verify `/monitors` info-card spacing and the compact domain selector in the create/edit dialog.
+- After Railway redeploy, verify `/monitors` edit close behavior with real monitors: change draft fields, close without submit, reopen, and confirm persisted name/URL/interval/domains remain unchanged.
+- After Railway redeploy, verify monitor cards show selected target domains and long domain lists truncate without horizontal overflow.
 - After Railway redeploy, verify `/settings` shows classified Telegram test errors for missing/invalid credentials without exposing token or chat values.
 - Consider extracting a typed frontend API client to reduce duplicated CSRF/fetch/error handling across components.
 

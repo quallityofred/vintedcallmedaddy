@@ -47,6 +47,7 @@ tags:
 - 2026-06-04: Follow-up polish improved Telegram settings feedback, shared checkbox styling, domain marketplace cards, and compact monitor selection controls.
 - 2026-06-04: `/monitors` received a strict visual rework: raw table rows were replaced by responsive monitor cards with visible selection, metadata tiles, and labeled actions.
 - 2026-06-04: `/monitors` spacing and domain selector were refined with a compact minimal selector and clearer separation before informational cards.
+- 2026-06-04: `/monitors` edit/create flow was hardened: monitor API responses include selected `domains`, edit dialogs use isolated controlled drafts, close-without-submit does not persist changes, and monitor cards show selected domains.
 
 ## Fixed Audit Issues
 
@@ -113,6 +114,7 @@ tags:
 - [[API Contract]] inventories current backend/frontend API state and missing Next-ready endpoints for auth, registration, CSRF, settings, Telegram, CF Worker, scraper settings, monitors, dashboard, items, hidden sellers, and system status.
 - 2026-06-03: API-first cleanup removed obsolete legacy route modules and added frontend auth guards for protected Next routes. `/api/v1/*` remains the active app API surface.
 - 2026-06-04: Monitor domains API now exposes unique Vinted marketplace representatives and validates monitor create/update target domains against that registry.
+- 2026-06-04: Monitor list/detail/create/update/control responses now include selected representative `domains` so frontend edit forms can initialize from persisted state.
 - 2026-06-04: Telegram test API now returns safe classified setup/runtime error codes for the Next settings UI.
 
 ## Recommended Obsidian Graph Groups

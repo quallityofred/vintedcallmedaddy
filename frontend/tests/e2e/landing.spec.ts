@@ -37,6 +37,8 @@ test("protected pages redirect unauthenticated users to login with next", async 
 });
 
 test("authenticated app pages stay reachable", async ({ page }) => {
+  let monitorPatchCount = 0;
+
   await page.route("**/api/v1/auth/me*", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -90,6 +92,7 @@ test("authenticated app pages stay reachable", async ({ page }) => {
           is_active: true,
           last_check_at: null,
           items_found_count: 2,
+          domains: ["vinted.fr", "vinted.de"],
         },
         {
           id: 2,
@@ -99,8 +102,28 @@ test("authenticated app pages stay reachable", async ({ page }) => {
           is_active: false,
           last_check_at: null,
           items_found_count: 0,
+          domains: ["vinted.de"],
         },
       ]),
+    });
+  });
+  await page.route("**/api/v1/monitors/*", async (route) => {
+    if (route.request().method() === "PATCH") {
+      monitorPatchCount += 1;
+    }
+
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: 1,
+        name: "Nike search",
+        original_url: "https://www.vinted.fr/catalog?search_text=nike",
+        interval_sec: 120,
+        is_active: true,
+        last_check_at: null,
+        items_found_count: 2,
+        domains: ["vinted.fr", "vinted.de"],
+      }),
     });
   });
   await page.route("**/api/v1/monitors/domains", async (route) => {
@@ -153,8 +176,22 @@ test("authenticated app pages stay reachable", async ({ page }) => {
   await expect(page).toHaveURL(/\/monitors$/);
   await expect(page.getByRole("heading", { name: "Manage your Vinted search monitors" })).toBeVisible();
   await expect(page.getByText("Nike search")).toBeVisible();
+  await expect(page.getByText("vinted.fr, vinted.de")).toBeVisible();
   await page.getByLabel("Select all monitors").check();
   await expect(page.getByRole("button", { name: /Delete 2 selected monitors/i })).toBeVisible();
+  await page.getByRole("button", { name: /Edit monitor Nike search/i }).click();
+  await expect(page.getByRole("heading", { name: "Edit monitor" })).toBeVisible();
+  await expect(page.getByLabel("Name")).toHaveValue("Nike search");
+  await expect(page.getByLabel("Vinted URL")).toHaveValue("https://www.vinted.fr/catalog?search_text=nike");
+  await expect(page.getByLabel("Check interval in seconds")).toHaveValue("120");
+  await expect(page.getByText("Target Domains (2 / 2)")).toBeVisible();
+  await page.getByLabel("Name").fill("Unsaved Nike search");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Edit monitor" })).toHaveCount(0);
+  expect(monitorPatchCount).toBe(0);
+  await page.getByRole("button", { name: /Edit monitor Nike search/i }).click();
+  await expect(page.getByLabel("Name")).toHaveValue("Nike search");
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: /New monitor/i }).click();
   await expect(page.getByRole("heading", { name: "Create monitor" })).toBeVisible();
   await expect(page.getByText("Target Domains (0 / 2)")).toBeVisible();
@@ -225,6 +262,7 @@ test("dashboard and monitors stay within the mobile viewport", async ({ page }) 
           is_active: true,
           last_check_at: null,
           items_found_count: 2,
+          domains: ["vinted.fr"],
         },
       ]),
     });

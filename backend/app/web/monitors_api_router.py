@@ -34,6 +34,7 @@ class MonitorResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     items_found_count: int
+    domains: List[str]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -72,6 +73,33 @@ async def require_api_user(
     return user
 
 
+def _monitor_domains(monitor: Monitor) -> List[str]:
+    try:
+        domains = json.loads(monitor.domains_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+    if not isinstance(domains, list):
+        return []
+
+    return [domain for domain in domains if isinstance(domain, str)]
+
+
+def _monitor_response(monitor: Monitor) -> dict[str, object]:
+    return {
+        "id": monitor.id,
+        "name": monitor.name,
+        "original_url": monitor.original_url,
+        "interval_sec": monitor.interval_sec,
+        "is_active": monitor.is_active,
+        "last_check_at": monitor.last_check_at,
+        "created_at": monitor.created_at,
+        "updated_at": monitor.updated_at,
+        "items_found_count": monitor.items_found_count,
+        "domains": _monitor_domains(monitor),
+    }
+
+
 @router.get("", response_model=List[MonitorResponse])
 async def list_monitors(
     db: AsyncSession = Depends(get_db),
@@ -84,7 +112,7 @@ async def list_monitors(
         .order_by(Monitor.created_at.desc())
     )
     monitors = result.scalars().all()
-    return monitors
+    return [_monitor_response(monitor) for monitor in monitors]
 
 
 @router.get("/domains")
@@ -106,7 +134,7 @@ async def get_monitor(
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
-    return monitor
+    return _monitor_response(monitor)
 
 
 @router.post("", response_model=MonitorResponse, dependencies=[Depends(require_csrf)])
@@ -150,7 +178,7 @@ async def create_monitor(
     if scheduler:
         scheduler.add_monitor(monitor.id, monitor.interval_sec)
 
-    return monitor
+    return _monitor_response(monitor)
 
 
 @router.patch("/{monitor_id}", response_model=MonitorResponse, dependencies=[Depends(require_csrf)])
@@ -209,7 +237,7 @@ async def update_monitor(
         else:
             scheduler.remove_monitor(monitor.id)
 
-    return monitor
+    return _monitor_response(monitor)
 
 
 @router.delete("/{monitor_id}", status_code=204, dependencies=[Depends(require_csrf)])
@@ -292,7 +320,7 @@ async def pause_monitor(
     if scheduler:
         scheduler.remove_monitor(monitor_id)
 
-    return monitor
+    return _monitor_response(monitor)
 
 
 @router.post("/{monitor_id}/resume", response_model=MonitorResponse, dependencies=[Depends(require_csrf)])
@@ -318,7 +346,7 @@ async def resume_monitor(
     if scheduler:
         scheduler.add_monitor(monitor.id, monitor.interval_sec)
 
-    return monitor
+    return _monitor_response(monitor)
 
 
 @router.post("/{monitor_id}/check-now", dependencies=[Depends(require_csrf)])

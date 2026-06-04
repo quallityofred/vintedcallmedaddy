@@ -101,6 +101,10 @@ async def test_list_monitors_user_scoping(db_session):
         data = response.json()
         assert len(data) == 1
         assert data[0]["name"] == "M1"
+        assert data[0]["domains"] == []
+        detail_response = await client.get(f"/api/v1/monitors/{m1.id}")
+        assert detail_response.status_code == 200
+        assert detail_response.json()["domains"] == []
         assert "password_hash" not in response.text
 
     app.dependency_overrides.clear()
@@ -131,6 +135,7 @@ async def test_create_monitor_success(db_session):
         assert data["name"] == "New Monitor"
         assert data["interval_sec"] == 300
         assert data["is_active"] is True
+        assert data["domains"] == ["vinted.fr"]
 
     app.dependency_overrides.clear()
 
@@ -200,6 +205,7 @@ async def test_create_monitor_alias_url_normalizes_to_representative(db_session)
         )
 
     assert response.status_code == 200
+    assert response.json()["domains"] == ["vinted.pl"]
     monitor = await db_session.get(Monitor, response.json()["id"])
     assert monitor is not None
     assert monitor.user_id == user.id
@@ -246,6 +252,7 @@ async def test_update_monitor_validates_domains(db_session):
     assert empty_response.status_code == 400
     assert unknown_response.status_code == 400
     assert valid_response.status_code == 200
+    assert valid_response.json()["domains"] == ["vinted.de", "vinted.fr"]
     await db_session.refresh(monitor)
     assert json.loads(monitor.domains_json) == ["vinted.de", "vinted.fr"]
     app.dependency_overrides.clear()
@@ -311,6 +318,7 @@ async def test_update_monitor_owner_only(db_session):
             assert response.status_code == 200
             assert response.json()["name"] == "New Name"
             assert response.json()["is_active"] is False
+            assert response.json()["domains"] == []
 
     app.dependency_overrides.clear()
 
@@ -407,10 +415,12 @@ async def test_pause_resume_monitor(db_session):
         response = await client.post(f"/api/v1/monitors/{m1.id}/pause", headers={"X-CSRF-Token": csrf_token})
         assert response.status_code == 200
         assert response.json()["is_active"] is False
+        assert response.json()["domains"] == []
         
         # Resume
         response = await client.post(f"/api/v1/monitors/{m1.id}/resume", headers={"X-CSRF-Token": csrf_token})
         assert response.status_code == 200
         assert response.json()["is_active"] is True
+        assert response.json()["domains"] == []
 
     app.dependency_overrides.clear()

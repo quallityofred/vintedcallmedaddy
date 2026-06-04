@@ -43,6 +43,14 @@ interface Monitor {
   is_active: boolean;
   last_check_at: string | null;
   items_found_count: number;
+  domains: string[];
+}
+
+interface MonitorDraft {
+  name: string;
+  url: string;
+  interval_sec: string;
+  domains: string[];
 }
 
 const events = [
@@ -50,6 +58,22 @@ const events = [
   { label: "Telegram delivery visible", icon: Bell },
   { label: "Adaptive intervals enabled", icon: Clock3 },
 ];
+
+const emptyDraft: MonitorDraft = {
+  name: "",
+  url: "",
+  interval_sec: "120",
+  domains: [],
+};
+
+function createDraftFromMonitor(monitor: Monitor): MonitorDraft {
+  return {
+    name: monitor.name,
+    url: monitor.original_url,
+    interval_sec: String(monitor.interval_sec),
+    domains: Array.isArray(monitor.domains) ? monitor.domains : [],
+  };
+}
 
 export function MonitorPreview() {
   const [monitors, setMonitors] = useState<Monitor[] | null>(null);
@@ -61,7 +85,7 @@ export function MonitorPreview() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [editingMonitor, setEditingMonitor] = useState<Monitor | null>(null);
-  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
+  const [draft, setDraft] = useState<MonitorDraft>(emptyDraft);
 
   const fetchMonitors = useCallback(async () => {
     setError(false);
@@ -96,6 +120,24 @@ export function MonitorPreview() {
     });
     const { csrf_token } = (await response.json()) as { csrf_token: string };
     return csrf_token;
+  };
+
+  const openCreateDialog = () => {
+    setEditingMonitor(null);
+    setDraft(emptyDraft);
+    setIsCreateOpen(true);
+  };
+
+  const openEditDialog = (monitor: Monitor) => {
+    setEditingMonitor(monitor);
+    setDraft(createDraftFromMonitor(monitor));
+    setIsCreateOpen(true);
+  };
+
+  const closeEditor = () => {
+    setIsCreateOpen(false);
+    setEditingMonitor(null);
+    setDraft(emptyDraft);
   };
 
   const handleAction = async (id: number, action: "check-now" | "pause" | "resume" | "delete") => {
@@ -157,18 +199,18 @@ export function MonitorPreview() {
 
   const handleCreateOrUpdate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (selectedDomains.length === 0) {
+    if (draft.domains.length === 0) {
       toast.error("Please select at least one domain");
       return;
     }
     setIsSubmitting(true);
 
-    const formData = new FormData(event.currentTarget);
+    const interval = Number.parseInt(draft.interval_sec, 10);
     const payload = {
-      name: formData.get("name") as string,
-      url: formData.get("url") as string,
-      interval_sec: parseInt(formData.get("interval_sec") as string),
-      domains: selectedDomains,
+      name: draft.name,
+      url: draft.url,
+      interval_sec: interval,
+      domains: draft.domains,
     };
 
     try {
@@ -192,8 +234,7 @@ export function MonitorPreview() {
       }
 
       toast.success(`Monitor ${editingMonitor ? "updated" : "created"}`);
-      setIsCreateOpen(false);
-      setEditingMonitor(null);
+      closeEditor();
       void fetchMonitors();
     } catch (err) {
       const message = err instanceof Error ? err.message : `Failed to ${editingMonitor ? "update" : "create"} monitor`;
@@ -231,6 +272,18 @@ export function MonitorPreview() {
     }
   };
 
+  const formatDomain = (domain: string) => domain.replace(/^www\./, "");
+
+  const formatMonitorDomains = (monitor: Monitor) => {
+    const domains = monitor.domains?.length ? monitor.domains : [getDomain(monitor.original_url)];
+    const displayDomains = domains.map(formatDomain);
+
+    return {
+      label: displayDomains.join(", "),
+      title: displayDomains.join(", "),
+    };
+  };
+
   const allSelected = Boolean(monitors?.length && selectedIds.length === monitors.length);
   const hasSelection = selectedIds.length > 0;
 
@@ -260,16 +313,16 @@ export function MonitorPreview() {
             <Dialog
               open={isCreateOpen}
               onOpenChange={(open) => {
-                setIsCreateOpen(open);
-                if (!open) {
-                    setEditingMonitor(null);
-                    setSelectedDomains([]);
+                if (open) {
+                  setIsCreateOpen(true);
+                } else {
+                  closeEditor();
                 }
               }}
             >
               <DialogTrigger
                 render={
-                  <Button className="w-full sm:w-auto" size="sm">
+                  <Button className="w-full sm:w-auto" onClick={openCreateDialog} size="sm">
                     <Plus className="size-3.5" />
                     New monitor
                   </Button>
@@ -292,9 +345,10 @@ export function MonitorPreview() {
                         disabled={isSubmitting}
                         id="name"
                         name="name"
-                        defaultValue={editingMonitor?.name}
+                        onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
                         placeholder="Nike Dunk Low 42"
                         required
+                        value={draft.name}
                       />
                     </div>
                     <div className="grid gap-2">
@@ -303,9 +357,10 @@ export function MonitorPreview() {
                         disabled={isSubmitting}
                         id="url"
                         name="url"
-                        defaultValue={editingMonitor?.original_url}
+                        onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))}
                         placeholder="https://www.vinted.fr/catalog?..."
                         required
+                        value={draft.url}
                       />
                     </div>
                     <div className="grid gap-2">
@@ -315,15 +370,16 @@ export function MonitorPreview() {
                         id="interval_sec"
                         name="interval_sec"
                         type="number"
-                        defaultValue={editingMonitor?.interval_sec || "120"}
                         min="60"
                         max="3600"
+                        onChange={(event) => setDraft((current) => ({ ...current, interval_sec: event.target.value }))}
                         required
+                        value={draft.interval_sec}
                       />
                     </div>
                     <DomainSelection
-                      selectedDomains={selectedDomains}
-                      onSelectionChange={setSelectedDomains}
+                      selectedDomains={draft.domains}
+                      onSelectionChange={(domains) => setDraft((current) => ({ ...current, domains }))}
                     />
                   </div>
                   <DialogFooter>
@@ -362,11 +418,11 @@ export function MonitorPreview() {
             </div>
             <p className="text-lg font-semibold">No monitors yet</p>
             <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
-              Create your first Vinted search monitor, choose target marketplaces, and let the scheduler handle checks.
+              Create your first Vinted search monitor, choose target domains, and let the scheduler handle checks.
             </p>
             <Button
               className="mt-6"
-              onClick={() => setIsCreateOpen(true)}
+              onClick={openCreateDialog}
               size="sm"
             >
               <Plus className="size-3.5" />
@@ -416,6 +472,7 @@ export function MonitorPreview() {
                 const resumeKey = `${monitor.id}:resume`;
                 const deleteKey = `${monitor.id}:delete`;
                 const isSelected = selectedIds.includes(monitor.id);
+                const domainSummary = formatMonitorDomains(monitor);
 
                 return (
                   <article
@@ -468,10 +525,7 @@ export function MonitorPreview() {
                           <div className="flex flex-wrap gap-2">
                             <Button
                               aria-label={`Edit monitor ${monitor.name}`}
-                              onClick={() => {
-                                setEditingMonitor(monitor);
-                                setIsCreateOpen(true);
-                              }}
+                              onClick={() => openEditDialog(monitor)}
                               size="sm"
                               title="Edit monitor"
                               variant="secondary"
@@ -532,9 +586,11 @@ export function MonitorPreview() {
                         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                           <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
                             <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                              Marketplace
+                              Domains
                             </p>
-                            <p className="mt-1 truncate text-sm font-medium">{getDomain(monitor.original_url)}</p>
+                            <p className="mt-1 truncate text-sm font-medium" title={domainSummary.title}>
+                              {domainSummary.label}
+                            </p>
                           </div>
                           <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
                             <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
