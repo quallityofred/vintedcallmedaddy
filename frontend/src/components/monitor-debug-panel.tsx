@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Info, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 interface DebugData {
   explanation: string;
@@ -22,10 +22,9 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
   const [data, setData] = useState<DebugData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
-  const fetchDebug = async () => {
-    setLoading(true);
-    setError(null);
+  const fetchDebug = useCallback(async () => {
     try {
       const response = await fetch(`/api/v1/monitors/${monitorId}/debug`);
       if (!response.ok) throw new Error("Failed to load debug data");
@@ -35,10 +34,18 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
     } finally {
       setLoading(false);
     }
-  };
+  }, [monitorId]);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    fetchDebug();
+    const interval = setInterval(fetchDebug, 3000);
+    return () => clearInterval(interval);
+  }, [open, fetchDebug]);
 
   return (
-    <Dialog onOpenChange={(open) => open && fetchDebug()}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger>
         <Button variant="ghost" size="icon-xs" title="Debug status">
           <Info className="size-3.5" />
@@ -49,8 +56,8 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
           <DialogTitle>Monitor Status: {name}</DialogTitle>
           <DialogDescription>Diagnostic information for monitor checks.</DialogDescription>
         </DialogHeader>
-        {loading && <div className="py-4 text-center"><Loader2 className="mx-auto size-5 animate-spin" /></div>}
-        {error && <div className="py-4 text-center text-sm text-red-400">{error}</div>}
+        {loading && !data && <div className="py-4 text-center"><Loader2 className="mx-auto size-5 animate-spin" /></div>}
+        {error && !data && <div className="py-4 text-center text-sm text-red-400">{error}</div>}
         {data && (
           <div className="grid gap-4 py-4 text-sm">
             <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3">

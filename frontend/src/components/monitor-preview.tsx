@@ -109,8 +109,21 @@ export function MonitorPreview() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchMonitors();
+    fetchMonitors();
+    
+    const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') fetchMonitors();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    
+    const interval = setInterval(() => {
+        if (document.visibilityState === 'visible') fetchMonitors();
+    }, 5000);
+    
+    return () => {
+        clearInterval(interval);
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [fetchMonitors]);
 
   const getCsrfToken = async () => {
