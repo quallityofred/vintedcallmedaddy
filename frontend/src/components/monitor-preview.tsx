@@ -248,7 +248,10 @@ export function MonitorPreview() {
         throw new Error(errData.detail || `Failed to ${editingMonitor ? "update" : "create"} monitor`);
       }
 
-      toast.success(`Monitor ${editingMonitor ? "updated" : "created"}`);
+      const data = (await response.json()) as Monitor;
+      const wasNormalized = data.original_url !== payload.url;
+
+      toast.success(`Monitor ${editingMonitor ? "updated" : "created"}${wasNormalized ? " (URL cleaned)" : ""}`);
       closeEditor();
       void fetchMonitors();
     } catch (err) {
@@ -377,6 +380,9 @@ export function MonitorPreview() {
                         required
                         value={draft.url}
                       />
+                      <p className="text-[10px] text-muted-foreground">
+                        URL will be cleaned and forced to Newest first.
+                      </p>
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="interval_sec">Check interval in seconds</Label>

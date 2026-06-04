@@ -15,7 +15,7 @@ from app.scraper.domains import (
     get_unique_vinted_marketplaces,
     validate_selected_domains,
 )
-from app.scraper.url_parser import extract_domains_from_url, parse_vinted_url
+from app.scraper.url_parser import extract_domains_from_url, parse_vinted_url, normalize_vinted_monitor_url
 from app.web.auth import get_current_user
 from app.web.csrf import require_csrf
 from app.web.dependencies import get_db, get_scheduler
@@ -146,16 +146,17 @@ async def create_monitor(
     user: User = Depends(require_api_user),
 ):
     """Create a new monitor."""
+    normalized_url = normalize_vinted_monitor_url(data.url)
     try:
         if data.domains is None:
-            domains = validate_selected_domains(extract_domains_from_url(data.url))
+            domains = validate_selected_domains(extract_domains_from_url(normalized_url))
         else:
             domains = validate_selected_domains(data.domains)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        params = parse_vinted_url(data.url)
+        params = parse_vinted_url(normalized_url)
     except Exception as exc:
         logger.warning("URL parse error: %s", exc)
         params = {}
@@ -165,7 +166,7 @@ async def create_monitor(
     monitor = Monitor(
         user_id=user.id,
         name=data.name.strip(),
-        original_url=data.url,
+        original_url=normalized_url,
         params_json=json.dumps(params),
         domains_json=json.dumps(domains),
         interval_sec=data.interval_sec,
@@ -202,9 +203,10 @@ async def update_monitor(
         monitor.name = data.name.strip()
     
     if data.url is not None:
-        monitor.original_url = data.url
+        normalized_url = normalize_vinted_monitor_url(data.url)
+        monitor.original_url = normalized_url
         try:
-            params = parse_vinted_url(data.url)
+            params = parse_vinted_url(normalized_url)
             params["_original_interval"] = data.interval_sec or monitor.interval_sec
             monitor.params_json = json.dumps(params)
         except Exception:
@@ -426,7 +428,8 @@ async def debug_monitor(
     scheduler = get_scheduler(request)
     job_info = {"job_exists": False}
     if scheduler:
-        job_id = scheduler.job_ids.get(monitor.id)
+        job_ids = getattr(scheduler, "job_ids", {})
+        job_id = job_ids.get(monitor.id)
         if job_id:
             job = scheduler.scheduler.get_job(job_id)
             if job:

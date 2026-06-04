@@ -8,7 +8,7 @@ Vinted catalog URL example:
 from __future__ import annotations
 
 import logging
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlunparse, urlencode
 
 from app.scraper.domains import normalize_vinted_host, resolve_vinted_host_to_representative
 
@@ -33,6 +33,18 @@ _SCALAR_PARAMS = {
     "price_to",
     "currency",
     "order",
+}
+
+# Parameters to explicitly ignore
+_IGNORED_PARAMS = {
+    "page",
+    "time",
+    "search_id",
+    "search_by_image_uuid",
+    "search_by_image_id",
+    "session_id",
+    "source",
+    "ref",
 }
 
 
@@ -64,7 +76,7 @@ def parse_vinted_url(url: str) -> dict:
 
     try:
         parsed = urlparse(url)
-        qs = parse_qs(parsed.query, keep_blank_values=False)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
     except Exception as exc:
         logger.warning("Failed to parse URL %r: %s", url, exc)
         return params
@@ -72,32 +84,85 @@ def parse_vinted_url(url: str) -> dict:
     for key, values in qs.items():
         # Normalise both "brand_ids[]" and "brand_ids" forms
         normalised_key = key if key.endswith("[]") else key
+        val = values[0] if values else ""
 
         if normalised_key in _ARRAY_PARAMS or (key + "[]") in _ARRAY_PARAMS:
             array_key = normalised_key if normalised_key in _ARRAY_PARAMS else key + "[]"
             # Ensure array parameters are always lists, containing ints.
-            # Convert values (which is a list from parse_qs) to a list of ints.
             params[array_key] = [int(v) for v in values if v.isdigit()]
-            # Re-verify it is a list
-            if not isinstance(params[array_key], list):
-                params[array_key] = list(params[array_key])
 
         elif key in _SCALAR_PARAMS:
-            params[key] = values[0] if values else ""
+            if key == "order":
+                params[key] = "newest_first"
+            else:
+                params[key] = val
 
-        elif key in {"page", "time", "search_id"} or key.startswith("utm_"):
+        elif key in _IGNORED_PARAMS or key.startswith("utm_"):
             # Ignore unstable pagination/session/tracking parameters.
+            pass
+        
+        elif not val:
+            # Ignore any empty parameters
             pass
 
         else:
-            # Preserve any unknown scalar param as-is
-            params[key] = values[0] if len(values) == 1 else values
+            # Preserve any unknown non-empty scalar param as-is
+            params[key] = val
 
-    # Default sort to newest
-    if "order" not in params:
-        params["order"] = "newest_first"
+    # Always enforce sort to newest
+    params["order"] = "newest_first"
 
     return params
+
+
+def normalize_vinted_monitor_url(url: str) -> str:
+    """
+    Clean and canonicalize a Vinted catalog URL.
+    Removes transient parameters and enforces order=newest_first.
+    """
+    try:
+        parsed = urlparse(url)
+        if not parsed.netloc or not parsed.path:
+            return url
+            
+        params = parse_vinted_url(url)
+        
+        # Build query string deterministically
+        # order=newest_first should be first for readability
+        query_items = [("order", "newest_first")]
+        
+        # Then other scalar params
+        for key in sorted(_SCALAR_PARAMS):
+            if key != "order" and key in params:
+                query_items.append((key, params[key]))
+                
+        # Then array params
+        for key in sorted(_ARRAY_PARAMS):
+            if key in params:
+                for val in sorted(params[key]):
+                    query_items.append((key, str(val)))
+                    
+        # Then any other params
+        known_keys = _SCALAR_PARAMS | _ARRAY_PARAMS
+        for key in sorted(params.keys()):
+            if key not in known_keys:
+                query_items.append((key, str(params[key])))
+        
+        # Reconstruct URL
+        # We use urlencode with doseq=False because we manually expanded arrays
+        new_query = urlencode(query_items, safe="[]")
+        
+        return urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment
+        ))
+    except Exception as exc:
+        logger.warning("Failed to normalize URL %r: %s", url, exc)
+        return url
 
 
 def extract_domains_from_url(url: str) -> list[str]:
