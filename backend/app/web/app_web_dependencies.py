@@ -187,13 +187,18 @@ async def stop_bot(token: str) -> None:
     """Cancel the polling task for *token* and close the bot session."""
     from app.telegram.bot import _polling_tasks, _bots
 
-    task = _polling_tasks.pop(token, None)
-    if task and not task.done():
-        task.cancel()
-        try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
+    task = _polling_tasks.get(token)
+    if task:
+        if not task.done():
+            task.cancel()
+            try:
+                # Await termination without shielding to ensure it actually finishes
+                await asyncio.wait_for(task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        
+        # Now it's safe to pop
+        _polling_tasks.pop(token, None)
 
     bot = _bots.pop(token, None)
     if bot:
