@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface Domain {
   domain: string;
@@ -109,20 +110,31 @@ export function DomainSelection({
         </p>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2">
-        {domains.map((d) => (
-          <div key={d.domain} className="flex items-center space-x-2">
-            <Checkbox
-              id={d.domain}
-              checked={selectedDomains.includes(d.domain)}
-              onCheckedChange={() => toggleDomain(d.domain)}
-            />
-            <Label htmlFor={d.domain} className="text-sm font-normal cursor-pointer">
-              {d.flag ? `${d.flag} ` : ""}
-              {d.label || d.host || d.domain}
-            </Label>
-          </div>
-        ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {domains.map((d) => {
+          const isSelected = selectedDomains.includes(d.domain);
+          return (
+            <label
+              key={d.domain}
+              className={cn(
+                "flex items-center space-x-3 rounded-md border p-2 cursor-pointer transition-colors",
+                isSelected
+                  ? "border-emerald-500/50 bg-emerald-500/10"
+                  : "border-white/10 bg-white/[0.02] hover:bg-white/[0.05]"
+              )}
+            >
+              <Checkbox
+                id={d.domain}
+                checked={isSelected}
+                onCheckedChange={() => toggleDomain(d.domain)}
+              />
+              <span className="text-sm font-normal">
+                {d.flag ? `${d.flag} ` : ""}
+                {d.label || d.host || d.domain}
+              </span>
+            </label>
+          );
+        })}
       </div>
     </div>
   );
