@@ -49,6 +49,16 @@ export function LoginForm({ nextPath }: LoginFormProps) {
     setSuccess(false);
     setIsSubmitting(true);
 
+    const formData = new FormData(event.currentTarget);
+    const username = (formData.get("username") as string)?.trim() || "";
+    const password = (formData.get("password") as string) || "";
+
+    if (!username || !password) {
+      setError("Please fill in both username and password.");
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/auth/login", {
@@ -64,7 +74,13 @@ export function LoginForm({ nextPath }: LoginFormProps) {
       });
 
       if (!response.ok) {
-        setError(response.status === 401 ? "Invalid username or password." : "Login failed. Try again.");
+        if (response.status === 401) {
+          setError("Invalid username or password.");
+        } else if (response.status === 422) {
+            setError("Invalid request. Please check your credentials.");
+        } else {
+            setError("Login failed. Try again.");
+        }
         return;
       }
 
