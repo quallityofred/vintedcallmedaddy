@@ -27,6 +27,11 @@ def _new_session() -> AsyncSession:
 async def cmd_start(message: Message) -> None:
     chat_id = str(message.chat.id)
     async with _new_session() as db:
+        user_result = await db.execute(select(User).where(User.telegram_bot_token == message.bot.token))
+        user = user_result.scalar_one_or_none()
+        if not user or not user.is_telegram_enabled:
+            return
+
         success = await update_user_chat_id_by_bot_token(db, message.bot.token, chat_id)
         await db.commit()
     if success:

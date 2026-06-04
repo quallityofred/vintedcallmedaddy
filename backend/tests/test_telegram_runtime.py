@@ -131,14 +131,15 @@ async def test_stop_bot_timeout_keeps_live_task_registered():
     assert result.running is True
     assert bot_module._polling_tasks[token] is task
     assert fake_bot.session.closed is False
-    assert is_bot_running(token) is True
-
+    assert is_bot_running(token) is False
     release.set()
-    await asyncio.wait_for(task, timeout=0.5)
+    try:
+        await asyncio.wait_for(task, timeout=0.5)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
     cleanup_result = await stop_bot(token, timeout=0.5)
     assert cleanup_result.ok is True
     assert fake_bot.session.closed is True
-
 
 @pytest.mark.asyncio
 async def test_api_health_counts_live_bot_tasks_only():

@@ -93,6 +93,7 @@ def _telegram_payload(user: User) -> dict[str, object]:
         "chat_id_configured": bool(chat_id),
         "chat_id_masked": mask_secret(chat_id),
         "bot_running": is_bot_running(token) if token else False,
+        "is_telegram_enabled": user.is_telegram_enabled,
     }
 
 
@@ -349,10 +350,16 @@ async def telegram_status(
 @router.post("/telegram/start", dependencies=[Depends(require_api_csrf)])
 async def telegram_start(
     user: User = Depends(require_api_user),
+    db: AsyncSession = Depends(get_db),
 ):
     token = user.telegram_bot_token or ""
     if not token:
         raise HTTPException(status_code=400, detail="Telegram bot token is not configured")
+    
+    user.is_telegram_enabled = True
+    await db.commit()
+    await db.refresh(user)
+
     message = await start_bot(token, owner_user_id=user.id)
     return {"ok": True, "message": message, "telegram": _telegram_payload(user)}
 
@@ -360,10 +367,14 @@ async def telegram_start(
 @router.post("/telegram/stop", dependencies=[Depends(require_api_csrf)])
 async def telegram_stop(
     user: User = Depends(require_api_user),
+    db: AsyncSession = Depends(get_db),
 ):
     token = user.telegram_bot_token or ""
-    if not token:
-        raise HTTPException(status_code=400, detail="Telegram bot token is not configured")
+    
+    user.is_telegram_enabled = False
+    await db.commit()
+    await db.refresh(user)
+    
     result = await stop_bot(token)
     if not result.ok:
         return JSONResponse(

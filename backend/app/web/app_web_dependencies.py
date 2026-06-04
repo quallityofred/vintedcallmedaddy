@@ -255,7 +255,14 @@ async def stop_bot(token: str, timeout: float = 5.0) -> BotLifecycleResult:
     task.cancel()
     try:
         await asyncio.wait_for(task, timeout=timeout)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except asyncio.TimeoutError:
+        return BotLifecycleResult(
+            ok=False,
+            state="stop_timeout",
+            message="Telegram bot did not stop within the timeout. It may still be shutting down.",
+            running=True,
+        )
+    except asyncio.CancelledError:
         pass
     except Exception:
         logger.exception("Telegram polling task ended with an error during stop")
@@ -299,12 +306,13 @@ async def restore_persisted_bot(app_state) -> None:
                 select(User).where(
                     User.telegram_bot_token != "",
                     User.telegram_chat_id != "",
+                    User.is_telegram_enabled == True,
                 )
             )
             users = result.scalars().all()
 
         for user in users:
-            if user.telegram_bot_token:
+            if user.telegram_bot_token and user.is_telegram_enabled:
                 try:
                     result = await start_bot(user.telegram_bot_token, owner_user_id=user.id)
                     logger.info(
