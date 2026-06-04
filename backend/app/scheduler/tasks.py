@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
@@ -15,11 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_session_factory
-from app.models import FoundItem, HiddenSeller, Monitor, SeenItem, User
+from app.models import FoundItem, HiddenSeller, Monitor, MonitorTelegramTopic, SeenItem, User
 from app.scraper.client import VintedClient
 from app.scraper.parser import VintedItem
 from app.telegram.notifications import send_item_notification
-from app.telegram.topic_service import ensure_monitor_topic
+from app.telegram.topic_service import ensure_monitor_topic, record_topic_send_failure
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -39,6 +40,108 @@ AsyncSessionLocal = None
 def _new_session() -> AsyncSession:
 	session_factory = AsyncSessionLocal or get_session_factory()
 	return session_factory()
+
+
+@dataclass
+class TelegramDeliveryTarget:
+	ok: bool
+	code: str
+	message: str
+	bot: Bot | None = None
+	chat_id: int | None = None
+	message_thread_id: int | None = None
+	topic_id: int | None = None
+	used_fallback: bool = False
+
+
+async def resolve_telegram_delivery_target(
+	db: AsyncSession,
+	*,
+	user: User,
+	monitor: Monitor,
+) -> TelegramDeliveryTarget:
+	if not user.is_telegram_enabled:
+		return TelegramDeliveryTarget(
+			ok=False,
+			code="telegram_disabled",
+			message="Telegram notifications are disabled for this user.",
+		)
+	if not user.telegram_bot_token:
+		return TelegramDeliveryTarget(
+			ok=False,
+			code="telegram_token_missing",
+			message="Telegram bot token is not configured.",
+		)
+
+	from app.telegram.bot import get_or_create_bot
+
+	bot_to_use, _ = get_or_create_bot(user.telegram_bot_token)
+
+	if not user.telegram_topics_enabled:
+		if not user.telegram_chat_id:
+			return TelegramDeliveryTarget(
+				ok=False,
+				code="telegram_chat_missing",
+				message="Telegram chat ID is not configured.",
+			)
+		return TelegramDeliveryTarget(
+			ok=True,
+			code="main_chat",
+			message="Using main Telegram chat.",
+			bot=bot_to_use,
+			chat_id=int(user.telegram_chat_id),
+		)
+
+	if not user.telegram_topics_chat_id:
+		logger.warning(
+			"Telegram topic notification skipped: code=telegram_topics_chat_missing monitor_id=%s",
+			monitor.id,
+		)
+		return TelegramDeliveryTarget(
+			ok=False,
+			code="telegram_topics_chat_missing",
+			message="Telegram topic group chat ID is not configured.",
+		)
+
+	topic_result = await ensure_monitor_topic(db, bot=bot_to_use, user=user, monitor=monitor)
+	if topic_result.ok and topic_result.topic and topic_result.topic.message_thread_id:
+		return TelegramDeliveryTarget(
+			ok=True,
+			code="topic",
+			message="Using Telegram monitor topic.",
+			bot=bot_to_use,
+			chat_id=int(topic_result.topic.chat_id),
+			message_thread_id=topic_result.topic.message_thread_id,
+			topic_id=topic_result.topic.id,
+		)
+
+	if user.telegram_topics_fallback_to_main_chat and user.telegram_chat_id:
+		logger.warning(
+			"Telegram topic notification fallback used: code=%s monitor_id=%s",
+			topic_result.code,
+			monitor.id,
+		)
+		return TelegramDeliveryTarget(
+			ok=True,
+			code="main_chat_fallback",
+			message="Using main Telegram chat after topic routing failed.",
+			bot=bot_to_use,
+			chat_id=int(user.telegram_chat_id),
+			used_fallback=True,
+		)
+
+	logger.warning(
+		"Telegram topic notification skipped: code=%s status=%s monitor_id=%s",
+		topic_result.code,
+		topic_result.status,
+		monitor.id,
+	)
+	return TelegramDeliveryTarget(
+		ok=False,
+		code=topic_result.code,
+		message=topic_result.message,
+		topic_id=topic_result.topic.id if topic_result.topic else None,
+	)
 
 
 def set_telegram_bot(bot: Bot) -> None:
@@ -317,48 +420,54 @@ async def process_pending_notifications() -> None:
 					seller_id=fi.seller_id,
 				)
 
+				delivery_target: TelegramDeliveryTarget | None = None
 				try:
-					bot_to_use = _telegram_bot
-					chat_id_to_use = settings.telegram_chat_id
-					message_thread_id: int | None = None
-
 					async with _new_session() as db2:
 						monitor_name = None
 						monitor = await db2.get(Monitor, fi.monitor_id)
 						if monitor and monitor.user_id:
 							monitor_name = monitor.name
 							user = await db2.get(User, monitor.user_id)
-							if user and user.telegram_bot_token and user.telegram_chat_id and user.is_telegram_enabled:
-								from app.telegram.bot import get_or_create_bot
-								bot_to_use, _ = get_or_create_bot(user.telegram_bot_token)
-								chat_id_to_use = int(user.telegram_chat_id)
-								if user.telegram_topics_enabled:
-									topic_result = await ensure_monitor_topic(
-										db2,
-										bot=bot_to_use,
-										user=user,
-										monitor=monitor,
-									)
-									if topic_result.ok and topic_result.topic and topic_result.topic.message_thread_id:
-										chat_id_to_use = int(topic_result.topic.chat_id)
-										message_thread_id = topic_result.topic.message_thread_id
-									elif not user.telegram_topics_fallback_to_main_chat:
-										continue
+							if user:
+								delivery_target = await resolve_telegram_delivery_target(
+									db2,
+									user=user,
+									monitor=monitor,
+								)
+								if not delivery_target.ok:
+									continue
 							else:
 								# Skip if disabled or not configured
 								continue
 
-					if bot_to_use and chat_id_to_use is not None:
+					if delivery_target and delivery_target.bot and delivery_target.chat_id is not None:
 						await send_item_notification(
-							bot_to_use,
-							chat_id_to_use,
+							delivery_target.bot,
+							delivery_target.chat_id,
 							item,
 							monitor_name=monitor_name,
-							message_thread_id=message_thread_id,
+							message_thread_id=delivery_target.message_thread_id,
 						)
 						fi.notified = True
 						notified_ids.append(fi.id)
-				except Exception:
+				except Exception as exc:
+					if delivery_target and delivery_target.topic_id is not None:
+						try:
+							async with _new_session() as db3:
+								topic = await db3.get(MonitorTelegramTopic, delivery_target.topic_id)
+								if topic is not None:
+									info = await record_topic_send_failure(db3, topic=topic, exc=exc)
+									logger.warning(
+										"Telegram topic notification failed: code=%s monitor_id=%s item_id=%s",
+										info.code,
+										fi.monitor_id,
+										fi.vinted_item_id,
+									)
+						except Exception:
+							logger.exception(
+								"Failed to record Telegram topic notification error for item %s",
+								fi.vinted_item_id,
+							)
 					logger.exception("Notification failed for item %s", fi.vinted_item_id)
 			
 			if notified_ids:

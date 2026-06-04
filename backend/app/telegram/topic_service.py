@@ -101,8 +101,17 @@ def topic_payload(topic: MonitorTelegramTopic | None) -> dict[str, Any] | None:
     }
 
 
-def _safe_error_message(exc: BaseException, *, limit: int = 240) -> str:
+def _safe_error_message(
+    exc: BaseException,
+    *,
+    sensitive_values: tuple[object | None, ...] = (),
+    limit: int = 240,
+) -> str:
     text = str(exc).replace("\n", " ").replace("\r", " ").strip()
+    for value in sensitive_values:
+        raw = str(value or "").strip()
+        if raw:
+            text = text.replace(raw, mask_identifier(raw) or "[masked]")
     if len(text) > limit:
         return f"{text[: limit - 3]}..."
     return text
@@ -300,7 +309,7 @@ async def _create_pending_mapping(
     monitor: Monitor,
     chat_id: str,
     topic_name: str,
-) -> MonitorTelegramTopic:
+) -> tuple[MonitorTelegramTopic, bool]:
     mapping = MonitorTelegramTopic(
         user_id=user.id,
         monitor_id=monitor.id,
@@ -315,10 +324,10 @@ async def _create_pending_mapping(
         await db.rollback()
         existing = await get_topic_mapping(db, monitor_id=monitor.id, chat_id=chat_id)
         if existing is not None:
-            return existing
+            return existing, False
         raise
     await db.refresh(mapping)
-    return mapping
+    return mapping, True
 
 
 async def create_monitor_topic(
@@ -352,13 +361,22 @@ async def create_monitor_topic(
             topic=mapping,
         )
     if mapping is None:
-        mapping = await _create_pending_mapping(
+        mapping, created_mapping = await _create_pending_mapping(
             db,
             user=user,
             monitor=monitor,
             chat_id=chat_id,
             topic_name=topic_name,
         )
+        if not created_mapping and mapping.status == TOPIC_STATUS_CREATING:
+            return TelegramTopicResult(
+                ok=False,
+                code="topic_creation_in_progress",
+                message="Telegram topic creation is already in progress.",
+                status=mapping.status,
+                chat_id_masked=mask_identifier(chat_id),
+                topic=mapping,
+            )
 
     mapping.status = TOPIC_STATUS_CREATING
     mapping.topic_name = topic_name
@@ -387,7 +405,7 @@ async def create_monitor_topic(
     except Exception as exc:
         info = classify_telegram_topic_error(exc)
         mapping.status = info.status
-        mapping.last_error = _safe_error_message(exc)
+        mapping.last_error = _safe_error_message(exc, sensitive_values=(chat_id, mapping.message_thread_id))
         mapping.last_error_code = info.code
         mapping.last_verified_at = utc_now()
         await db.commit()
@@ -484,7 +502,10 @@ async def send_topic_test(
     except Exception as exc:
         info = classify_telegram_topic_error(exc)
         result.topic.status = info.status
-        result.topic.last_error = _safe_error_message(exc)
+        result.topic.last_error = _safe_error_message(
+            exc,
+            sensitive_values=(result.topic.chat_id, result.topic.message_thread_id),
+        )
         result.topic.last_error_code = info.code
         result.topic.last_verified_at = utc_now()
         await db.commit()
@@ -497,3 +518,19 @@ async def send_topic_test(
             chat_id_masked=mask_identifier(result.topic.chat_id),
             topic=result.topic,
         )
+
+
+async def record_topic_send_failure(
+    db: AsyncSession,
+    *,
+    topic: MonitorTelegramTopic,
+    exc: BaseException,
+) -> TelegramTopicErrorInfo:
+    info = classify_telegram_topic_error(exc)
+    topic.status = info.status
+    topic.last_error = _safe_error_message(exc, sensitive_values=(topic.chat_id, topic.message_thread_id))
+    topic.last_error_code = info.code
+    topic.last_verified_at = utc_now()
+    await db.commit()
+    await db.refresh(topic)
+    return info

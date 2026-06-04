@@ -148,6 +148,15 @@ tags:
   - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
   - `cd backend && poetry run python -m py_compile scripts/migrate_telegram_topics.py` -> passed.
   - Frontend was not changed in this phase, so frontend lint/build/e2e were not run.
+- Telegram topic routing snapshot on `2026-06-04`:
+  - `cd backend && poetry run pytest -q tests/test_telegram_topics.py` -> 22 passed.
+  - `cd backend && poetry run pytest -q tests/test_telegram_runtime.py` -> 5 passed.
+  - `cd backend && poetry run pytest -q tests/test_settings_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q` -> 117 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd backend && poetry run python -m py_compile scripts/migrate_telegram_topics.py` -> passed.
+  - Frontend was not changed in this phase, so frontend lint/build/e2e were not run.
 
 ## Coverage Gaps
 
@@ -180,6 +189,7 @@ tags:
 - 2026-06-04: Expanded Playwright coverage for unauthenticated `/monitors` redirect, authenticated `Monitors` navigation, dashboard monitor summary, `/monitors` monitor dialog/domain selection, and mobile page-level overflow checks.
 - 2026-06-04: Added backend tests for `/api/v1/monitors/domains`, representative validation, alias URL normalization, URL cleaning, and scheduler cross-domain item-ID dedup. Added frontend E2E coverage for domain selector failure/retry state.
 - 2026-06-04: Added `backend/tests/test_telegram_topics.py` for topic settings defaults/patch, forum verification success/failures, idempotent ensure, in-progress duplicate prevention, permission/missing-thread handling, user scoping/auth, topic test sends, thread-aware low-level sends, and topic send failure keeping `FoundItem.notified=False`.
+- 2026-06-04: Expanded `backend/tests/test_telegram_topics.py` for automatic notification routing: topics-disabled main-chat behavior, lazy topic creation, active topic reuse, permission failure, deleted-topic recreation, creating-state retry, topic send/rate-limit failures, explicit main-chat fallback, disabled user guard, and missing topic chat guard.
 
 ## Related Frontend Notes
 

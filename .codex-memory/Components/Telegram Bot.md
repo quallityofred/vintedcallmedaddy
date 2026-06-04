@@ -34,6 +34,8 @@ tags:
 - Telegram forum topic routing has backend foundations only. It is per-user, disabled by default, stores mappings in `monitor_telegram_topics`, and returns only masked chat/thread identifiers through APIs.
 - Topic mappings include monitor/user/chat/thread, topic name, status, safe error code/message, created/updated timestamps, and last verification time. `telegram_topics_recreate_deleted` defaults to false to avoid recreating deleted topics without an explicit user choice.
 - Topic creation uses a unique `(monitor_id, chat_id)` mapping plus a `creating` status to avoid duplicate DB rows and suppress duplicate Telegram topic creation during concurrent ensure calls. If Telegram creates a topic but the DB commit fails, an orphan Telegram topic can still occur.
+- Automatic notification routing now resolves a target in `process_pending_notifications()`: disabled users are skipped; topic-disabled users use the existing main chat with no topic lookup; topic-enabled users ensure/reuse a monitor topic and send with `message_thread_id`; main-chat fallback is used only when `telegram_topics_fallback_to_main_chat` is true.
+- Topic send failures are classified back onto the topic row and leave `FoundItem.notified=False` for retry.
 - Telegram long-polling runtime is tracked by live asyncio tasks keyed by bot token. Stop waits for task termination before clearing runtime state; timeout/incomplete stops remain reported as running.
 - `backend/scripts/cleanup_telegram_bot_connections.py` can clear Telegram webhook/pending-update state using `TELEGRAM_BOT_TOKEN` from the process environment only. It must not print token/chat values.
 
@@ -54,3 +56,4 @@ tags:
 - 2026-06-04: Runtime notification formatting was rebuilt around safe HTML and per-user delivery. `process_pending_notifications()` passes monitor names into the formatter and leaves failed sends unnotified for retry.
 - 2026-06-04: Telegram Stop behavior was hardened so UI/status cannot report stopped while a polling task is still alive. `/api/health` now counts live tasks through the same runtime helper.
 - 2026-06-04: Added Telegram forum topic backend foundation: topic settings APIs, forum group verification, monitor topic ensure/test APIs, `message_thread_id` support in low-level sends, and safe classification for missing threads, closed topics, permissions, unreachable chats, and rate limits.
+- 2026-06-04: Wired automatic `FoundItem` notification delivery into topic routing behind `telegram_topics_enabled`, with lazy topic creation/reuse, explicit fallback behavior, safe diagnostics, and retry-preserving failures.

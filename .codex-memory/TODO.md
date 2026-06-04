@@ -48,7 +48,7 @@ tags:
 - Follow up after deployment: verify an admin can change CF Worker/scraper defaults in production without redeploying.
 - After Railway redeploy, verify authenticated `/settings` CF Worker routing mode saves in production: Direct and Auto should PATCH 200 and persist through GET/refresh; Worker mode should either persist when URL is configured or show the clear Worker URL validation message.
 - Next Telegram topics phase: add frontend settings/monitor UI for forum topic configuration and manual verification.
-- After UI exists, decide whether automatic notification topic routing should remain backend-enabled behind `telegram_topics_enabled` or require an additional explicit rollout flag.
+- Automatic topic routing is now backend-enabled behind `telegram_topics_enabled`; frontend UI still needs to make the opt-in and fallback behavior explicit.
 - Add a manual repair action for mappings in `missing`, `closed`, `permission_error`, or `chat_unreachable` status.
 - Consider periodic topic verification before notification routing is broadly enabled.
 
