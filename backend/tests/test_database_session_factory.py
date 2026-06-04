@@ -17,6 +17,17 @@ class FakeSqliteSettings:
         return None
 
 
+class FakePostgresSettings:
+    database_url_validated = "postgresql+asyncpg://user:pass@example.test/db"
+    db_pool_size = 20
+    db_max_overflow = 10
+    db_pool_timeout = 30
+    db_pool_recycle_seconds = 300
+
+    def is_sqlite(self) -> bool:
+        return False
+
+
 @pytest_asyncio.fixture
 async def isolated_database_state(monkeypatch):
     old_engine = app_database.engine
@@ -69,3 +80,22 @@ def test_missing_session_factory_raises_clear_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Database session factory is not initialized"):
         app_database.get_session_factory()
+
+
+def test_postgres_engine_kwargs_enable_connection_resilience():
+    kwargs = app_database.build_async_engine_kwargs(FakePostgresSettings())
+
+    assert kwargs["pool_pre_ping"] is True
+    assert kwargs["pool_recycle"] == 300
+    assert kwargs["pool_size"] == 20
+    assert kwargs["max_overflow"] == 10
+    assert kwargs["pool_timeout"] == 30
+    assert kwargs["connect_args"] == {"statement_cache_size": 0}
+
+
+def test_sqlite_engine_kwargs_keep_static_pool():
+    kwargs = app_database.build_async_engine_kwargs(FakeSqliteSettings())
+
+    assert kwargs["connect_args"] == {"check_same_thread": False}
+    assert "pool_pre_ping" not in kwargs
+    assert "pool_recycle" not in kwargs

@@ -79,6 +79,8 @@ tags:
 - 2026-06-03: [[API Contract]] confirms the frontend should continue using relative `/api/...` paths through the Next rewrite. No backend secrets should be exposed through `NEXT_PUBLIC_` env vars.
 - 2026-06-03: Versioned settings APIs expose per-user CF Worker settings and admin/global scraper defaults through `/api/v1/settings/*`. Telegram credentials remain per-user, write-only/masked, and are still not required deployment env variables.
 - 2026-06-03: Frontend lint needed generated Playwright output ignored in `frontend/eslint.config.mjs` so missing/ignored `test-results/` does not break validation.
+- 2026-06-05: Backend Postgres async engine options are configurable through `db_pool_size`, `db_max_overflow`, `db_pool_timeout`, and `db_pool_recycle_seconds`. Defaults keep pre-ping enabled, recycle pooled connections after 300 seconds, and keep asyncpg statement cache disabled for pooler compatibility.
+- 2026-06-05: Auth session lookup catches SQLAlchemy/asyncpg disconnects matching closed-connection failures, rolls back, retries once, and returns a safe `503` if the retry fails. This is intended to reduce frontend proxy socket resets caused by uncaught backend DB disconnects during authenticated API requests.
 
 ## Related Plans
 

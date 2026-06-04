@@ -1,9 +1,13 @@
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 
 from app.main import app
 from app.models import InviteCode, User, UserSession
+from app.web import auth as web_auth
+from app.web import app_web_dependencies
 from app.web.dependencies import get_db
 
 
@@ -26,6 +30,40 @@ async def _create_invite(db_session, code: str = "api-register-code") -> InviteC
 
 def _override_db(db_session) -> None:
     app.dependency_overrides[get_db] = lambda: db_session
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class _FlakyAuthDb:
+    def __init__(self, *results):
+        self.results = list(results)
+        self.execute_calls = 0
+        self.rollback_calls = 0
+
+    async def execute(self, statement):
+        self.execute_calls += 1
+        result = self.results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return _ScalarResult(result)
+
+    async def rollback(self):
+        self.rollback_calls += 1
+
+
+def _disconnect_error() -> DBAPIError:
+    return DBAPIError(
+        "SELECT user_sessions.id FROM user_sessions WHERE user_sessions.token = :token",
+        {},
+        RuntimeError("connection was closed in the middle of operation"),
+        connection_invalidated=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -97,6 +135,64 @@ async def test_auth_api_me_requires_session(db_session):
 
     assert response.status_code == 401
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_retries_once_after_db_disconnect():
+    user = User(id=7, username="retry_user", telegram_bot_token="", telegram_chat_id="")
+    user.set_password("password")
+    session = UserSession(id=1, user_id=user.id, token="session-token")
+    db = _FlakyAuthDb(_disconnect_error(), session, user)
+    request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
+
+    result = await app_web_dependencies.get_current_user(request, db)
+
+    assert result is user
+    assert db.execute_calls == 3
+    assert db.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_primary_get_current_user_retries_once_after_db_disconnect():
+    user = User(id=8, username="primary_retry_user", telegram_bot_token="", telegram_chat_id="")
+    user.set_password("password")
+    session = UserSession(id=2, user_id=user.id, token="session-token")
+    db = _FlakyAuthDb(_disconnect_error(), session, user)
+    request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
+
+    result = await web_auth.get_current_user(request, db)
+
+    assert result is user
+    assert db.execute_calls == 3
+    assert db.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_returns_503_after_repeated_db_disconnect():
+    db = _FlakyAuthDb(_disconnect_error(), _disconnect_error())
+    request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await app_web_dependencies.get_current_user(request, db)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Database temporarily unavailable"
+    assert db.execute_calls == 2
+    assert db.rollback_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_primary_get_current_user_returns_503_after_repeated_db_disconnect():
+    db = _FlakyAuthDb(_disconnect_error(), _disconnect_error())
+    request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await web_auth.get_current_user(request, db)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Database temporarily unavailable"
+    assert db.execute_calls == 2
+    assert db.rollback_calls == 2
 
 
 @pytest.mark.asyncio

@@ -24,9 +24,10 @@ from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_session_factory
+from app.database import get_session_factory, is_db_disconnect_error
 from app.models import User, UserSession
 
 if TYPE_CHECKING:
@@ -64,6 +65,24 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 # Authentication
 # ---------------------------------------------------------------------------
 
+async def _execute_auth_query(db: AsyncSession, statement):
+    for attempt in range(2):
+        try:
+            return await db.execute(statement)
+        except DBAPIError as exc:
+            if not is_db_disconnect_error(exc):
+                raise
+            try:
+                await db.rollback()
+            except Exception:
+                logger.debug("Auth DB rollback after disconnect failed", exc_info=True)
+            if attempt == 0:
+                logger.warning("Retrying auth query after database disconnect")
+                continue
+            logger.warning("Auth query failed after database disconnect retry")
+            raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+
+
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -72,13 +91,15 @@ async def get_current_user(
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return None
-    result = await db.execute(
+    result = await _execute_auth_query(
+        db,
         select(UserSession).where(UserSession.token == token)
     )
     session = result.scalar_one_or_none()
     if session is None:
         return None
-    user_result = await db.execute(
+    user_result = await _execute_auth_query(
+        db,
         select(User).where(User.id == session.user_id)
     )
     return user_result.scalar_one_or_none()

@@ -163,6 +163,14 @@ tags:
   - `cd backend && poetry run pytest -q` -> 122 passed.
   - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
   - Frontend was not changed in this fix, so frontend lint/build were not run.
+- DB connection resilience snapshot on `2026-06-05`:
+  - `cd backend && poetry run pytest -q tests/test_database_session_factory.py tests/test_auth_api.py` -> 13 passed.
+  - `cd backend && poetry run pytest -q tests/test_telegram_topics.py` -> 27 passed.
+  - `cd backend && poetry run pytest -q tests/test_settings_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q` -> 128 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
 
 ## Coverage Gaps
 
@@ -197,6 +205,7 @@ tags:
 - 2026-06-04: Added `backend/tests/test_telegram_topics.py` for topic settings defaults/patch, forum verification success/failures, idempotent ensure, in-progress duplicate prevention, permission/missing-thread handling, user scoping/auth, topic test sends, thread-aware low-level sends, and topic send failure keeping `FoundItem.notified=False`.
 - 2026-06-04: Expanded `backend/tests/test_telegram_topics.py` for automatic notification routing: topics-disabled main-chat behavior, lazy topic creation, active topic reuse, permission failure, deleted-topic recreation, creating-state retry, topic send/rate-limit failures, explicit main-chat fallback, disabled user guard, and missing topic chat guard.
 - 2026-06-05: Expanded `backend/tests/test_telegram_topics.py` for monitor-name-only topic names, no domain/id suffixes, whitespace/control cleanup, generic fallback, safe truncation, create-topic name payload, active-topic rename sync, preserved thread IDs, and rename-failure notification continuity.
+- 2026-06-05: Added backend tests for Postgres async engine resilience options and auth-session DB disconnect retry/safe-503 behavior.
 
 ## Related Frontend Notes
 

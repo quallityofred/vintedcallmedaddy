@@ -2,9 +2,11 @@
 import asyncio
 import logging
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import DBAPIError
 
 from app.config import get_settings
 from app.models import Base
@@ -19,6 +21,43 @@ engine = None
 AsyncSessionLocal = None
 
 
+def build_async_engine_kwargs(settings) -> dict[str, Any]:
+    """Build SQLAlchemy async engine kwargs without exposing DB URLs."""
+    if settings.is_sqlite():
+        from sqlalchemy.pool import StaticPool
+
+        return {
+            "echo": False,
+            "future": True,
+            "connect_args": {"check_same_thread": False},
+            "poolclass": StaticPool,
+        }
+
+    return {
+        "echo": False,
+        "future": True,
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_timeout": settings.db_pool_timeout,
+        "pool_pre_ping": True,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        "connect_args": {"statement_cache_size": 0},
+    }
+
+
+def is_db_disconnect_error(exc: BaseException) -> bool:
+    """Return True for SQLAlchemy/asyncpg disconnects that are safe to retry."""
+    if isinstance(exc, DBAPIError) and getattr(exc, "connection_invalidated", False):
+        return True
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    return (
+        "connectiondoesnotexisterror" in text
+        or "connection was closed in the middle of operation" in text
+        or "connection is closed" in text
+        or "server closed the connection" in text
+    )
+
+
 def _ensure_engine_initialized() -> None:
     """Create the async engine and sessionmaker if not already initialized."""
     global engine, AsyncSessionLocal
@@ -29,27 +68,10 @@ def _ensure_engine_initialized() -> None:
         data_dir = settings.get_sqlite_data_dir()
         if data_dir is not None:
             data_dir.mkdir(parents=True, exist_ok=True)
-    if settings.is_sqlite():
-        from sqlalchemy.pool import StaticPool
-
-        engine = create_async_engine(
-            settings.database_url_validated,
-            echo=False,
-            future=True,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-    else:
-        engine = create_async_engine(
-            settings.database_url_validated,
-            echo=False,
-            future=True,
-            pool_size=20,
-            max_overflow=10,
-            pool_timeout=30,
-            pool_pre_ping=True,
-            connect_args={"statement_cache_size": 0},
-        )
+    engine = create_async_engine(
+        settings.database_url_validated,
+        **build_async_engine_kwargs(settings),
+    )
     AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
