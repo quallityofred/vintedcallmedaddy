@@ -116,6 +116,7 @@ tags:
 - 2026-06-04: Monitor domains API now exposes unique Vinted marketplace representatives and validates monitor create/update target domains against that registry.
 - 2026-06-04: Monitor list/detail/create/update/control responses now include selected representative `domains` so frontend edit forms can initialize from persisted state.
 - 2026-06-04: Telegram test API now returns safe classified setup/runtime error codes for the Next settings UI.
+- 2026-06-04: Monitor runtime was verified and tightened: cold start writes `SeenItem` baseline only, user-level stable item IDs dedupe repeats across domains, and Telegram notifications use safe HTML through the monitor owner's saved credentials.
 
 ## Recommended Obsidian Graph Groups
 

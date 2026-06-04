@@ -1,6 +1,7 @@
-# app/telegram/notifications.py
 import asyncio
+import html
 import logging
+from typing import NoReturn
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -9,64 +10,87 @@ from app.scraper.parser import VintedItem
 
 logger = logging.getLogger(__name__)
 
-COUNTRY_FLAGS: dict[str, str] = {
-    "vinted.fr": "🇫🇷",
-    "vinted.de": "🇩🇪",
-    "vinted.co.uk": "🇬🇧",
-    "vinted.it": "🇮🇹",
-    "vinted.es": "🇪🇸",
-    "vinted.pl": "🇵🇱",
-    "vinted.nl": "🇳🇱",
-    "vinted.be": "🇧🇪",
-    "vinted.cz": "🇨🇿",
-    "vinted.lt": "🇱🇹",
-    "vinted.pt": "🇵🇹",
-    "vinted.at": "🇦🇹",
-    "vinted.lu": "🇱🇺",
-    "vinted.sk": "🇸🇰",
-    "vinted.dk": "🇩🇰",
-    "vinted.fi": "🇫🇮",
-    "vinted.se": "🇸🇪",
-    "vinted.ro": "🇷🇴",
-    "vinted.hu": "🇭🇺",
-    "vinted.hr": "🇭🇷",
-    "vinted.gr": "🇬🇷",
-    "vinted.com": "🌍",
-}
+
+def _escape(value: object, *, limit: int = 180) -> str:
+    text = str(value or "")
+    if len(text) > limit:
+        text = f"{text[: max(limit - 3, 0)]}..."
+    return html.escape(text, quote=False)
+
+
+def _format_price(item: VintedItem) -> str:
+    if item.price <= 0:
+        return "Not listed"
+    return f"{item.price:g} {_escape(item.currency)}".strip()
+
+
+def _optional_line(label: str, value: object) -> str | None:
+    text = _escape(value).strip()
+    if not text:
+        return None
+    return f"<b>{label}:</b> {text}"
+
+
+def _build_caption(item: VintedItem, monitor_name: str | None = None) -> str:
+    lines = ["🆕 <b>New Vinted item found</b>"]
+
+    monitor_line = _optional_line("Monitor", monitor_name)
+    if monitor_line:
+        lines.append(monitor_line)
+
+    lines.append(f"<b>Item:</b> {_escape(item.title) or 'Untitled'}")
+    lines.append(f"<b>Price:</b> {_format_price(item)}")
+
+    for label, value in (
+        ("Brand", item.brand),
+        ("Size", item.size),
+        ("Condition", item.condition),
+        ("Seller", item.seller_id if item.seller_id else None),
+        ("Source", item.domain),
+    ):
+        line = _optional_line(label, value)
+        if line:
+            lines.append(line)
+
+    if item.item_url:
+        safe_url = html.escape(item.item_url, quote=True)
+        lines.append(f'<a href="{safe_url}">Open item</a>')
+
+    return "\n".join(lines)
 
 
 def _build_keyboard(item: VintedItem) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Открыть на Vinted", url=item.item_url),
-                InlineKeyboardButton(
-                    text="Скрыть продавца",
-                    callback_data=f"hide:{item.seller_id}",
-                ),
-            ]
-        ]
-    )
+    buttons = [InlineKeyboardButton(text="Open on Vinted", url=item.item_url)]
+    if item.seller_id:
+        buttons.append(
+            InlineKeyboardButton(
+                text="Hide seller",
+                callback_data=f"hide:{item.seller_id}",
+            )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
-async def send_item_notification(bot: Bot, chat_id: int, item: VintedItem) -> None:
+def _raise_last_failure(exc: BaseException | None) -> NoReturn:
+    if exc is None:
+        raise RuntimeError("Telegram notification failed")
+    raise exc
+
+
+async def send_item_notification(
+    bot: Bot,
+    chat_id: int,
+    item: VintedItem,
+    *,
+    monitor_name: str | None = None,
+) -> None:
     from aiogram.exceptions import TelegramRetryAfter
-    
-    flag = COUNTRY_FLAGS.get(item.domain, "🌍")
-    caption = (
-        f"🆕 <b>Новый товар!</b>\n"
-        f"Название: {item.title}\n"
-        f"Цена: {item.price} {item.currency}\n"
-        f"Размер: {item.size}\n"
-        f"Бренд: {item.brand}\n"
-        f"Состояние: {item.condition}\n"
-        f"Домен: {flag} {item.domain}"
-    )
-    keyboard = _build_keyboard(item)
 
-    # Retry logic for Telegram Flood Limits
-    max_retries = 3
-    for attempt in range(max_retries):
+    caption = _build_caption(item, monitor_name=monitor_name)
+    keyboard = _build_keyboard(item)
+    last_error: BaseException | None = None
+
+    for _attempt in range(3):
         try:
             if item.photo_url:
                 await bot.send_photo(
@@ -84,39 +108,23 @@ async def send_item_notification(bot: Bot, chat_id: int, item: VintedItem) -> No
                     reply_markup=keyboard,
                     disable_web_page_preview=False,
                 )
-            # Success, add a tiny delay to be nice to TG
             await asyncio.sleep(0.3)
             return
-        except TelegramRetryAfter as e:
-            logger.warning("Flood control exceeded, waiting %d seconds", e.retry_after)
-            await asyncio.sleep(e.retry_after)
-        except Exception:
-            logger.exception("Failed to send notification for item_id=%d", item.id)
-            break
+        except TelegramRetryAfter as exc:
+            last_error = exc
+            logger.warning("Telegram flood control, retrying after %d seconds", exc.retry_after)
+            await asyncio.sleep(exc.retry_after)
+        except Exception as exc:
+            logger.exception("Failed to send Telegram notification for item_id=%d", item.id)
+            raise exc
+
+    _raise_last_failure(last_error)
 
 
 async def send_batch(
     bot: Bot, chat_id: int, items: list[VintedItem]
 ) -> None:
     if not items:
-        return
-
-    if len(items) > 5:
-        lines = ["🆕 <b>Найдены новые товары:</b>\n"]
-        for item in items:
-            lines.append(
-                f"• <a href=\"{item.item_url}\">{item.title}</a> — "
-                f"{item.price} {item.currency}"
-            )
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text="\n".join(lines),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        except Exception:
-            logger.exception("Failed to send batch notification")
         return
 
     for item in items:

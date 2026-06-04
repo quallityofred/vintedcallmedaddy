@@ -17,6 +17,7 @@ tags:
 - Verify Railway remains stable after the database availability incident in [[Issues/ISS-RWY-001 Railway PostgreSQL startup failure|ISS-RWY-001]].
 - Redeploy the database session initialization fix in [[Issues/ISS-RWY-002 AsyncSessionLocal None after startup|ISS-RWY-002]] and check `GET /` after `Application startup complete`.
 - Monitor production scraper behavior after runtime settings changes, especially active session refresh and concurrency changes.
+- After Railway redeploy, create a low-risk test monitor and verify first check establishes baseline without Telegram spam, then confirm subsequent genuinely new findings send one notification through the saved user Telegram credentials.
 - Consider adding a migration framework if schema changes grow beyond lightweight startup migrations.
 - Keep localized UI text encoding consistent in future template/test edits.
 - Before migrating the logs/found-items page, verify the current `GET /logs` route and `app/templates/logs.html` contract. The route currently appears to pass log-manager entries while the template expects found-item data such as `items` and `monitors_map`.

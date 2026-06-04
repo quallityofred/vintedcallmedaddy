@@ -137,8 +137,8 @@ Current settings ownership:
 
 | Capability | Current State |
 | --- | --- |
-| Found items | Stored in `FoundItem`; exposed through `GET /api/v1/items` and `GET /api/v1/items/{item_id}` with user scoping. |
-| Seen items | Stored in `SeenItem`, used by scheduler dedup/cold-start behavior; no direct public JSON API is currently needed. |
+| Found items | Stored in `FoundItem`; exposed through `GET /api/v1/items` and `GET /api/v1/items/{item_id}` with user scoping. Cold-start baseline items are not inserted as user-visible found items; only genuinely new post-baseline items are stored here. |
+| Seen items | Stored in `SeenItem`, used by scheduler dedup/cold-start behavior. Runtime treats stable Vinted item ID as user-level seen identity across selected domains; no direct public JSON API is currently needed. |
 | Hidden sellers | Stored in `HiddenSeller`; exposed through `GET /api/v1/hidden-sellers`, `POST /api/v1/hidden-sellers`, and `DELETE /api/v1/hidden-sellers/{seller_id}` with user scoping and CSRF on mutations. |
 
 ## Missing or Follow-up Next-Ready Endpoints
@@ -221,6 +221,14 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - Monitor list/detail/create/update/pause/resume responses now include selected representative `domains`.
 - The Next `/monitors` edit dialog uses those persisted domains to initialize a local draft and only sends updates on explicit submit.
 - Closing the edit dialog with Escape/outside click/close discards unsaved draft changes and does not call `PATCH`.
+
+## [2026-06-04] Update: Monitor runtime and Telegram notifications
+
+- Cold-start monitor checks now establish `SeenItem` baseline state without creating `FoundItem` rows or Telegram notifications for existing catalog items.
+- Repeat checks and cross-domain repeats use stable Vinted item ID per user to avoid duplicate `SeenItem`, `FoundItem`, and Telegram notifications.
+- Truly new post-baseline items create `FoundItem(notified=False)` and are picked up by the notification worker.
+- Notification delivery uses the monitor owner's saved Telegram token/chat ID. Message text uses safe HTML escaping and includes monitor name, item title, price, optional brand/size/condition/seller, source domain, and item URL.
+- Failed Telegram sends leave the item pending instead of marking it notified.
 
 
 ## [2026-06-03] Update: Found Items and Hidden Sellers APIs implemented.

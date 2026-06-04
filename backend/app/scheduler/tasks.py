@@ -96,6 +96,15 @@ async def _update_monitor_interval(
 			monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
 
+async def _has_seen_item(db, user_id: int, item_id: int) -> bool:
+	result = await db.execute(
+		select(SeenItem.id)
+		.where(SeenItem.user_id == user_id, SeenItem.vinted_item_id == item_id)
+		.limit(1)
+	)
+	return result.scalar_one_or_none() is not None
+
+
 async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = None) -> None:
 	"""Main task: check a single monitor for new Vinted listings."""
 	try:
@@ -179,6 +188,10 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					is_pg = not settings.is_sqlite()
 
 					for item in filtered_items:
+						already_seen = await _has_seen_item(db, user_id, item.id)
+						if already_seen:
+							continue
+
 						if is_pg:
 							stmt = pg_insert(SeenItem).values(
 								user_id=user_id,
@@ -198,7 +211,8 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 							res = await db.execute(stmt)
 							is_new_for_user = res.rowcount > 0
 
-						notified_status = is_cold_start or not is_new_for_user
+						if is_cold_start or not is_new_for_user:
+							continue
 
 						if is_pg:
 							found_stmt = pg_insert(FoundItem).values(
@@ -215,10 +229,10 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 								item_url=item.item_url,
 								seller_id=item.seller_id,
 								found_at=datetime.now(timezone.utc),
-								notified=notified_status,
+								notified=False,
 							).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
 							found_res = await db.execute(found_stmt)
-							if found_res.rowcount > 0 and not notified_status:
+							if found_res.rowcount > 0:
 								new_items_to_notify.append(item)
 						else:
 							found_stmt = insert(FoundItem).values(
@@ -235,10 +249,10 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 								item_url=item.item_url,
 								seller_id=item.seller_id,
 								found_at=datetime.now(timezone.utc),
-								notified=notified_status,
+								notified=False,
 							).prefix_with("OR IGNORE")
 							found_res = await db.execute(found_stmt)
-							if found_res.rowcount > 0 and not notified_status:
+							if found_res.rowcount > 0:
 								new_items_to_notify.append(item)
 
 					await _update_monitor_interval(
@@ -298,8 +312,10 @@ async def process_pending_notifications() -> None:
 					chat_id_to_use = settings.telegram_chat_id
 
 					async with _new_session() as db2:
+						monitor_name = None
 						monitor = await db2.get(Monitor, fi.monitor_id)
 						if monitor and monitor.user_id:
+							monitor_name = monitor.name
 							user = await db2.get(User, monitor.user_id)
 							if user and user.telegram_bot_token and user.telegram_chat_id:
 								from app.telegram.bot import get_or_create_bot
@@ -307,7 +323,7 @@ async def process_pending_notifications() -> None:
 								chat_id_to_use = int(user.telegram_chat_id)
 
 					if bot_to_use and chat_id_to_use is not None:
-						await send_item_notification(bot_to_use, chat_id_to_use, item)
+						await send_item_notification(bot_to_use, chat_id_to_use, item, monitor_name=monitor_name)
 						fi.notified = True
 						await db.commit()
 				except Exception:

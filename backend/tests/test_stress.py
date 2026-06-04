@@ -56,7 +56,7 @@ async def test_concurrent_monitor_execution(db_session):
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
 
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
-         patch("app.scheduler.tasks.send_item_notification", AsyncMock()):
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
         
         # Serialize execution to avoid SQLite in-memory locking issues in tests
         semaphore = asyncio.Semaphore(1)
@@ -73,13 +73,13 @@ async def test_concurrent_monitor_execution(db_session):
     )
     assert result.scalar() == 1
 
-    # Verify each monitor recorded it in FoundItem (logs)
+    # Verify the item is recorded once as a user-visible finding.
     result = await db_session.execute(
         select(func.count(FoundItem.id)).where(FoundItem.vinted_item_id == 999)
     )
-    assert result.scalar() == 10
+    assert result.scalar() == 1
 
-    # Verify only ONE notification was queued (notified=False)
+    # Verify only one notification was queued.
     result = await db_session.execute(
         select(func.count(FoundItem.id)).where(FoundItem.vinted_item_id == 999, FoundItem.notified == False)
     )

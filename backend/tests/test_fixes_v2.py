@@ -2,17 +2,17 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from datetime import datetime, timezone
 
 from app.models import User, Monitor, FoundItem, SeenItem
-from app.scheduler.tasks import check_monitor, process_pending_notifications
+from app.scheduler.tasks import MonitorScheduler, check_monitor, process_pending_notifications
 from app.main import clean_startup_reset
 from app.scraper.parser import VintedItem
 
 @pytest.mark.asyncio
 async def test_duplicate_notification_prevention_same_user(db_session):
-    """Ensure that if two monitors find the same item for the same user, only one notification is queued."""
+    """Ensure that if two monitors find the same item for the same user, only one new finding is queued."""
     user = User(username="dupe_user", telegram_bot_token="t", telegram_chat_id="c")
     user.set_password("p")
     db_session.add(user)
@@ -40,19 +40,13 @@ async def test_duplicate_notification_prevention_same_user(db_session):
         # Run check_monitor for M2
         await check_monitor(m2.id, scraper_client=mock_client)
 
-    # Verify:
-    # 1. SeenItem has only 1 entry for this user/item
     seen_result = await db_session.execute(select(SeenItem).where(SeenItem.user_id == user.id, SeenItem.vinted_item_id == 123))
     assert len(seen_result.scalars().all()) == 1
 
-    # 2. FoundItem has 2 entries (one for each monitor)
     found_result = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 123, FoundItem.monitor_id.in_([m1.id, m2.id])))
     found_items = found_result.scalars().all()
-    assert len(found_items) == 2
-    
-    # 3. Only ONE FoundItem has notified=False
-    notified_false = [f for f in found_items if f.notified == False]
-    assert len(notified_false) == 1
+    assert len(found_items) == 1
+    assert found_items[0].notified is False
 
 @pytest.mark.asyncio
 async def test_cross_user_notifications(db_session):
@@ -177,7 +171,7 @@ async def test_cross_domain_duplicate_item_ids_are_processed_once(db_session):
 
 @pytest.mark.asyncio
 async def test_cold_start_on_restart(db_session):
-    """Verify that after clean_startup_reset, the first check doesn't notify."""
+    """Verify that after clean_startup_reset, the first check creates only baseline seen state."""
     user = User(username="cold_user", telegram_bot_token="t", telegram_chat_id="c")
     user.set_password("p")
     db_session.add(user)
@@ -210,7 +204,303 @@ async def test_cold_start_on_restart(db_session):
          patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
         await check_monitor(monitor.id, scraper_client=mock_client)
 
-    # Verify: notified should be True (SILENCED)
+    seen = await db_session.execute(select(SeenItem).where(SeenItem.vinted_item_id == 789))
+    assert seen.scalar_one_or_none() is not None
+
     found = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 789))
-    fi = found.scalar_one()
-    assert fi.notified == True
+    assert found.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_cold_start_repeat_then_new_item_sends_only_new_notification(db_session):
+    user = User(username="cold_sequence_user", telegram_bot_token="runtime-test-token", telegram_chat_id="10001")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Cold Sequence",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json='["vinted.fr"]',
+        last_check_at=None,
+        items_found_count=0,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    def make_item(item_id: int) -> VintedItem:
+        return VintedItem(
+            id=item_id,
+            title=f"Item {item_id}",
+            price=10.0 + item_id,
+            currency="EUR",
+            brand="Nike",
+            size="M",
+            condition="New",
+            photo_url="",
+            item_url=f"https://www.vinted.fr/items/{item_id}",
+            domain="vinted.fr",
+            seller_id=item_id,
+        )
+
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(side_effect=[
+        [make_item(1), make_item(2), make_item(3)],
+        [make_item(1), make_item(2), make_item(3)],
+        [make_item(1), make_item(2), make_item(3), make_item(4)],
+    ])
+    mock_client.close = AsyncMock()
+    notify_mock = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", notify_mock):
+        await check_monitor(monitor.id, scraper_client=mock_client)
+
+        seen_count = (await db_session.execute(select(func.count(SeenItem.id)).where(SeenItem.user_id == user.id))).scalar_one()
+        found_count = (await db_session.execute(select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id))).scalar_one()
+        assert seen_count == 3
+        assert found_count == 0
+        notify_mock.assert_not_called()
+
+        await check_monitor(monitor.id, scraper_client=mock_client)
+        found_count = (await db_session.execute(select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id))).scalar_one()
+        assert found_count == 0
+        notify_mock.assert_not_called()
+
+        await check_monitor(monitor.id, scraper_client=mock_client)
+
+    found_items = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id))).scalars().all()
+    assert [item.vinted_item_id for item in found_items] == [4]
+    assert found_items[0].notified is False
+    notify_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cross_domain_duplicate_seen_on_later_check_is_not_new(db_session):
+    user = User(username="cross_domain_later_user", telegram_bot_token="t", telegram_chat_id="c")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Cross Domain Later",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json='["vinted.fr", "vinted.de"]',
+        last_check_at=datetime.now(timezone.utc),
+        items_found_count=0,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    first_domain_item = VintedItem(
+        id=7001,
+        title="Same Item",
+        price=10.0,
+        currency="EUR",
+        brand="Nike",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/7001",
+        domain="vinted.fr",
+        seller_id=1,
+    )
+    second_domain_item = VintedItem(
+        id=7001,
+        title="Same Item",
+        price=10.0,
+        currency="EUR",
+        brand="Nike",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.de/items/7001",
+        domain="vinted.de",
+        seller_id=1,
+    )
+    unique_item = VintedItem(
+        id=7002,
+        title="Unique Item",
+        price=12.0,
+        currency="EUR",
+        brand="Nike",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.de/items/7002",
+        domain="vinted.de",
+        seller_id=2,
+    )
+
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(side_effect=[
+        [first_domain_item],
+        [second_domain_item, unique_item],
+    ])
+    mock_client.close = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()) as notify_mock:
+        await check_monitor(monitor.id, scraper_client=mock_client)
+        await check_monitor(monitor.id, scraper_client=mock_client)
+
+    seen_items = (await db_session.execute(select(SeenItem).where(SeenItem.user_id == user.id).order_by(SeenItem.vinted_item_id))).scalars().all()
+    assert [(item.vinted_item_id, item.domain) for item in seen_items] == [
+        (7001, "vinted.fr"),
+        (7002, "vinted.de"),
+    ]
+
+    found_items = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id))).scalars().all()
+    assert [(item.vinted_item_id, item.domain) for item in found_items] == [
+        (7001, "vinted.fr"),
+        (7002, "vinted.de"),
+    ]
+    assert notify_mock.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_pending_notification_uses_user_credentials_and_safe_html(db_session):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+
+    await db_session.execute(update(FoundItem).values(notified=True))
+    await db_session.commit()
+
+    user = User(username="notify_payload_user", telegram_bot_token="runtime-test-token", telegram_chat_id="424242")
+    user.set_password("p")
+    monitor = Monitor(
+        user_id=None,
+        name="Nike <Monitor> & Deals",
+        original_url="u",
+        params_json="{}",
+        domains_json='["vinted.fr"]',
+        last_check_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([user, monitor])
+    await db_session.commit()
+    monitor.user_id = user.id
+    item = FoundItem(
+        monitor_id=monitor.id,
+        vinted_item_id=9001,
+        domain="vinted.fr",
+        title="Air & Max <Drop>",
+        price=25.5,
+        currency="EUR",
+        brand="Nike",
+        size="42",
+        condition="Very good",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/9001",
+        seller_id=321,
+        notified=False,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
+         patch("app.telegram.bot.get_or_create_bot", return_value=(fake_bot, MagicMock())) as get_bot, \
+         patch("app.telegram.notifications.asyncio.sleep", AsyncMock()):
+        await process_pending_notifications()
+
+    get_bot.assert_called_once_with("runtime-test-token")
+    fake_bot.send_message.assert_awaited_once()
+    _, kwargs = fake_bot.send_message.await_args
+    assert kwargs["chat_id"] == 424242
+    assert kwargs["parse_mode"] == "HTML"
+    assert "Nike &lt;Monitor&gt; &amp; Deals" in kwargs["text"]
+    assert "Air &amp; Max &lt;Drop&gt;" in kwargs["text"]
+    assert "25.5 EUR" in kwargs["text"]
+    assert "vinted.fr" in kwargs["text"]
+    assert "https://www.vinted.fr/items/9001" in kwargs["text"]
+    assert "runtime-test-token" not in kwargs["text"]
+    assert "424242" not in kwargs["text"]
+
+    await db_session.refresh(item)
+    assert item.notified is True
+
+
+@pytest.mark.asyncio
+async def test_notification_failure_keeps_item_pending(db_session):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+
+    await db_session.execute(update(FoundItem).values(notified=True))
+    await db_session.commit()
+
+    user = User(username="notify_failure_user", telegram_bot_token="runtime-test-token-fail", telegram_chat_id="525252")
+    user.set_password("p")
+    monitor = Monitor(
+        user_id=None,
+        name="Failure Monitor",
+        original_url="u",
+        params_json="{}",
+        domains_json='["vinted.fr"]',
+        last_check_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([user, monitor])
+    await db_session.commit()
+    monitor.user_id = user.id
+    item = FoundItem(
+        monitor_id=monitor.id,
+        vinted_item_id=9002,
+        domain="vinted.fr",
+        title="Will Retry",
+        price=10.0,
+        currency="EUR",
+        brand="",
+        size="",
+        condition="",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/9002",
+        seller_id=1,
+        notified=False,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock(side_effect=RuntimeError("telegram unavailable"))
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
+         patch("app.telegram.bot.get_or_create_bot", return_value=(fake_bot, MagicMock())):
+        await process_pending_notifications()
+
+    await db_session.refresh(item)
+    assert item.notified is False
+
+
+def test_monitor_scheduler_add_remove_update_and_trigger():
+    scheduler = MonitorScheduler()
+
+    try:
+        scheduler.add_monitor(101, 120)
+        assert 101 in scheduler.job_ids
+        job_id = scheduler.job_ids[101]
+        job = scheduler.scheduler.get_job(job_id)
+        assert job is not None
+        assert int(job.trigger.interval.total_seconds()) >= 120
+
+        assert scheduler.trigger_now(101) is True
+        scheduler.remove_monitor(101)
+        assert 101 not in scheduler.job_ids
+        assert scheduler.scheduler.get_job(job_id) is None
+
+        scheduler.add_monitor(101, 120)
+        scheduler.update_monitor(101, 240)
+        updated_job = scheduler.scheduler.get_job(scheduler.job_ids[101])
+        assert updated_job is not None
+        assert int(updated_job.trigger.interval.total_seconds()) >= 240
+    finally:
+        if scheduler.scheduler.running:
+            scheduler.scheduler.shutdown(wait=False)

@@ -118,6 +118,15 @@ tags:
   - `cd frontend && npm run test:e2e` -> 8 passed with known Node `DEP0205` warning.
   - Playwright MCP verified `/monitors` edit opens with persisted name/URL/interval/domains, Escape close does not send `PATCH`, reopening restores persisted values, selected domains are visible, and desktop/mobile scroll width matches viewport.
   - `git diff --check` -> passed with line-ending warnings only.
+- Monitor runtime/Telegram snapshot on `2026-06-04`:
+  - `cd backend && poetry run pytest -q tests/test_fixes_v2.py` -> 9 passed.
+  - `cd backend && poetry run pytest -q tests/test_audit_fixes.py` -> 2 passed.
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 14 passed.
+  - `cd backend && poetry run pytest -q tests/test_stress.py` -> 1 passed.
+  - `cd backend && poetry run pytest -q` -> 78 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `git diff --check` -> passed with line-ending warnings only.
+  - Frontend was not changed in this pass, so frontend lint/build/e2e were not run.
 
 ## Coverage Gaps
 
