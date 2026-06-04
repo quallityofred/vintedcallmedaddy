@@ -83,7 +83,7 @@ export function MonitorPreview() {
   const [error, setError] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [topicsEnabled, setTopicsEnabled] = useState(false);
+  const [, setTopicsEnabled] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);

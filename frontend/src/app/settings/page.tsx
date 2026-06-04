@@ -390,10 +390,10 @@ function SettingsContent() {
                     ) : null}
 
                     <div className="flex gap-2">
-                        <Button disabled={topicSaving || verifyingGroup} onClick={handleVerifyGroup}>
+                        <Button id="verifyTopicGroup" disabled={topicSaving || verifyingGroup} onClick={handleVerifyGroup}>
                             {verifyingGroup ? "Verifying..." : "Verify group"}
                         </Button>
-                        <Button disabled={topicSaving || verifyingGroup} onClick={handleUpdateTopicSettings}>
+                        <Button id="saveTopicSettings" disabled={topicSaving || verifyingGroup} onClick={handleUpdateTopicSettings}>
                             {topicSaving ? "Saving..." : "Save settings"}
                         </Button>
                     </div>
