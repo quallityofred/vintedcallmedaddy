@@ -285,6 +285,109 @@ test("dashboard and monitors stay within the mobile viewport", async ({ page }) 
   await expect(page.locator("html")).toHaveJSProperty("scrollWidth", 390);
 });
 
+test("settings saves Cloudflare Worker routing mode through the API contract", async ({ page }) => {
+  let savedMode = "auto";
+  let patchPayload: Record<string, unknown> | null = null;
+  let failNextPatch = false;
+
+  await page.route("**/api/v1/auth/me*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ user: { id: 1, username: "user", is_admin: false } }),
+    });
+  });
+
+  await page.route("**/api/v1/auth/csrf", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ csrf_token: "test-csrf-token" }),
+    });
+  });
+
+  await page.route("**/api/v1/settings", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          user: { id: 1, username: "user", is_admin: false },
+          telegram: {
+            token_configured: true,
+            token_masked: "******1234",
+            chat_id_configured: true,
+            chat_id_masked: "******4321",
+            bot_running: false,
+          },
+          cloudflare_worker: {
+            url: "https://worker.example.com/proxy",
+            configured: true,
+            block_threshold: 4,
+            recovery_minutes: 15,
+            mode: savedMode,
+          },
+          can_edit_global_settings: false,
+        }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.route("**/api/v1/settings/cloudflare-worker", async (route) => {
+    patchPayload = route.request().postDataJSON() as Record<string, unknown>;
+
+    if (failNextPatch) {
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Worker mode requires a configured Worker URL" }),
+      });
+      return;
+    }
+
+    savedMode = String(patchPayload.cf_worker_mode);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        cloudflare_worker: {
+          url: "https://worker.example.com/proxy",
+          configured: true,
+          block_threshold: 4,
+          recovery_minutes: 15,
+          mode: savedMode,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Configuration" })).toBeVisible();
+
+  await page.getByRole("combobox", { name: "Routing Mode" }).click();
+  await page.getByRole("option", { name: "Direct only" }).click();
+  await page.getByRole("button", { name: "Save settings" }).click();
+
+  await expect(page.getByText("Cloudflare Worker settings saved.")).toBeVisible();
+  expect(patchPayload).toMatchObject({ cf_worker_mode: "direct" });
+  expect(patchPayload).not.toHaveProperty("mode");
+  expect(Number.isNaN(patchPayload?.cf_worker_block_threshold)).toBe(false);
+
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Routing Mode" })).toContainText("Direct only");
+
+  await page.getByRole("combobox", { name: "Routing Mode" }).click();
+  await page.getByRole("option", { name: "Auto" }).click();
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.getByText("Cloudflare Worker settings saved.")).toBeVisible();
+  expect(patchPayload).toMatchObject({ cf_worker_mode: "auto" });
+
+  failNextPatch = true;
+  await page.getByRole("combobox", { name: "Routing Mode" }).click();
+  await page.getByRole("option", { name: "CF Worker only" }).click();
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.getByRole("main").getByText("Worker mode requires a configured Worker URL")).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Routing Mode" })).toContainText("CF Worker only");
+});
+
 test("monitor domain selection shows a clean error when domains fail", async ({ page }) => {
   await page.route("**/api/v1/auth/me*", async (route) => {
     await route.fulfill({
@@ -307,7 +410,7 @@ test("monitor domain selection shows a clean error when domains fail", async ({ 
   });
 
   await page.goto("/monitors");
-  await page.getByRole("button", { name: /New monitor/i }).click();
+  await page.getByRole("button", { name: "New monitor", exact: true }).first().click();
   await expect(page.getByText("Target domains could not be loaded.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   await expect(page.getByText("Target Domains (0 / 0)")).toHaveCount(0);

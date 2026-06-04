@@ -43,6 +43,6 @@ tags:
 
 - 2026-06-02: Dashboard scraper settings are persisted in `AppSettings` and applied to live rate/proxy/concurrency state; active sessions are refreshed after proxy changes.
 - 2026-06-03: Admin settings now also cover Cloudflare Worker fallback and adaptive scheduling defaults. Startup loads DB-backed settings before creating the scraper client.
-- 2026-06-03: Added admin-only versioned JSON APIs for CF Worker and scraper defaults. API updates validate values through `runtime_settings.save_global_settings()`, apply live runtime settings, and mask proxy values in responses.
+- 2026-06-03: Added versioned JSON APIs for scraper defaults and CF Worker settings. Scraper defaults are admin/global; CF Worker URL/block/recovery/mode are currently per-user. API updates validate values and mask proxy values in responses.
 - 2026-06-04: Added representative-domain helpers, alias resolution, and a manual `backend/scripts/probe_vinted_unique_domains.py` script for grouping candidate domains by overlapping item IDs. URL parsing now preserves stable catalog/brand/order params and drops unstable pagination/session/tracking params.
 - 2026-06-04: Runtime verification confirmed selected domains are passed to `VintedClient.search_all_domains()`, which dedupes duplicate item IDs inside a single multi-domain scrape. Scheduler now also suppresses stable item IDs previously seen by the same user on another selected domain.

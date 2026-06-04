@@ -138,6 +138,10 @@ updated: 2026-06-04
   - `npm run lint` -> passed.
   - `npm run build` -> passed with known Node `DEP0205` warning.
   - `npm run test:e2e` -> 8 passed with known Node `DEP0205` warning and expected local backend proxy noise in isolated tests.
+- 2026-06-04 CF Worker routing mode settings fix:
+  - `npm run lint` -> passed.
+  - `npm run build` -> passed with known Node `DEP0205` warning.
+  - `npm run test:e2e` -> 9 passed with known Node `DEP0205` warning.
 
 ## UI Polish
 
@@ -160,6 +164,8 @@ updated: 2026-06-04
 - 2026-06-04: `/settings` displays masked Telegram token/chat status, bot runtime status, credential safety copy, disabled-action help, and inline safe success/error notices.
 - `Send test` is disabled until both token and chat ID are configured. `Start bot` is disabled until a token is configured.
 - Telegram test failures display backend-provided safe `detail` messages and do not expose token/chat values.
+- 2026-06-04: CF Worker routing mode save now sends flat `cf_worker_mode`, uses a typed `auto`/`direct`/`worker` union, validates optional numeric fields before PATCH, updates local state from PATCH response, and displays backend `detail` on failure while keeping the selected value visible.
+- Routing mode labels render as `Auto`, `Direct only`, and `CF Worker only` instead of raw API values.
 
 ## Related
 

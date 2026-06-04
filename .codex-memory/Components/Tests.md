@@ -130,6 +130,15 @@ tags:
 - Telegram bot stop/status snapshot on `2026-06-04`:
   - Added `backend/tests/test_telegram_runtime.py` for idempotent start, stop cleanup, stop timeout truthfulness, `/api/health` live task counting, and cleanup-script secret-safe output.
   - Expanded `backend/tests/test_settings_api.py` to assert stop timeout returns a safe failure instead of false success.
+- CF Worker routing mode save snapshot on `2026-06-04`:
+  - `cd backend && poetry run pytest -q tests/test_settings_api.py tests/test_monitors_api.py` -> 32 passed.
+  - `cd backend && poetry run pytest -q` -> 88 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd backend && poetry run python -m py_compile scripts/migrate_user_cf_worker_mode.py` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 9 passed with known Node `DEP0205` warning.
+  - `git diff --check` -> passed with line-ending warnings only.
 
 ## Coverage Gaps
 

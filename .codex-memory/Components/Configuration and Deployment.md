@@ -77,7 +77,7 @@ tags:
 ## API Contract Notes
 
 - 2026-06-03: [[API Contract]] confirms the frontend should continue using relative `/api/...` paths through the Next rewrite. No backend secrets should be exposed through `NEXT_PUBLIC_` env vars.
-- 2026-06-03: Versioned settings APIs now expose admin/global CF Worker and scraper defaults through `/api/v1/settings/*`. Telegram credentials remain per-user, write-only/masked, and are still not required deployment env variables.
+- 2026-06-03: Versioned settings APIs expose per-user CF Worker settings and admin/global scraper defaults through `/api/v1/settings/*`. Telegram credentials remain per-user, write-only/masked, and are still not required deployment env variables.
 - 2026-06-03: Frontend lint needed generated Playwright output ignored in `frontend/eslint.config.mjs` so missing/ignored `test-results/` does not break validation.
 
 ## Related Plans

@@ -34,7 +34,7 @@ tags:
 - Shared system logs are admin-only; regular users receive user-scoped logs.
 - Scraper controls are saved and applied through persisted app settings.
 - Telegram token/chat ID settings are per-user and write-only/masked in rendered HTML.
-- Global scraper and Cloudflare Worker settings are admin-only.
+- Global scraper settings are admin-only. Cloudflare Worker URL/block/recovery/mode are currently per-user settings.
 
 ## Related Issues
 
@@ -67,6 +67,8 @@ tags:
 - 2026-06-04: Dashboard no longer embeds the full monitor management table. It shows a compact monitor summary card with counts and a `Manage monitors` CTA. Full monitor CRUD/control UI is now on protected `/monitors`.
 - 2026-06-04: `/monitors` edit/create dialog now keeps unsaved draft state isolated from persisted monitor data. Closing the dialog without `Update monitor` discards edits; reopening shows saved name, URL, interval, and selected domains. Monitor cards now label selected targets as `Domains` instead of `Marketplace`.
 - 2026-06-04: Settings page now shows masked Telegram credential status cards, disabled-action help, safe classified test errors, and clearer save/test/start/stop loading states. Checkbox polish keeps domain selection card-like and monitor selection compact.
+- 2026-06-04: Settings CF Worker routing-mode save now shows backend validation details instead of a generic Failed message. Direct/Auto saves persist through PATCH/GET in tests; Worker-only mode requires a configured Worker URL and keeps the selected value visible on validation failure.
+- 2026-06-04: Monitor debug trigger no longer nests a button inside a dialog trigger, preventing Next dev overlay/runtime markup issues. Debug output still handles missing `cf_worker` and shows only masked Worker URL.
 
 ## Related Plans
 

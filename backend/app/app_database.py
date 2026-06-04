@@ -122,6 +122,32 @@ async def validate_and_migrate_db(conn) -> None:
         except Exception:
             return []
 
+    columns_users = await conn.run_sync(get_columns, "users")
+
+    user_column_migrations = {
+        "cf_worker_url": "ALTER TABLE users ADD COLUMN cf_worker_url VARCHAR DEFAULT '' NOT NULL",
+        "cf_worker_block_threshold": "ALTER TABLE users ADD COLUMN cf_worker_block_threshold INTEGER DEFAULT 2 NOT NULL",
+        "cf_worker_recovery_minutes": "ALTER TABLE users ADD COLUMN cf_worker_recovery_minutes INTEGER DEFAULT 10 NOT NULL",
+        "is_telegram_enabled": "ALTER TABLE users ADD COLUMN is_telegram_enabled BOOLEAN DEFAULT FALSE NOT NULL",
+        "cf_worker_mode": "ALTER TABLE users ADD COLUMN cf_worker_mode VARCHAR DEFAULT 'auto' NOT NULL",
+    }
+    for column_name, migration_sql in user_column_migrations.items():
+        if columns_users and column_name not in columns_users:
+            logger.warning("Migration: adding '%s' to 'users'", column_name)
+            await conn.execute(text(migration_sql))
+            logger.info("Added '%s' to 'users'", column_name)
+
+    if columns_users:
+        try:
+            await conn.execute(
+                text(
+                    "UPDATE users SET cf_worker_mode = 'auto' "
+                    "WHERE cf_worker_mode IS NULL OR cf_worker_mode NOT IN ('auto', 'direct', 'worker')"
+                )
+            )
+        except Exception as e:
+            logger.warning("Note: Could not normalize users.cf_worker_mode: %s", e)
+
     columns_seen = await conn.run_sync(get_columns, "seen_items")
 
     if "user_id" not in columns_seen:

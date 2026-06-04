@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User
@@ -22,6 +23,7 @@ from app.web.dependencies import get_db, get_scraper_client, is_bot_running, sta
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
 logger = logging.getLogger(__name__)
+CfWorkerMode = Literal["auto", "direct", "worker"]
 
 
 @dataclass(frozen=True)
@@ -42,7 +44,7 @@ class CloudflareWorkerUpdate(BaseModel):
     cf_worker_url: str | None = Field(default=None, max_length=2048)
     cf_worker_block_threshold: int | None = None
     cf_worker_recovery_minutes: int | None = None
-    cf_worker_mode: str | None = Field(default=None, pattern="^(auto|direct|worker)$")
+    cf_worker_mode: CfWorkerMode | None = None
 
 
 class ScraperSettingsUpdate(BaseModel):
@@ -95,6 +97,23 @@ def _telegram_payload(user: User) -> dict[str, object]:
         "chat_id_masked": mask_secret(chat_id),
         "bot_running": is_bot_running(token) if token else False,
         "is_telegram_enabled": user.is_telegram_enabled,
+    }
+
+
+def _normalize_cf_worker_mode(value: str | None) -> CfWorkerMode:
+    if value in {"auto", "direct", "worker"}:
+        return value
+    return "auto"
+
+
+def _cf_worker_payload(user: User) -> dict[str, object]:
+    url = user.cf_worker_url or ""
+    return {
+        "url": url,
+        "configured": bool(url),
+        "block_threshold": user.cf_worker_block_threshold,
+        "recovery_minutes": user.cf_worker_recovery_minutes,
+        "mode": _normalize_cf_worker_mode(user.cf_worker_mode),
     }
 
 
@@ -213,13 +232,7 @@ async def _settings_response(db: AsyncSession, user: User) -> dict[str, object]:
             "is_admin": user.is_admin,
         },
         "telegram": _telegram_payload(user),
-        "cloudflare_worker": {
-            "url": user.cf_worker_url,
-            "configured": bool(user.cf_worker_url),
-            "block_threshold": user.cf_worker_block_threshold,
-            "recovery_minutes": user.cf_worker_recovery_minutes,
-            "mode": user.cf_worker_mode,
-        },
+        "cloudflare_worker": _cf_worker_payload(user),
         "can_edit_global_settings": user.is_admin,
     }
     if user.is_admin:
@@ -276,6 +289,11 @@ async def update_cloudflare_worker_settings(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
+    result = await db.execute(select(User).where(User.id == user.id))
+    db_user = result.scalar_one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     if request.cf_worker_url is not None:
         if request.cf_worker_url:
             # Validate URL
@@ -286,35 +304,29 @@ async def update_cloudflare_worker_settings(
                     raise ValueError
             except ValueError:
                 raise HTTPException(status_code=422, detail="Invalid Worker URL")
-            user.cf_worker_url = request.cf_worker_url.strip().rstrip("/")
+            db_user.cf_worker_url = request.cf_worker_url.strip().rstrip("/")
         else:
-            user.cf_worker_url = ""
+            db_user.cf_worker_url = ""
 
     if request.cf_worker_block_threshold is not None:
         if not (1 <= request.cf_worker_block_threshold <= 20):
             raise HTTPException(status_code=422, detail="Block threshold must be between 1 and 20")
-        user.cf_worker_block_threshold = request.cf_worker_block_threshold
+        db_user.cf_worker_block_threshold = request.cf_worker_block_threshold
     
     if request.cf_worker_recovery_minutes is not None:
         if not (1 <= request.cf_worker_recovery_minutes <= 1440):
             raise HTTPException(status_code=422, detail="Recovery minutes must be between 1 and 1440")
-        user.cf_worker_recovery_minutes = request.cf_worker_recovery_minutes
+        db_user.cf_worker_recovery_minutes = request.cf_worker_recovery_minutes
 
     if request.cf_worker_mode is not None:
-        user.cf_worker_mode = request.cf_worker_mode
-        logger.info(f"DEBUG: Setting cf_worker_mode to {user.cf_worker_mode} for user {user.id}")
+        if request.cf_worker_mode == "worker" and not db_user.cf_worker_url:
+            raise HTTPException(status_code=422, detail="Worker mode requires a configured Worker URL")
+        db_user.cf_worker_mode = request.cf_worker_mode
 
-    db.add(user)
+    db.add(db_user)
     await db.commit()
-    await db.refresh(user)
-    logger.info(f"DEBUG: cf_worker_mode after commit/refresh: {user.cf_worker_mode}")
-    return {"cloudflare_worker": {
-        "url": user.cf_worker_url,
-        "configured": bool(user.cf_worker_url),
-        "block_threshold": user.cf_worker_block_threshold,
-        "recovery_minutes": user.cf_worker_recovery_minutes,
-        "mode": user.cf_worker_mode,
-    }}
+    await db.refresh(db_user)
+    return {"cloudflare_worker": _cf_worker_payload(db_user)}
 
 
 @router.patch("/settings/scraper", dependencies=[Depends(require_api_csrf)])

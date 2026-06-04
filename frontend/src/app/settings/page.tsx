@@ -16,7 +16,6 @@ import {
     SelectContent, 
     SelectItem, 
     SelectTrigger, 
-    SelectValue 
 } from "@/components/ui/select";
 
 interface TelegramStatus {
@@ -33,9 +32,28 @@ interface ApiErrorPayload {
   code?: string;
 }
 
+type CfWorkerMode = "auto" | "direct" | "worker";
+
+interface CloudflareWorkerPayload {
+  url?: string | null;
+  block_threshold?: number | null;
+  recovery_minutes?: number | null;
+  mode?: string | null;
+}
+
 type Notice = {
   type: "success" | "error" | "info";
   text: string;
+};
+
+const normalizeCfMode = (value: unknown): CfWorkerMode => {
+  return value === "direct" || value === "worker" || value === "auto" ? value : "auto";
+};
+
+const cfModeLabels: Record<CfWorkerMode, string> = {
+  auto: "Auto",
+  direct: "Direct only",
+  worker: "CF Worker only",
 };
 
 export default function SettingsPage() {
@@ -59,7 +77,15 @@ function SettingsContent() {
   const [cfUrl, setCfUrl] = useState("");
   const [cfBlock, setCfBlock] = useState("");
   const [cfRecovery, setCfRecovery] = useState("");
-  const [cfMode, setCfMode] = useState("auto");
+  const [cfMode, setCfMode] = useState<CfWorkerMode>("auto");
+  const [cfNotice, setCfNotice] = useState<Notice | null>(null);
+
+  const applyCloudflareWorkerState = useCallback((payload: CloudflareWorkerPayload) => {
+    setCfUrl(payload.url || "");
+    setCfBlock(payload.block_threshold?.toString() || "");
+    setCfRecovery(payload.recovery_minutes?.toString() || "");
+    setCfMode(normalizeCfMode(payload.mode));
+  }, []);
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -72,10 +98,7 @@ function SettingsContent() {
         const data = await response.json();
         setStatus(data.telegram);
         if (data.cloudflare_worker) {
-            setCfUrl(data.cloudflare_worker.url || "");
-            setCfBlock(data.cloudflare_worker.block_threshold?.toString() || "");
-            setCfRecovery(data.cloudflare_worker.recovery_minutes?.toString() || "");
-            setCfMode(data.cloudflare_worker.mode || "auto");
+            applyCloudflareWorkerState(data.cloudflare_worker);
         }
       }
     } catch {
@@ -83,7 +106,7 @@ function SettingsContent() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyCloudflareWorkerState]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -107,6 +130,16 @@ function SettingsContent() {
     } catch {
       return fallback;
     }
+  };
+
+  const parseOptionalInteger = (value: string, label: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed)) {
+      throw new Error(`${label} must be a whole number.`);
+    }
+    return parsed;
   };
 
   const handleUpdateTelegram = async () => {
@@ -144,25 +177,26 @@ function SettingsContent() {
 
   const handleUpdateCfWorker = async () => {
     setSavingCf(true);
+    setCfNotice(null);
     try {
       const csrfToken = await getCsrfToken();
       
       const payload: { 
-        cf_worker_url: string; 
-        cf_worker_mode: string; 
+        cf_worker_url?: string;
+        cf_worker_mode: CfWorkerMode;
         cf_worker_block_threshold?: number; 
         cf_worker_recovery_minutes?: number 
       } = {
-        cf_worker_url: cfUrl,
         cf_worker_mode: cfMode,
       };
+
+      payload.cf_worker_url = cfUrl.trim();
       
-      if (cfBlock !== "") {
-          payload.cf_worker_block_threshold = parseInt(cfBlock, 10);
-      }
-      if (cfRecovery !== "") {
-          payload.cf_worker_recovery_minutes = parseInt(cfRecovery, 10);
-      }
+      const blockThreshold = parseOptionalInteger(cfBlock, "Block threshold");
+      if (blockThreshold !== undefined) payload.cf_worker_block_threshold = blockThreshold;
+
+      const recoveryMinutes = parseOptionalInteger(cfRecovery, "Recovery minutes");
+      if (recoveryMinutes !== undefined) payload.cf_worker_recovery_minutes = recoveryMinutes;
       
       const response = await fetch("/api/v1/settings/cloudflare-worker", {
         method: "PATCH",
@@ -173,11 +207,18 @@ function SettingsContent() {
         },
         body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error("Failed to update settings");
+      if (!response.ok) throw new Error(await readApiMessage(response, "Failed to update settings"));
+      const data = await response.json();
+      if (data.cloudflare_worker) {
+        applyCloudflareWorkerState(data.cloudflare_worker);
+      }
       toast.success("Settings updated");
-      void fetchSettings();
-    } catch {
-      toast.error("Failed to update settings");
+      setCfNotice({ type: "success", text: "Cloudflare Worker settings saved." });
+      await fetchSettings();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update settings";
+      toast.error(message);
+      setCfNotice({ type: "error", text: message });
     } finally {
       setSavingCf(false);
     }
@@ -388,9 +429,9 @@ function SettingsContent() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="cfMode">Routing Mode</Label>
-                <Select value={cfMode} onValueChange={(val) => val && setCfMode(val)}>
+                <Select value={cfMode} onValueChange={(val) => setCfMode(normalizeCfMode(val))}>
                   <SelectTrigger id="cfMode">
-                    <SelectValue placeholder="Select mode" />
+                    <span className="flex flex-1 text-left">{cfModeLabels[cfMode]}</span>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="auto">Auto (Direct first, fallback to Worker)</SelectItem>
@@ -425,6 +466,24 @@ function SettingsContent() {
                 />
               </div>
             </div>
+            {cfNotice ? (
+              <div
+                className={
+                  cfNotice.type === "error"
+                    ? "rounded-2xl border border-red-300/20 bg-red-400/10 p-3 text-sm text-red-100"
+                    : "rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-50"
+                }
+              >
+                <div className="flex gap-2">
+                  {cfNotice.type === "error" ? (
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  ) : (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+                  )}
+                  <p>{cfNotice.text}</p>
+                </div>
+              </div>
+            ) : null}
             <Button className="sm:w-auto" disabled={savingCf} onClick={handleUpdateCfWorker}>
               {savingCf ? <Loader2 className="size-4 animate-spin" /> : <Cog className="size-4" />}
               {savingCf ? "Saving" : "Save settings"}

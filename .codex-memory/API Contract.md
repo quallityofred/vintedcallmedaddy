@@ -107,7 +107,7 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/settings` | JSON | session | Returns safe user payload, masked Telegram state, and admin-only global settings. Proxy values are masked/configured-only. |
 | `PATCH` | `/api/v1/settings/telegram` | JSON | session + CSRF | Write-only per-user Telegram token/chat ID update. Supports explicit clearing. Returns masked Telegram state only. |
-| `PATCH` | `/api/v1/settings/cloudflare-worker` | JSON | admin + CSRF | Updates admin/global CF Worker URL, block threshold, and recovery minutes; applies runtime settings. |
+| `PATCH` | `/api/v1/settings/cloudflare-worker` | JSON | session + CSRF | Updates the current user's CF Worker URL, block threshold, recovery minutes, and routing mode. Accepts `cf_worker_mode` values `auto`, `direct`, and `worker`; `worker` requires a configured Worker URL. |
 | `PATCH` | `/api/v1/settings/scraper` | JSON | admin + CSRF | Updates admin/global scraper defaults such as sessions, rate limit, intervals, peak hours, and write-only/masked proxies; applies runtime settings. |
 | `GET` | `/api/v1/telegram/status` | JSON | session | Returns masked/configured Telegram state and whether the current user's bot is running. |
 | `POST` | `/api/v1/telegram/start` | JSON | session + CSRF | Starts the current user's saved Telegram bot token without returning the token. |
@@ -131,7 +131,7 @@ Telegram API error codes currently used by the frontend:
 Current settings ownership:
 
 - Telegram token/chat ID: per-user `User` columns; UI masks saved values.
-- CF Worker URL, block threshold, recovery minutes: global admin `AppSettings`.
+- CF Worker URL, block threshold, recovery minutes, and routing mode: per-user `User` columns.
 - Scraper defaults: global admin `AppSettings` for proxies, sessions per domain, rate limit, check interval, off-peak/night multipliers, peak hours.
 - Runtime settings apply to scraper client and scheduler where implemented.
 
@@ -161,7 +161,7 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - `/dashboard`
   - uses current dashboard/monitor/item/system APIs; follow-up is UI polish and API client extraction.
 - `/settings`
-  - uses current Telegram settings APIs; follow-up is full admin/global scraper and CF Worker form integration if needed in Next.
+  - uses current Telegram and per-user CF Worker settings APIs; follow-up is full admin/global scraper form integration if needed in Next.
 - Monitor pages
   - core CRUD/control exists; import/export remains optional follow-up.
 - Items/logs pages
@@ -238,6 +238,13 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - If stop times out or remains incomplete, `/api/v1/telegram/stop` returns a safe failure response instead of reporting stopped.
 - `GET /api/v1/telegram/status` and `/api/health` count only live polling tasks and prune completed stale tasks.
 - Telegram long polling remains a single-process/replica runtime. Multiple Railway replicas or another environment using the same token can still cause stop/status mismatch until a webhook or distributed-lock architecture is introduced.
+
+## [2026-06-04] Update: CF Worker routing mode persistence
+
+- `GET /api/v1/settings` and `PATCH /api/v1/settings/cloudflare-worker` expose `cloudflare_worker.mode` with safe fallback to `auto`.
+- PATCH payload field is flat `cf_worker_mode`; frontend must not send nested `mode` or `cf_worker.mode`.
+- Startup schema validation now adds missing `users.cf_worker_*` and `users.is_telegram_enabled` columns so Railway PostgreSQL does not rely on a manually executed one-off script for `cf_worker_mode`.
+- `direct` and `auto` mode saves do not require a Worker URL. `worker` mode without URL returns a clear 422 detail.
 
 
 ## [2026-06-03] Update: Found Items and Hidden Sellers APIs implemented.

@@ -26,6 +26,7 @@ async def test_validate_and_migrate_db_adds_columns():
         database.engine = test_engine
         try:
             await validate_and_migrate_db(conn)
+            await validate_and_migrate_db(conn)
         finally:
             database.engine = original_engine
 
@@ -41,6 +42,13 @@ async def test_validate_and_migrate_db_adds_columns():
 
         columns_seen = await conn.run_sync(get_columns, "seen_items")
         assert "user_id" in columns_seen
+
+        columns_users = await conn.run_sync(get_columns, "users")
+        assert "cf_worker_url" in columns_users
+        assert "cf_worker_block_threshold" in columns_users
+        assert "cf_worker_recovery_minutes" in columns_users
+        assert "is_telegram_enabled" in columns_users
+        assert "cf_worker_mode" in columns_users
         
         columns_found = await conn.run_sync(get_columns, "found_items")
         assert "notified" in columns_found

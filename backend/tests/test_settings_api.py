@@ -163,8 +163,8 @@ async def test_settings_api_admin_updates_global_cf_worker_and_scraper_settings(
             "configured": True,
             "block_threshold": 4,
             "recovery_minutes": 15,
+            "mode": "auto",
         }
-
         proxy_url = "http://user:pass@proxy.local:8080"
         scraper_response = await client.patch(
             "/api/v1/settings/scraper",
@@ -208,6 +208,114 @@ async def test_settings_api_rejects_non_admin_global_updates(db_session):
         )
 
     assert response.status_code == 403
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_worker_mode_persists_through_patch_and_get(db_session):
+    user = await _create_user(db_session, username="cf_mode_user")
+    _override_db(db_session)
+
+    client, csrf_token = await _authenticated_client(user, db_session, "cf-mode-session")
+    async with client:
+        settings_response = await client.get("/api/v1/settings")
+        assert settings_response.status_code == 200
+        assert settings_response.json()["cloudflare_worker"]["mode"] == "auto"
+
+        direct_response = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"cf_worker_mode": "direct"},
+        )
+        assert direct_response.status_code == 200
+        assert direct_response.json()["cloudflare_worker"]["mode"] == "direct"
+
+        get_direct = await client.get("/api/v1/settings")
+        assert get_direct.status_code == 200
+        assert get_direct.json()["cloudflare_worker"]["mode"] == "direct"
+
+        auto_response = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"cf_worker_mode": "auto"},
+        )
+        assert auto_response.status_code == 200
+        assert auto_response.json()["cloudflare_worker"]["mode"] == "auto"
+
+        get_auto = await client.get("/api/v1/settings")
+        assert get_auto.status_code == 200
+        assert get_auto.json()["cloudflare_worker"]["mode"] == "auto"
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_worker_mode_validation_and_url_requirement(db_session):
+    user = await _create_user(db_session, username="cf_mode_validation_user")
+    _override_db(db_session)
+
+    client, csrf_token = await _authenticated_client(user, db_session, "cf-mode-validation-session")
+    async with client:
+        missing_csrf = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            json={"cf_worker_mode": "direct"},
+        )
+        assert missing_csrf.status_code == 403
+
+        invalid_mode = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"cf_worker_mode": "invalid"},
+        )
+        assert invalid_mode.status_code == 422
+
+        worker_without_url = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"cf_worker_mode": "worker"},
+        )
+        assert worker_without_url.status_code == 422
+        assert worker_without_url.json()["detail"] == "Worker mode requires a configured Worker URL"
+
+        worker_with_url = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "cf_worker_url": "https://worker.example.com/proxy/",
+                "cf_worker_mode": "worker",
+            },
+        )
+        assert worker_with_url.status_code == 200
+        assert worker_with_url.json()["cloudflare_worker"]["mode"] == "worker"
+
+        get_worker = await client.get("/api/v1/settings")
+        assert get_worker.status_code == 200
+        assert get_worker.json()["cloudflare_worker"]["mode"] == "worker"
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_worker_mode_only_patch_accepts_omitted_numeric_fields(db_session):
+    user = await _create_user(db_session, username="cf_mode_numeric_user")
+    user.cf_worker_block_threshold = 5
+    user.cf_worker_recovery_minutes = 20
+    await db_session.commit()
+    _override_db(db_session)
+
+    client, csrf_token = await _authenticated_client(user, db_session, "cf-mode-numeric-session")
+    async with client:
+        response = await client.patch(
+            "/api/v1/settings/cloudflare-worker",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"cf_worker_mode": "direct"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()["cloudflare_worker"]
+    assert payload["mode"] == "direct"
+    assert payload["block_threshold"] == 5
+    assert payload["recovery_minutes"] == 20
     app.dependency_overrides.clear()
 
 

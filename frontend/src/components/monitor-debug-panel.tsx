@@ -49,10 +49,9 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger>
-        <Button variant="ghost" size="icon-xs" title="Debug status">
-          <Info className="size-3.5" />
-        </Button>
+      <DialogTrigger render={<Button variant="ghost" size="icon-xs" title="Debug status" />}>
+        <Info className="size-3.5" />
+        <span className="sr-only">Debug status</span>
       </DialogTrigger>
       <DialogContent className="max-w-md">
         <DialogHeader>

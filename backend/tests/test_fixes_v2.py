@@ -522,8 +522,10 @@ async def test_notification_skipped_if_telegram_disabled(db_session):
 
     fake_bot = MagicMock()
     fake_bot.send_message = AsyncMock()
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
 
-    with patch('app.telegram.bot.get_or_create_bot', return_value=(fake_bot, MagicMock())) as get_bot:
+    with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
+         patch('app.telegram.bot.get_or_create_bot', return_value=(fake_bot, MagicMock())) as get_bot:
         await process_pending_notifications()
 
     get_bot.assert_not_called()

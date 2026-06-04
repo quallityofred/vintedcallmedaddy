@@ -46,6 +46,7 @@ tags:
 - 2026-06-03: Telegram credentials are per-user write-only/masked in the Jinja settings UI.
 - 2026-06-03: Cloudflare Worker and scraper defaults are admin/global DB settings.
 - Follow up after deployment: verify an admin can change CF Worker/scraper defaults in production without redeploying.
+- After Railway redeploy, verify authenticated `/settings` CF Worker routing mode saves in production: Direct and Auto should PATCH 200 and persist through GET/refresh; Worker mode should either persist when URL is configured or show the clear Worker URL validation message.
 
 ## API-first Cleanup
 

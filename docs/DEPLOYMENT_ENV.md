@@ -50,9 +50,9 @@ These are bootstrap/default values only. They are not required for normal user s
 | `PROXIES` | empty | yes if credentials are included | Proxy provider | Admins can override in the web settings UI. Never commit proxy credentials. |
 | `SESSIONS_PER_DOMAIN` | `3` | no | Project default | Admin UI override exists. |
 | `RATE_LIMIT_PER_MINUTE` | `8` | no | Project default | Admin UI override exists. |
-| `CF_WORKER_URL` | empty | no | Optional Cloudflare Worker URL | Admin UI override exists. Not required for deployment. |
-| `CF_WORKER_BLOCK_THRESHOLD` | `2` | no | Project default | Admin UI override exists. |
-| `CF_WORKER_RECOVERY_MINUTES` | `10` | no | Project default | Admin UI override exists. |
+| `CF_WORKER_URL` | empty | no | Optional Cloudflare Worker URL | Per-user UI override exists. Not required for deployment. |
+| `CF_WORKER_BLOCK_THRESHOLD` | `2` | no | Project default | Per-user UI override exists. |
+| `CF_WORKER_RECOVERY_MINUTES` | `10` | no | Project default | Per-user UI override exists. |
 | `PEAK_START_HOUR` | `8` | no | Project default | Admin UI override exists. |
 | `PEAK_END_HOUR` | `23` | no | Project default | Admin UI override exists. |
 | `OFFPEAK_INTERVAL_MULTIPLIER` | `2.5` | no | Project default | Admin UI override exists. |
@@ -73,7 +73,7 @@ Remove-Item Env:\TELEGRAM_BOT_TOKEN
 
 The cleanup script deletes any webhook with pending updates dropped and attempts a safe pending-update cleanup. It prints only safe status text and must not be used with real tokens in committed files or docs.
 
-Cloudflare Worker URL and scraper defaults are intentionally not required backend deployment variables. Admins configure them in the web settings UI without redeploying.
+Cloudflare Worker URL/routing mode and scraper defaults are intentionally not required backend deployment variables. Users configure their own Worker URL/routing mode in the web settings UI. Admins configure scraper defaults in the settings page if needed.
 
 ## Frontend Railway Service
 
@@ -118,4 +118,4 @@ Service:
 13. Open the frontend URL.
 14. Sign in to the backend UI or migrated frontend flow when available.
 15. Configure per-user Telegram bot token/chat ID in the web settings page.
-16. Configure Cloudflare Worker and scraper defaults from an admin account in the settings page if needed.
+16. Configure per-user Cloudflare Worker settings and admin scraper defaults in the settings page if needed.
