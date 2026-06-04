@@ -101,6 +101,10 @@ class Monitor(Base):
         onupdate=utc_now,
         nullable=False,
     )
+    last_check_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_check_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_check_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     found_items = relationship("FoundItem", back_populates="monitor", cascade="all, delete-orphan")
 
 
