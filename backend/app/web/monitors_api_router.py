@@ -366,11 +366,41 @@ async def check_monitor_now(
         raise HTTPException(status_code=404, detail="Monitor not found")
 
     if not monitor.is_active:
-        raise HTTPException(status_code=400, detail="Cannot check an inactive monitor")
+        return JSONResponse(
+            {"ok": False, "code": "paused", "message": "Resume this monitor before checking."},
+            status_code=400,
+        )
+
+    # Check for in-flight check
+    if monitor.last_check_status == "running":
+        return JSONResponse(
+            {"ok": False, "code": "already_running", "message": "Check already running."},
+            status_code=409,
+        )
+
+    # Cooldown: 30 seconds
+    now = datetime.now(timezone.utc)
+    if monitor.last_check_started_at:
+        elapsed = (now - monitor.last_check_started_at).total_seconds()
+        if elapsed < 30:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "code": "cooldown",
+                    "message": f"Please wait {int(30 - elapsed)}s before checking again.",
+                    "retry_after": int(30 - elapsed),
+                },
+                status_code=429,
+            )
 
     scheduler = get_scheduler(request)
     if scheduler and scheduler.trigger_now(monitor_id):
-        return {"ok": True, "message": "Check triggered"}
+        return {
+            "ok": True,
+            "code": "triggered",
+            "message": "Check started.",
+            "retry_after": 30
+        }
     
     raise HTTPException(status_code=503, detail="Scheduler unavailable or monitor not scheduled")
 
