@@ -31,6 +31,7 @@ FINAL_OR_BLOCKED_STATUSES = {
 }
 
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
+WHITESPACE = re.compile(r"\s+")
 MAX_TOPIC_NAME_LENGTH = 128
 
 
@@ -172,34 +173,55 @@ def classify_telegram_topic_error(exc: BaseException) -> TelegramTopicErrorInfo:
 
 
 def normalize_topic_name(monitor: Monitor) -> str:
-    raw_name = CONTROL_CHARS.sub(" ", (monitor.name or "")).strip()
-    if not raw_name:
-        raw_name = f"Monitor {monitor.id}"
+    topic_name = CONTROL_CHARS.sub(" ", (monitor.name or ""))
+    topic_name = WHITESPACE.sub(" ", topic_name).strip()
+    if not topic_name:
+        topic_name = "Monitor"
+    return topic_name[:MAX_TOPIC_NAME_LENGTH].rstrip() or "Monitor"
 
-    domain = ""
+
+async def sync_active_topic_name(
+    db: AsyncSession,
+    *,
+    bot: Bot,
+    mapping: MonitorTelegramTopic,
+    desired_topic_name: str,
+) -> None:
+    if mapping.topic_name == desired_topic_name:
+        return
+
+    edit_forum_topic = getattr(bot, "edit_forum_topic", None)
+    if edit_forum_topic is None:
+        mapping.topic_name = desired_topic_name
+        mapping.last_error = None
+        mapping.last_error_code = None
+        mapping.last_verified_at = utc_now()
+        await db.commit()
+        await db.refresh(mapping)
+        return
+
     try:
-        import json
-
-        domains = json.loads(monitor.domains_json or "[]")
-        if isinstance(domains, list) and domains:
-            domain = str(domains[0]).replace("www.", "").strip()
-    except Exception:
-        domain = ""
-
-    parts = [raw_name]
-    if domain:
-        parts.append(domain)
-    parts.append(f"#{monitor.id}")
-    topic_name = " · ".join(parts)
-    topic_name = CONTROL_CHARS.sub(" ", topic_name).strip()
-    if len(topic_name) <= MAX_TOPIC_NAME_LENGTH:
-        return topic_name
-
-    suffix = f" #{monitor.id}"
-    available = MAX_TOPIC_NAME_LENGTH - len(suffix)
-    if available <= 0:
-        return f"Monitor {monitor.id}"[:MAX_TOPIC_NAME_LENGTH]
-    return f"{topic_name[:available].rstrip()}{suffix}"
+        await edit_forum_topic(
+            chat_id=mapping.chat_id,
+            message_thread_id=mapping.message_thread_id,
+            name=desired_topic_name,
+        )
+        mapping.topic_name = desired_topic_name
+        mapping.last_error = None
+        mapping.last_error_code = None
+        mapping.last_verified_at = utc_now()
+        await db.commit()
+        await db.refresh(mapping)
+    except Exception as exc:
+        info = classify_telegram_topic_error(exc)
+        mapping.last_error = _safe_error_message(
+            exc,
+            sensitive_values=(mapping.chat_id, mapping.message_thread_id),
+        )
+        mapping.last_error_code = info.code
+        mapping.last_verified_at = utc_now()
+        await db.commit()
+        await db.refresh(mapping)
 
 
 def _status_value(status: object) -> str:
@@ -343,6 +365,7 @@ async def create_monitor_topic(
     mapping = await get_topic_mapping(db, monitor_id=monitor.id, chat_id=chat_id)
 
     if mapping and mapping.status == TOPIC_STATUS_ACTIVE and mapping.message_thread_id:
+        await sync_active_topic_name(db, bot=bot, mapping=mapping, desired_topic_name=topic_name)
         return TelegramTopicResult(
             ok=True,
             code="active",
@@ -446,6 +469,8 @@ async def ensure_monitor_topic(
 
     mapping = await get_topic_mapping(db, monitor_id=monitor.id, chat_id=chat_id)
     if mapping and mapping.status == TOPIC_STATUS_ACTIVE and mapping.message_thread_id:
+        desired_topic_name = normalize_topic_name(monitor)
+        await sync_active_topic_name(db, bot=bot, mapping=mapping, desired_topic_name=desired_topic_name)
         return TelegramTopicResult(
             ok=True,
             code="active",

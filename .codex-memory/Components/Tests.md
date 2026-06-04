@@ -157,6 +157,12 @@ tags:
   - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
   - `cd backend && poetry run python -m py_compile scripts/migrate_telegram_topics.py` -> passed.
   - Frontend was not changed in this phase, so frontend lint/build/e2e were not run.
+- Telegram topic monitor-name-only title fix on `2026-06-05`:
+  - `cd backend && poetry run pytest -q tests/test_telegram_topics.py` -> 27 passed.
+  - `cd backend && poetry run pytest -q tests/test_telegram_runtime.py` -> 5 passed.
+  - `cd backend && poetry run pytest -q` -> 122 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - Frontend was not changed in this fix, so frontend lint/build were not run.
 
 ## Coverage Gaps
 
@@ -190,6 +196,7 @@ tags:
 - 2026-06-04: Added backend tests for `/api/v1/monitors/domains`, representative validation, alias URL normalization, URL cleaning, and scheduler cross-domain item-ID dedup. Added frontend E2E coverage for domain selector failure/retry state.
 - 2026-06-04: Added `backend/tests/test_telegram_topics.py` for topic settings defaults/patch, forum verification success/failures, idempotent ensure, in-progress duplicate prevention, permission/missing-thread handling, user scoping/auth, topic test sends, thread-aware low-level sends, and topic send failure keeping `FoundItem.notified=False`.
 - 2026-06-04: Expanded `backend/tests/test_telegram_topics.py` for automatic notification routing: topics-disabled main-chat behavior, lazy topic creation, active topic reuse, permission failure, deleted-topic recreation, creating-state retry, topic send/rate-limit failures, explicit main-chat fallback, disabled user guard, and missing topic chat guard.
+- 2026-06-05: Expanded `backend/tests/test_telegram_topics.py` for monitor-name-only topic names, no domain/id suffixes, whitespace/control cleanup, generic fallback, safe truncation, create-topic name payload, active-topic rename sync, preserved thread IDs, and rename-failure notification continuity.
 
 ## Related Frontend Notes
 

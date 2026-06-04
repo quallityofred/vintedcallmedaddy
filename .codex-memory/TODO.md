@@ -49,6 +49,7 @@ tags:
 - After Railway redeploy, verify authenticated `/settings` CF Worker routing mode saves in production: Direct and Auto should PATCH 200 and persist through GET/refresh; Worker mode should either persist when URL is configured or show the clear Worker URL validation message.
 - Next Telegram topics phase: add frontend settings/monitor UI for forum topic configuration and manual verification.
 - Automatic topic routing is now backend-enabled behind `telegram_topics_enabled`; frontend UI still needs to make the opt-in and fallback behavior explicit.
+- After deploy, verify an existing verbose Telegram topic can be synced/renamed to the monitor-only title without creating a duplicate topic.
 - Add a manual repair action for mappings in `missing`, `closed`, `permission_error`, or `chat_unreachable` status.
 - Consider periodic topic verification before notification routing is broadly enabled.
 

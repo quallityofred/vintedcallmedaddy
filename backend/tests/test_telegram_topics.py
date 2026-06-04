@@ -89,6 +89,7 @@ class FakeTopicBot:
         can_manage_topics: bool = True,
         create_exc: Exception | None = None,
         send_exc: Exception | None = None,
+        edit_exc: Exception | None = None,
         message_thread_id: int = 987654321,
     ) -> None:
         self.chat_type = chat_type
@@ -97,8 +98,10 @@ class FakeTopicBot:
         self.can_manage_topics = can_manage_topics
         self.create_exc = create_exc
         self.send_exc = send_exc
+        self.edit_exc = edit_exc
         self.message_thread_id = message_thread_id
         self.created_topics: list[tuple[str, str]] = []
+        self.edited_topics: list[dict[str, object]] = []
         self.sent_messages: list[dict[str, object]] = []
 
     async def get_chat(self, chat_id: str):
@@ -120,6 +123,11 @@ class FakeTopicBot:
         if self.send_exc is not None:
             raise self.send_exc
         self.sent_messages.append(kwargs)
+
+    async def edit_forum_topic(self, **kwargs):
+        if self.edit_exc is not None:
+            raise self.edit_exc
+        self.edited_topics.append(kwargs)
 
 
 async def _create_found_item(db_session, monitor: Monitor, *, item_id: int = 1234) -> FoundItem:
@@ -272,6 +280,65 @@ async def test_verify_group_success_and_permission_failures(db_session, monkeypa
     app.dependency_overrides.clear()
 
 
+def test_normalize_topic_name_uses_only_monitor_name():
+    monitor = Monitor(
+        id=50,
+        user_id=1,
+        name="number (n)ine",
+        original_url="https://www.vinted.fr/catalog?search_text=number+nine",
+        params_json="{}",
+        domains_json='["vinted.fr"]',
+    )
+
+    topic_name = topic_service.normalize_topic_name(monitor)
+
+    assert topic_name == "number (n)ine"
+    assert "vinted.fr" not in topic_name
+    assert "#50" not in topic_name
+
+
+def test_normalize_topic_name_cleans_whitespace_and_control_characters():
+    monitor = Monitor(
+        id=51,
+        user_id=1,
+        name="  hysteric\n\t glamour \x00  archive  ",
+        original_url="u",
+        params_json="{}",
+        domains_json='["vinted.fr"]',
+    )
+
+    assert topic_service.normalize_topic_name(monitor) == "hysteric glamour archive"
+
+
+def test_normalize_topic_name_empty_falls_back_to_generic_title():
+    monitor = Monitor(
+        id=52,
+        user_id=1,
+        name="\n\t\x00 ",
+        original_url="https://www.vinted.fr/catalog",
+        params_json="{}",
+        domains_json='["vinted.fr"]',
+    )
+
+    assert topic_service.normalize_topic_name(monitor) == "Monitor"
+
+
+def test_normalize_topic_name_truncates_long_names_safely():
+    monitor = Monitor(
+        id=53,
+        user_id=1,
+        name=f"{'a' * 140}   ",
+        original_url="u",
+        params_json="{}",
+        domains_json='["vinted.fr"]',
+    )
+
+    topic_name = topic_service.normalize_topic_name(monitor)
+
+    assert len(topic_name) == topic_service.MAX_TOPIC_NAME_LENGTH
+    assert topic_name == "a" * topic_service.MAX_TOPIC_NAME_LENGTH
+
+
 @pytest.mark.asyncio
 async def test_ensure_topic_creates_idempotent_mapping(db_session):
     user = await _create_user(
@@ -294,9 +361,11 @@ async def test_ensure_topic_creates_idempotent_mapping(db_session):
     assert second.ok is True
     assert second.code == "active"
     assert len(bot.created_topics) == 1
+    assert bot.created_topics[0][1] == "Nike Deals"
 
     rows = (await db_session.execute(select(MonitorTelegramTopic))).scalars().all()
     assert len(rows) == 1
+    assert rows[0].topic_name == "Nike Deals"
 
 
 @pytest.mark.asyncio
@@ -518,6 +587,7 @@ async def test_notification_topics_enabled_creates_topic_and_marks_notified(db_s
     await _run_pending_notifications_with_bot(db_session, bot)
 
     assert len(bot.created_topics) == 1
+    assert bot.created_topics[0][1] == "Nike Deals"
     assert len(bot.sent_messages) == 1
     assert bot.sent_messages[0]["chat_id"] == 123456789
     assert bot.sent_messages[0]["message_thread_id"] == 222222
@@ -560,10 +630,69 @@ async def test_notification_existing_active_topic_is_reused(db_session):
     await _run_pending_notifications_with_bot(db_session, bot)
 
     assert bot.created_topics == []
+    assert bot.edited_topics == [
+        {
+            "chat_id": "123456789",
+            "message_thread_id": 333333,
+            "name": "Nike Deals",
+        }
+    ]
     assert bot.sent_messages[0]["chat_id"] == 123456789
     assert bot.sent_messages[0]["message_thread_id"] == 333333
     await db_session.refresh(item)
     assert item.notified is True
+    mapping = (
+        await db_session.execute(
+            select(MonitorTelegramTopic).where(MonitorTelegramTopic.monitor_id == monitor.id)
+        )
+    ).scalar_one()
+    assert mapping.topic_name == "Nike Deals"
+    assert mapping.message_thread_id == 333333
+
+
+@pytest.mark.asyncio
+async def test_notification_topic_rename_failure_keeps_existing_thread_and_sends(db_session):
+    user = await _create_user(
+        db_session,
+        "notify_topic_rename_failure_user",
+        telegram_bot_token="topic-secret-token",
+        telegram_chat_id="111111",
+        telegram_topics_enabled=True,
+        telegram_topics_chat_id="123456789",
+    )
+    user.is_telegram_enabled = True
+    monitor = await _create_monitor(db_session, user, name="number (n)ine")
+    db_session.add(
+        MonitorTelegramTopic(
+            user_id=user.id,
+            monitor_id=monitor.id,
+            chat_id="123456789",
+            message_thread_id=333334,
+            topic_name="number (n)ine · vinted.fr · #50",
+            status="active",
+        )
+    )
+    item = await _create_found_item(db_session, monitor, item_id=2011)
+    bot = FakeTopicBot(edit_exc=RuntimeError("Bad Request: not enough rights to manage topics"))
+
+    await _run_pending_notifications_with_bot(db_session, bot)
+
+    assert bot.created_topics == []
+    assert bot.edited_topics == []
+    assert bot.sent_messages[0]["chat_id"] == 123456789
+    assert bot.sent_messages[0]["message_thread_id"] == 333334
+    await db_session.refresh(item)
+    assert item.notified is True
+    mapping = (
+        await db_session.execute(
+            select(MonitorTelegramTopic).where(MonitorTelegramTopic.monitor_id == monitor.id)
+        )
+    ).scalar_one()
+    assert mapping.status == "active"
+    assert mapping.message_thread_id == 333334
+    assert mapping.last_error_code == "missing_manage_topics"
+    assert "123456789" not in (mapping.last_error or "")
+    assert "333334" not in (mapping.last_error or "")
 
 
 @pytest.mark.asyncio
