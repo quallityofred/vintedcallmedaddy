@@ -30,6 +30,11 @@ class User(Base):
     cf_worker_recovery_minutes: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     is_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     cf_worker_mode: Mapped[str] = mapped_column(String, default="auto", nullable=False)
+    telegram_topics_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    telegram_topics_chat_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    telegram_topics_auto_create: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    telegram_topics_recreate_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    telegram_topics_fallback_to_main_chat: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     invite_code_id: Mapped[int | None] = mapped_column(ForeignKey("invite_codes.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
@@ -107,6 +112,34 @@ class Monitor(Base):
     last_check_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_check_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     found_items = relationship("FoundItem", back_populates="monitor", cascade="all, delete-orphan")
+
+
+class MonitorTelegramTopic(Base):
+    __tablename__ = "monitor_telegram_topics"
+    __table_args__ = (
+        UniqueConstraint("monitor_id", "chat_id", name="uq_monitor_telegram_topics_monitor_chat"),
+        Index("ix_monitor_telegram_topics_user_id", "user_id"),
+        Index("ix_monitor_telegram_topics_chat_thread", "chat_id", "message_thread_id"),
+        Index("ix_monitor_telegram_topics_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    monitor_id: Mapped[int] = mapped_column(ForeignKey("monitors.id", ondelete="CASCADE"), nullable=False)
+    chat_id: Mapped[str] = mapped_column(String, nullable=False)
+    message_thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    topic_name: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class FoundItem(Base):

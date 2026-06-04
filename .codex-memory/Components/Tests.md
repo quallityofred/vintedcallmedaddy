@@ -139,6 +139,15 @@ tags:
   - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
   - `cd frontend && npm run test:e2e` -> 9 passed with known Node `DEP0205` warning.
   - `git diff --check` -> passed with line-ending warnings only.
+- Telegram forum topics backend foundation snapshot on `2026-06-04`:
+  - `cd backend && poetry run pytest -q tests/test_telegram_topics.py` -> 12 passed.
+  - `cd backend && poetry run pytest -q tests/test_telegram_runtime.py` -> 5 passed.
+  - `cd backend && poetry run pytest -q tests/test_settings_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q` -> 107 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd backend && poetry run python -m py_compile scripts/migrate_telegram_topics.py` -> passed.
+  - Frontend was not changed in this phase, so frontend lint/build/e2e were not run.
 
 ## Coverage Gaps
 
@@ -148,6 +157,7 @@ tags:
 - No test for shared-system-log isolation.
 - No concurrency test for invite consumption.
 - No tests yet for missing Next-ready dashboard/settings/monitor/item/hidden-seller APIs listed in [[API Contract]].
+- No real Telegram API tests for forum topics; all topic coverage uses mocks and avoids network calls.
 
 ## Related Issues
 
@@ -169,6 +179,7 @@ tags:
 - 2026-06-03: Updated Playwright landing smoke assertion after replacing setup-oriented landing copy with product-ready copy.
 - 2026-06-04: Expanded Playwright coverage for unauthenticated `/monitors` redirect, authenticated `Monitors` navigation, dashboard monitor summary, `/monitors` monitor dialog/domain selection, and mobile page-level overflow checks.
 - 2026-06-04: Added backend tests for `/api/v1/monitors/domains`, representative validation, alias URL normalization, URL cleaning, and scheduler cross-domain item-ID dedup. Added frontend E2E coverage for domain selector failure/retry state.
+- 2026-06-04: Added `backend/tests/test_telegram_topics.py` for topic settings defaults/patch, forum verification success/failures, idempotent ensure, in-progress duplicate prevention, permission/missing-thread handling, user scoping/auth, topic test sends, thread-aware low-level sends, and topic send failure keeping `FoundItem.notified=False`.
 
 ## Related Frontend Notes
 

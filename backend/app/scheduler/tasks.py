@@ -19,6 +19,7 @@ from app.models import FoundItem, HiddenSeller, Monitor, SeenItem, User
 from app.scraper.client import VintedClient
 from app.scraper.parser import VintedItem
 from app.telegram.notifications import send_item_notification
+from app.telegram.topic_service import ensure_monitor_topic
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -319,6 +320,7 @@ async def process_pending_notifications() -> None:
 				try:
 					bot_to_use = _telegram_bot
 					chat_id_to_use = settings.telegram_chat_id
+					message_thread_id: int | None = None
 
 					async with _new_session() as db2:
 						monitor_name = None
@@ -330,12 +332,30 @@ async def process_pending_notifications() -> None:
 								from app.telegram.bot import get_or_create_bot
 								bot_to_use, _ = get_or_create_bot(user.telegram_bot_token)
 								chat_id_to_use = int(user.telegram_chat_id)
+								if user.telegram_topics_enabled:
+									topic_result = await ensure_monitor_topic(
+										db2,
+										bot=bot_to_use,
+										user=user,
+										monitor=monitor,
+									)
+									if topic_result.ok and topic_result.topic and topic_result.topic.message_thread_id:
+										chat_id_to_use = int(topic_result.topic.chat_id)
+										message_thread_id = topic_result.topic.message_thread_id
+									elif not user.telegram_topics_fallback_to_main_chat:
+										continue
 							else:
 								# Skip if disabled or not configured
 								continue
 
 					if bot_to_use and chat_id_to_use is not None:
-						await send_item_notification(bot_to_use, chat_id_to_use, item, monitor_name=monitor_name)
+						await send_item_notification(
+							bot_to_use,
+							chat_id_to_use,
+							item,
+							monitor_name=monitor_name,
+							message_thread_id=message_thread_id,
+						)
 						fi.notified = True
 						notified_ids.append(fi.id)
 				except Exception:

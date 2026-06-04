@@ -6,11 +6,12 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Monitor, User
+from app.models import Monitor, MonitorTelegramTopic, User
 from app.scraper.domains import (
     get_unique_vinted_marketplaces,
     validate_selected_domains,
@@ -20,6 +21,7 @@ from app.web.auth import get_current_user
 from app.web.csrf import require_csrf
 from app.web.dependencies import get_db, get_scheduler
 from app.runtime_settings import mask_secret
+from app.telegram.topic_service import ensure_monitor_topic, send_topic_test, topic_payload
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/monitors", tags=["monitors"])
@@ -98,6 +100,38 @@ def _monitor_response(monitor: Monitor) -> dict[str, object]:
         "updated_at": monitor.updated_at,
         "items_found_count": monitor.items_found_count,
         "domains": _monitor_domains(monitor),
+    }
+
+
+async def _get_owned_monitor(db: AsyncSession, user: User, monitor_id: int) -> Monitor:
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+    return monitor
+
+
+async def _get_monitor_topic(db: AsyncSession, user: User, monitor_id: int) -> MonitorTelegramTopic | None:
+    result = await db.execute(
+        select(MonitorTelegramTopic)
+        .where(MonitorTelegramTopic.monitor_id == monitor_id, MonitorTelegramTopic.user_id == user.id)
+        .order_by(MonitorTelegramTopic.updated_at.desc())
+    )
+    return result.scalar_one_or_none()
+
+
+def _monitor_topic_response(
+    *,
+    monitor_id: int,
+    user: User,
+    topic: MonitorTelegramTopic | None,
+) -> dict[str, object]:
+    return {
+        "monitor_id": monitor_id,
+        "enabled": user.telegram_topics_enabled,
+        "topic": topic_payload(topic),
     }
 
 
@@ -241,6 +275,57 @@ async def update_monitor(
             scheduler.remove_monitor(monitor.id)
 
     return _monitor_response(monitor)
+
+
+@router.get("/{monitor_id}/telegram-topic")
+async def get_monitor_telegram_topic(
+    monitor_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    await _get_owned_monitor(db, user, monitor_id)
+    topic = await _get_monitor_topic(db, user, monitor_id)
+    return _monitor_topic_response(monitor_id=monitor_id, user=user, topic=topic)
+
+
+@router.post("/{monitor_id}/telegram-topic/ensure", dependencies=[Depends(require_csrf)])
+async def ensure_monitor_telegram_topic(
+    monitor_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    monitor = await _get_owned_monitor(db, user, monitor_id)
+    if not user.telegram_topics_enabled:
+        return _monitor_topic_response(monitor_id=monitor.id, user=user, topic=None)
+    if not user.telegram_bot_token:
+        raise HTTPException(status_code=400, detail="Telegram bot token is not configured")
+
+    from app.telegram.bot import get_or_create_bot
+
+    bot, _ = get_or_create_bot(user.telegram_bot_token)
+    result = await ensure_monitor_topic(db, bot=bot, user=user, monitor=monitor)
+    status_code = 200 if result.ok else 400
+    return JSONResponse(result.to_response(), status_code=status_code)
+
+
+@router.post("/{monitor_id}/telegram-topic/test", dependencies=[Depends(require_csrf)])
+async def test_monitor_telegram_topic(
+    monitor_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    monitor = await _get_owned_monitor(db, user, monitor_id)
+    if not user.telegram_topics_enabled:
+        raise HTTPException(status_code=400, detail="Telegram topic routing is disabled")
+    if not user.telegram_bot_token:
+        raise HTTPException(status_code=400, detail="Telegram bot token is not configured")
+
+    from app.telegram.bot import get_or_create_bot
+
+    bot, _ = get_or_create_bot(user.telegram_bot_token)
+    result = await send_topic_test(db, bot=bot, user=user, monitor=monitor)
+    status_code = 200 if result.ok else 400
+    return JSONResponse(result.to_response(), status_code=status_code)
 
 
 @router.delete("/{monitor_id}", status_code=204, dependencies=[Depends(require_csrf)])

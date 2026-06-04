@@ -130,6 +130,11 @@ async def validate_and_migrate_db(conn) -> None:
         "cf_worker_recovery_minutes": "ALTER TABLE users ADD COLUMN cf_worker_recovery_minutes INTEGER DEFAULT 10 NOT NULL",
         "is_telegram_enabled": "ALTER TABLE users ADD COLUMN is_telegram_enabled BOOLEAN DEFAULT FALSE NOT NULL",
         "cf_worker_mode": "ALTER TABLE users ADD COLUMN cf_worker_mode VARCHAR DEFAULT 'auto' NOT NULL",
+        "telegram_topics_enabled": "ALTER TABLE users ADD COLUMN telegram_topics_enabled BOOLEAN DEFAULT FALSE NOT NULL",
+        "telegram_topics_chat_id": "ALTER TABLE users ADD COLUMN telegram_topics_chat_id VARCHAR",
+        "telegram_topics_auto_create": "ALTER TABLE users ADD COLUMN telegram_topics_auto_create BOOLEAN DEFAULT TRUE NOT NULL",
+        "telegram_topics_recreate_deleted": "ALTER TABLE users ADD COLUMN telegram_topics_recreate_deleted BOOLEAN DEFAULT FALSE NOT NULL",
+        "telegram_topics_fallback_to_main_chat": "ALTER TABLE users ADD COLUMN telegram_topics_fallback_to_main_chat BOOLEAN DEFAULT FALSE NOT NULL",
     }
     for column_name, migration_sql in user_column_migrations.items():
         if columns_users and column_name not in columns_users:
@@ -145,8 +150,32 @@ async def validate_and_migrate_db(conn) -> None:
                     "WHERE cf_worker_mode IS NULL OR cf_worker_mode NOT IN ('auto', 'direct', 'worker')"
                 )
             )
+            await conn.execute(
+                text(
+                    "UPDATE users SET telegram_topics_enabled = FALSE "
+                    "WHERE telegram_topics_enabled IS NULL"
+                )
+            )
+            await conn.execute(
+                text(
+                    "UPDATE users SET telegram_topics_auto_create = TRUE "
+                    "WHERE telegram_topics_auto_create IS NULL"
+                )
+            )
+            await conn.execute(
+                text(
+                    "UPDATE users SET telegram_topics_recreate_deleted = FALSE "
+                    "WHERE telegram_topics_recreate_deleted IS NULL"
+                )
+            )
+            await conn.execute(
+                text(
+                    "UPDATE users SET telegram_topics_fallback_to_main_chat = FALSE "
+                    "WHERE telegram_topics_fallback_to_main_chat IS NULL"
+                )
+            )
         except Exception as e:
-            logger.warning("Note: Could not normalize users.cf_worker_mode: %s", e)
+            logger.warning("Note: Could not normalize users settings columns: %s", e)
 
     columns_seen = await conn.run_sync(get_columns, "seen_items")
 

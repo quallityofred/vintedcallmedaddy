@@ -418,6 +418,7 @@ async def test_pending_notification_uses_user_credentials_and_safe_html(db_sessi
     fake_bot.send_message.assert_awaited_once()
     _, kwargs = fake_bot.send_message.await_args
     assert kwargs["chat_id"] == 424242
+    assert "message_thread_id" not in kwargs
     assert kwargs["parse_mode"] == "HTML"
     assert "Nike &lt;Monitor&gt; &amp; Deals" in kwargs["text"]
     assert "Air &amp; Max &lt;Drop&gt;" in kwargs["text"]

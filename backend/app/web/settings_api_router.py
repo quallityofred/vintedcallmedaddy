@@ -40,6 +40,19 @@ class TelegramSettingsUpdate(BaseModel):
     clear_chat_id: bool = False
 
 
+class TelegramTopicsSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    chat_id: str | None = Field(default=None, max_length=128)
+    clear_chat_id: bool = False
+    auto_create: bool | None = None
+    recreate_deleted: bool | None = None
+    fallback_to_main_chat: bool | None = None
+
+
+class TelegramTopicsVerifyRequest(BaseModel):
+    chat_id: str | None = Field(default=None, max_length=128)
+
+
 class CloudflareWorkerUpdate(BaseModel):
     cf_worker_url: str | None = Field(default=None, max_length=2048)
     cf_worker_block_threshold: int | None = None
@@ -97,6 +110,20 @@ def _telegram_payload(user: User) -> dict[str, object]:
         "chat_id_masked": mask_secret(chat_id),
         "bot_running": is_bot_running(token) if token else False,
         "is_telegram_enabled": user.is_telegram_enabled,
+    }
+
+
+def _telegram_topics_payload(user: User) -> dict[str, object]:
+    chat_id = user.telegram_topics_chat_id or ""
+    return {
+        "enabled": user.telegram_topics_enabled,
+        "chat_configured": bool(chat_id),
+        "chat_id_masked": mask_secret(chat_id),
+        "auto_create": user.telegram_topics_auto_create,
+        "recreate_deleted": user.telegram_topics_recreate_deleted,
+        "fallback_to_main_chat": user.telegram_topics_fallback_to_main_chat,
+        "status": "not_verified",
+        "message": None,
     }
 
 
@@ -232,6 +259,7 @@ async def _settings_response(db: AsyncSession, user: User) -> dict[str, object]:
             "is_admin": user.is_admin,
         },
         "telegram": _telegram_payload(user),
+        "telegram_topics": _telegram_topics_payload(user),
         "cloudflare_worker": _cf_worker_payload(user),
         "can_edit_global_settings": user.is_admin,
     }
@@ -281,6 +309,61 @@ async def update_telegram_settings(
 
     await db.refresh(user)
     return {"telegram": _telegram_payload(user)}
+
+
+@router.get("/settings/telegram/topics")
+async def get_telegram_topics_settings(
+    user: User = Depends(require_api_user),
+):
+    return _telegram_topics_payload(user)
+
+
+@router.patch("/settings/telegram/topics", dependencies=[Depends(require_api_csrf)])
+async def update_telegram_topics_settings(
+    request: TelegramTopicsSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    if request.enabled is not None:
+        user.telegram_topics_enabled = request.enabled
+
+    if request.clear_chat_id:
+        user.telegram_topics_chat_id = None
+    elif request.chat_id is not None and request.chat_id.strip():
+        user.telegram_topics_chat_id = request.chat_id.strip()
+
+    if request.auto_create is not None:
+        user.telegram_topics_auto_create = request.auto_create
+    if request.recreate_deleted is not None:
+        user.telegram_topics_recreate_deleted = request.recreate_deleted
+    if request.fallback_to_main_chat is not None:
+        user.telegram_topics_fallback_to_main_chat = request.fallback_to_main_chat
+
+    await db.commit()
+    await db.refresh(user)
+    return _telegram_topics_payload(user)
+
+
+@router.post("/settings/telegram/topics/verify-group", dependencies=[Depends(require_api_csrf)])
+async def verify_telegram_topics_group(
+    request: TelegramTopicsVerifyRequest,
+    user: User = Depends(require_api_user),
+):
+    from app.telegram.bot import get_or_create_bot
+    from app.telegram.topic_service import verify_forum_group
+
+    token = user.telegram_bot_token or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="Telegram bot token is not configured")
+
+    chat_id = request.chat_id.strip() if request.chat_id is not None else (user.telegram_topics_chat_id or "")
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="Telegram topic group chat ID is not configured")
+
+    bot, _ = get_or_create_bot(token)
+    result = await verify_forum_group(bot, chat_id)
+    status_code = 200 if result.ok else 400
+    return JSONResponse(result.to_response(), status_code=status_code)
 
 
 @router.patch("/settings/cloudflare-worker", dependencies=[Depends(require_api_csrf)])

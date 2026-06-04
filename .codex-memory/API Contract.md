@@ -107,12 +107,18 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/settings` | JSON | session | Returns safe user payload, masked Telegram state, and admin-only global settings. Proxy values are masked/configured-only. |
 | `PATCH` | `/api/v1/settings/telegram` | JSON | session + CSRF | Write-only per-user Telegram token/chat ID update. Supports explicit clearing. Returns masked Telegram state only. |
+| `GET` | `/api/v1/settings/telegram/topics` | JSON | session | Returns per-user Telegram forum-topic settings. Topic routing is disabled by default; chat/thread identifiers are masked. |
+| `PATCH` | `/api/v1/settings/telegram/topics` | JSON | session + CSRF | Updates per-user topic settings: enabled flag, topic chat ID, auto-create, recreate-deleted, and fallback flag. Blank `chat_id` keeps the existing value unless `clear_chat_id` is true. |
+| `POST` | `/api/v1/settings/telegram/topics/verify-group` | JSON | session + CSRF | Verifies that the saved or supplied topic chat is a forum-enabled supergroup and that the bot is admin with Manage Topics permission. Returns safe structured codes only. |
 | `PATCH` | `/api/v1/settings/cloudflare-worker` | JSON | session + CSRF | Updates the current user's CF Worker URL, block threshold, recovery minutes, and routing mode. Accepts `cf_worker_mode` values `auto`, `direct`, and `worker`; `worker` requires a configured Worker URL. |
 | `PATCH` | `/api/v1/settings/scraper` | JSON | admin + CSRF | Updates admin/global scraper defaults such as sessions, rate limit, intervals, peak hours, and write-only/masked proxies; applies runtime settings. |
 | `GET` | `/api/v1/telegram/status` | JSON | session | Returns masked/configured Telegram state and whether the current user's bot is running. |
 | `POST` | `/api/v1/telegram/start` | JSON | session + CSRF | Starts the current user's saved Telegram bot token without returning the token. |
 | `POST` | `/api/v1/telegram/stop` | JSON | session + CSRF | Stops the current user's Telegram bot without returning the token. Successful stops return masked state. Stop timeout/incomplete cases return safe `ok: false`, `code`, and `detail` while leaving `bot_running: true`. |
 | `POST` | `/api/v1/telegram/test` | JSON | session + CSRF | Sends a test message using saved per-user credentials; failures return safe structured `code` and `detail` fields without exposing token/chat values. |
+| `GET` | `/api/v1/monitors/{monitor_id}/telegram-topic` | JSON | session | Returns the current user's monitor topic mapping summary, if any. User-scoped; masked thread identifiers only. |
+| `POST` | `/api/v1/monitors/{monitor_id}/telegram-topic/ensure` | JSON | session + CSRF | Ensures a forum topic mapping for a user-owned monitor when topic routing is enabled. Creates topics only when configured to auto-create. |
+| `POST` | `/api/v1/monitors/{monitor_id}/telegram-topic/test` | JSON | session + CSRF | Sends a safe test message to the monitor's mapped topic after ensuring it exists. |
 
 Telegram API error codes currently used by the frontend:
 
@@ -128,9 +134,29 @@ Telegram API error codes currently used by the frontend:
 - `stop_timeout`
 - `stop_incomplete`
 
+Telegram forum topic codes added for backend/frontend readiness:
+
+- `ok`
+- `chat_id_missing`
+- `chat_not_found`
+- `not_forum_group`
+- `bot_not_member`
+- `bot_not_admin`
+- `missing_manage_topics`
+- `chat_unreachable`
+- `message_thread_not_found`
+- `topic_closed`
+- `telegram_rate_limited`
+- `telegram_api_error`
+- `topics_disabled`
+- `topic_chat_missing`
+- `auto_create_disabled`
+- `topic_creation_in_progress`
+
 Current settings ownership:
 
 - Telegram token/chat ID: per-user `User` columns; UI masks saved values.
+- Telegram forum topic settings: per-user `User` columns, disabled by default. Topic mappings are stored in `monitor_telegram_topics` with user, monitor, chat, thread, topic name, status, error, and verification timestamps.
 - CF Worker URL, block threshold, recovery minutes, and routing mode: per-user `User` columns.
 - Scraper defaults: global admin `AppSettings` for proxies, sessions per domain, rate limit, check interval, off-peak/night multipliers, peak hours.
 - Runtime settings apply to scraper client and scheduler where implemented.

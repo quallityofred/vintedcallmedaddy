@@ -83,6 +83,7 @@ async def send_item_notification(
     item: VintedItem,
     *,
     monitor_name: str | None = None,
+    message_thread_id: int | None = None,
 ) -> None:
     from aiogram.exceptions import TelegramRetryAfter
 
@@ -92,6 +93,7 @@ async def send_item_notification(
 
     for _attempt in range(3):
         try:
+            thread_kwargs = {"message_thread_id": message_thread_id} if message_thread_id is not None else {}
             if item.photo_url:
                 await bot.send_photo(
                     chat_id=chat_id,
@@ -99,6 +101,7 @@ async def send_item_notification(
                     caption=caption,
                     parse_mode="HTML",
                     reply_markup=keyboard,
+                    **thread_kwargs,
                 )
             else:
                 await bot.send_message(
@@ -107,6 +110,7 @@ async def send_item_notification(
                     parse_mode="HTML",
                     reply_markup=keyboard,
                     disable_web_page_preview=False,
+                    **thread_kwargs,
                 )
             await asyncio.sleep(0.3)
             return
@@ -122,11 +126,11 @@ async def send_item_notification(
 
 
 async def send_batch(
-    bot: Bot, chat_id: int, items: list[VintedItem]
+    bot: Bot, chat_id: int, items: list[VintedItem], *, message_thread_id: int | None = None
 ) -> None:
     if not items:
         return
 
     for item in items:
-        await send_item_notification(bot, chat_id, item)
+        await send_item_notification(bot, chat_id, item, message_thread_id=message_thread_id)
         await asyncio.sleep(0.5)
