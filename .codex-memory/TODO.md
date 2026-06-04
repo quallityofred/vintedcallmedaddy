@@ -50,11 +50,13 @@ tags:
 - 2026-06-03: [[Issues/ISS-FE-007 Protected frontend routes visible while unauthenticated|ISS-FE-007]] fixed with client-side auth guards for `/dashboard`, `/settings`, and `/admin`.
 - 2026-06-03: [[Issues/ISS-API-004 Legacy placeholder route modules remained after API-first migration|ISS-API-004]] fixed by removing obsolete legacy router modules and updating route-table/audit tests.
 - 2026-06-03: [[Issues/ISS-FE-008 Frontend UI polish incomplete|ISS-FE-008]] fixed with standardized async states, accessible actions, improved dashboard/settings/admin layouts, and product-ready copy.
+- 2026-06-04: [[Issues/ISS-FE-009 Dashboard monitor table overflow|ISS-FE-009]] fixed by moving full monitor management to protected `/monitors` and replacing the dashboard table with a compact monitor summary CTA.
 - Follow up: after Railway redeploy, verify backend `/`, `/health`, `/api/health`, frontend login/register redirects, and unauthenticated protected-route redirects from the public frontend domain.
 
 ## Frontend Polish Follow-up
 
 - After Railway redeploy, verify `/dashboard`, `/settings`, and `/admin` at mobile width and desktop width.
+- After Railway redeploy, verify `/dashboard` no longer shows the full monitor table and `/monitors` supports create/edit/pause/resume/check-now/delete/bulk-delete with real user data.
 - Consider extracting a typed frontend API client to reduce duplicated CSRF/fetch/error handling across components.
 
 ## Graph Metadata Validation

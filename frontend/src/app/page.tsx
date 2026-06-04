@@ -5,7 +5,6 @@ import { ArrowRight, Bell, Database, Gauge, Radar, ShieldCheck, Sparkles } from 
 
 import { AnimatedSection } from "@/components/animated-section";
 import { DashboardCard } from "@/components/dashboard-card";
-import { MonitorPreview } from "@/components/monitor-preview";
 import { SectionHeading } from "@/components/section-heading";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -116,8 +115,12 @@ export default function Home() {
             description="Review monitor health, recent findings, and notification readiness from one responsive interface."
           />
         </AnimatedSection>
-        <AnimatedSection delay={0.08} className="mb-8">
-          <MonitorPreview />
+        <AnimatedSection delay={0.08} className="glass-panel mb-8 rounded-3xl p-6 sm:p-8">
+          <div className="grid gap-4 md:grid-cols-3">
+            <DashboardCard title="Monitor health" value="Track active and paused searches from the dashboard." icon={Radar} compact />
+            <DashboardCard title="Item discovery" value="Review newly found items without opening each monitor." icon={Bell} compact />
+            <DashboardCard title="Safe controls" value="Manage full monitor actions from the protected monitors page." icon={ShieldCheck} compact />
+          </div>
         </AnimatedSection>
         <AnimatedSection delay={0.12} className="grid gap-4 md:grid-cols-3">
           {principles.map((principle) => (

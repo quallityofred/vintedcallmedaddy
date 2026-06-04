@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { KeyRound, Loader2, Send, ShieldCheck, Globe, Cog } from "lucide-react";
+import { KeyRound, Loader2, Send, Globe, Cog } from "lucide-react";
 import { toast } from "sonner";
 
 import { AnimatedSection } from "@/components/animated-section";
@@ -20,13 +20,6 @@ interface TelegramStatus {
   chat_id_masked: string;
 }
 
-interface UserCfSettings {
-  url: string;
-  configured: boolean;
-  block_threshold: number;
-  recovery_minutes: number;
-}
-
 export default function SettingsPage() {
   return (
     <AuthGuard>
@@ -38,7 +31,6 @@ export default function SettingsPage() {
 function SettingsContent() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<TelegramStatus | null>(null);
-  const [userCfSettings, setUserCfSettings] = useState<UserCfSettings | null>(null);
   const [token, setToken] = useState("");
   const [chatId, setChatId] = useState("");
   const [saving, setSaving] = useState(false);
@@ -59,7 +51,6 @@ function SettingsContent() {
       if (response.ok) {
         const data = await response.json();
         setStatus(data.telegram);
-        setUserCfSettings(data.cloudflare_worker || null);
         if (data.cloudflare_worker) {
             setCfUrl(data.cloudflare_worker.url || "");
             setCfBlock(data.cloudflare_worker.block_threshold?.toString() || "");
@@ -74,6 +65,7 @@ function SettingsContent() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchSettings();
   }, [fetchSettings]);
 

@@ -3,7 +3,7 @@ import { AuthGuard } from "@/components/auth-guard";
 import { BackendHealthCard } from "@/components/backend-health-card";
 import { SystemStatusCard } from "@/components/system-status";
 import { DashboardStats } from "@/components/dashboard-stats";
-import { MonitorPreview } from "@/components/monitor-preview";
+import { MonitorsSummaryCard } from "@/components/monitors-summary-card";
 import { FoundItemsList } from "@/components/found-items-list";
 import { PageShell } from "@/components/page-shell";
 
@@ -25,7 +25,7 @@ export default function DashboardPage() {
         </AnimatedSection>
 
         <AnimatedSection delay={0.08}>
-          <MonitorPreview />
+          <MonitorsSummaryCard />
         </AnimatedSection>
 
         <AnimatedSection delay={0.10}>

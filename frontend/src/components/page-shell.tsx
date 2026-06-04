@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LayoutDashboard, LogIn, LogOut, Radar, Settings, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, LogIn, LogOut, Radar, Settings, ShieldCheck, SlidersHorizontal } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -45,6 +45,7 @@ export function PageShell({ eyebrow, title, description, children }: {
     { href: "/", label: "Landing", icon: Radar },
     ...(user ? [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/monitors", label: "Monitors", icon: SlidersHorizontal },
       { href: "/settings", label: "Settings", icon: Settings },
       ...(user.is_admin ? [{ href: "/admin", label: "Admin", icon: ShieldCheck }] : []),
     ] : [
