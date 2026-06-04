@@ -5,6 +5,7 @@ import json
 
 from app.main import app
 from app.models import Monitor, User
+from app.scraper.url_parser import extract_domains_from_url, parse_vinted_url
 from app.web.dependencies import get_db
 
 
@@ -39,6 +40,29 @@ async def test_list_monitors_unauthenticated(db_session):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/monitors")
         assert response.status_code == 401
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_supported_domains_returns_unique_representatives(db_session):
+    _override_db(db_session)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/monitors/domains")
+
+    assert response.status_code == 200
+    data = response.json()
+    domains = [item["domain"] for item in data]
+    assert domains
+    assert len(domains) == len(set(domains))
+    assert "vinted.fr" in domains
+    assert "vinted.de" in domains
+    assert "vinted.pl" in domains
+    assert "vinted.cz" not in domains
+    assert "vinted.sk" not in domains
+    assert all(item["host"].startswith("www.") for item in data)
+    assert all("label" in item for item in data)
+
     app.dependency_overrides.clear()
 
 
@@ -109,6 +133,142 @@ async def test_create_monitor_success(db_session):
         assert data["is_active"] is True
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_create_monitor_rejects_empty_domains(db_session):
+    await _create_user(db_session, "mon_empty_domains")
+    _override_db(db_session)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "mon_empty_domains")
+        response = await client.post(
+            "/api/v1/monitors",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "name": "Empty Domains",
+                "url": "https://www.vinted.fr/catalog?search_text=nike",
+                "domains": [],
+            },
+        )
+
+    assert response.status_code == 400
+    assert "target domain" in response.json()["detail"].lower()
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_create_monitor_rejects_unknown_domain(db_session):
+    await _create_user(db_session, "mon_unknown_domain")
+    _override_db(db_session)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "mon_unknown_domain")
+        response = await client.post(
+            "/api/v1/monitors",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "name": "Unknown Domain",
+                "url": "https://www.vinted.fr/catalog?search_text=nike",
+                "domains": ["vinted.example"],
+            },
+        )
+
+    assert response.status_code == 400
+    assert "unsupported target domain" in response.json()["detail"].lower()
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_create_monitor_alias_url_normalizes_to_representative(db_session):
+    user = await _create_user(db_session, "mon_alias_url")
+    _override_db(db_session)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "mon_alias_url")
+        response = await client.post(
+            "/api/v1/monitors",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "name": "Alias URL",
+                "url": "https://www.vinted.cz/catalog?search_text=nike",
+                "interval_sec": 120,
+            },
+        )
+
+    assert response.status_code == 200
+    monitor = await db_session.get(Monitor, response.json()["id"])
+    assert monitor is not None
+    assert monitor.user_id == user.id
+    assert json.loads(monitor.domains_json) == ["vinted.pl"]
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_monitor_validates_domains(db_session):
+    user = await _create_user(db_session, "mon_update_domains")
+    _override_db(db_session)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Update Domains",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json=json.dumps(["vinted.fr"]),
+        is_active=True,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "mon_update_domains")
+        empty_response = await client.patch(
+            f"/api/v1/monitors/{monitor.id}",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"domains": []},
+        )
+        unknown_response = await client.patch(
+            f"/api/v1/monitors/{monitor.id}",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"domains": ["vinted.cz"]},
+        )
+        valid_response = await client.patch(
+            f"/api/v1/monitors/{monitor.id}",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"domains": ["www.vinted.de", "vinted.fr", "vinted.fr"]},
+        )
+
+    assert empty_response.status_code == 400
+    assert unknown_response.status_code == 400
+    assert valid_response.status_code == 200
+    await db_session.refresh(monitor)
+    assert json.loads(monitor.domains_json) == ["vinted.de", "vinted.fr"]
+    app.dependency_overrides.clear()
+
+
+def test_parse_vinted_url_removes_unstable_params_and_preserves_stable_params():
+    params = parse_vinted_url(
+        "https://www.vinted.pl/catalog?"
+        "catalog[]=1231&brand_ids[]=324572&page=1&time=1780516803&"
+        "search_id=abc&utm_source=test&order=newest_first"
+    )
+
+    assert params["catalog[]"] == [1231]
+    assert params["brand_ids[]"] == [324572]
+    assert params["order"] == "newest_first"
+    assert "page" not in params
+    assert "time" not in params
+    assert "search_id" not in params
+    assert "utm_source" not in params
+
+
+def test_extract_domains_from_url_resolves_alias_to_representative():
+    assert extract_domains_from_url("https://www.vinted.sk/catalog?search_text=nike") == ["vinted.pl"]
 
 
 @pytest.mark.asyncio

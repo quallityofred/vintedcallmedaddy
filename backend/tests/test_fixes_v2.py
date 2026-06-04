@@ -87,6 +87,94 @@ async def test_cross_user_notifications(db_session):
     found_result = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 456, FoundItem.notified == False))
     assert len(found_result.scalars().all()) == 2
 
+
+@pytest.mark.asyncio
+async def test_cross_domain_duplicate_item_ids_are_processed_once(db_session):
+    """Only new stable item IDs should be processed when selected domains overlap."""
+    user = User(username="cross_domain_user", telegram_bot_token="t", telegram_chat_id="c")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Cross Domain",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json='["vinted.fr", "vinted.de"]',
+        last_check_at=datetime.now(timezone.utc),
+        items_found_count=0,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    duplicate_fr = VintedItem(
+        id=1001,
+        title="Duplicate",
+        price=10.0,
+        currency="EUR",
+        brand="Nike",
+        size="M",
+        condition="New",
+        photo_url="p",
+        item_url="https://www.vinted.fr/items/1001",
+        domain="vinted.fr",
+        seller_id=1,
+    )
+    duplicate_de = VintedItem(
+        id=1001,
+        title="Duplicate",
+        price=10.0,
+        currency="EUR",
+        brand="Nike",
+        size="M",
+        condition="New",
+        photo_url="p",
+        item_url="https://www.vinted.de/items/1001",
+        domain="vinted.de",
+        seller_id=1,
+    )
+    unique_de = VintedItem(
+        id=1002,
+        title="New on DE",
+        price=12.0,
+        currency="EUR",
+        brand="Nike",
+        size="M",
+        condition="New",
+        photo_url="p",
+        item_url="https://www.vinted.de/items/1002",
+        domain="vinted.de",
+        seller_id=2,
+    )
+
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(return_value=[duplicate_fr, duplicate_de, unique_de])
+    mock_client.close = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()):
+        await check_monitor(monitor.id, scraper_client=mock_client)
+
+    seen_result = await db_session.execute(
+        select(SeenItem).where(SeenItem.user_id == user.id).order_by(SeenItem.vinted_item_id)
+    )
+    seen_items = seen_result.scalars().all()
+    assert [item.vinted_item_id for item in seen_items] == [1001, 1002]
+
+    found_result = await db_session.execute(
+        select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id)
+    )
+    found_items = found_result.scalars().all()
+    assert [(item.vinted_item_id, item.domain) for item in found_items] == [
+        (1001, "vinted.fr"),
+        (1002, "vinted.de"),
+    ]
+    assert all(item.notified is False for item in found_items)
+
+
 @pytest.mark.asyncio
 async def test_cold_start_on_restart(db_session):
     """Verify that after clean_startup_reset, the first check doesn't notify."""

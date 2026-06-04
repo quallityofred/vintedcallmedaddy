@@ -12,7 +12,7 @@ tags:
   - component/frontend
   - component/backend
 created: 2026-06-03
-updated: 2026-06-03
+updated: 2026-06-04
 ---
 
 # API Contract
@@ -90,6 +90,7 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 
 | Method | Path | Type | Auth | Notes |
 | --- | --- | --- | --- | --- |
+| `GET` | `/api/v1/monitors/domains` | JSON | public | Returns unique user-selectable Vinted marketplace representatives plus alias metadata. Aliases are not selectable monitor targets. |
 | `GET` | `/api/v1/monitors` | JSON | session | User-scoped monitor list. |
 | `POST` | `/api/v1/monitors` | JSON | session + CSRF | Creates user-scoped monitor and schedules job. |
 | `GET` | `/api/v1/monitors/{monitor_id}` | JSON | session | User-scoped monitor detail. |
@@ -186,6 +187,16 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - POST /api/v1/monitors/{id}/pause
 - POST /api/v1/monitors/{id}/resume
 - POST /api/v1/monitors/{id}/check-now
+
+## [2026-06-04] Update: Unique Vinted domain registry
+
+- Fixed `GET /api/v1/monitors/domains` so it returns 200 instead of a backend 500.
+- The endpoint now returns only curated representative marketplaces: `vinted.fr`, `vinted.de`, `vinted.pl`, `vinted.es`, `vinted.it`, `vinted.nl`, `vinted.pt`, and `vinted.co.uk`.
+- Alias examples are exposed as metadata only, not user-selectable targets: `vinted.cz`, `vinted.sk`, `vinted.lt`, `vinted.hu`, `vinted.ro`, and `vinted.hr` map to `vinted.pl`; `vinted.at` maps to `vinted.de`; `vinted.ie` maps to `vinted.co.uk`; `vinted.be` and `vinted.lu` map to `vinted.fr`.
+- Monitor create/update validates selected domains against representatives and rejects empty or unknown selections with clean `400` responses.
+- Pasted Vinted URLs from known aliases resolve to the representative marketplace when deriving domains.
+- URL parsing removes unstable `page`, `time`, `search_id`, and `utm_*` params while preserving stable catalog/brand/order filters.
+- Scheduler processing now dedupes scraper results by stable Vinted item ID before DB inserts, protecting cross-domain notification behavior even if a scraper returns duplicate IDs.
 
 
 ## [2026-06-03] Update: Found Items and Hidden Sellers APIs implemented.

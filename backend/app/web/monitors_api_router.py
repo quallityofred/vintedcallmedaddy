@@ -11,7 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Monitor, User
-from app.scraper.domains import VINTED_DOMAINS
+from app.scraper.domains import (
+    get_unique_vinted_marketplaces,
+    validate_selected_domains,
+)
 from app.scraper.url_parser import extract_domains_from_url, parse_vinted_url
 from app.web.auth import get_current_user
 from app.web.csrf import require_csrf
@@ -86,8 +89,8 @@ async def list_monitors(
 
 @router.get("/domains")
 async def list_supported_domains():
-    """List all supported Vinted domains."""
-    return [{"domain": d, "flag": get_flag(d)} for d in VINTED_DOMAINS]
+    """List user-selectable unique Vinted marketplace representatives."""
+    return get_unique_vinted_marketplaces()
 
 
 @router.get("/{monitor_id}", response_model=MonitorResponse)
@@ -114,16 +117,13 @@ async def create_monitor(
     user: User = Depends(require_api_user),
 ):
     """Create a new monitor."""
-    domains = data.domains
-    if not domains:
-        domains = extract_domains_from_url(data.url)
-        if not domains:
-            domains = list(VINTED_DOMAINS.keys())
-
-    # Validate domains
-    domains = [d for d in domains if d in VINTED_DOMAINS]
-    if not domains:
-        raise HTTPException(status_code=422, detail="At least one valid domain is required")
+    try:
+        if data.domains is None:
+            domains = validate_selected_domains(extract_domains_from_url(data.url))
+        else:
+            domains = validate_selected_domains(data.domains)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         params = parse_vinted_url(data.url)
@@ -194,9 +194,10 @@ async def update_monitor(
         monitor.is_active = data.is_active
 
     if data.domains is not None:
-        valid_domains = [d for d in data.domains if d in VINTED_DOMAINS]
-        if valid_domains:
-            monitor.domains_json = json.dumps(valid_domains)
+        try:
+            monitor.domains_json = json.dumps(validate_selected_domains(data.domains))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     await db.commit()
     await db.refresh(monitor)

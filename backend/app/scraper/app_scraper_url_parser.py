@@ -10,10 +10,13 @@ from __future__ import annotations
 import logging
 from urllib.parse import parse_qs, urlparse
 
+from app.scraper.domains import normalize_vinted_host, resolve_vinted_host_to_representative
+
 logger = logging.getLogger(__name__)
 
 # Vinted API parameter names that carry array values
 _ARRAY_PARAMS = {
+    "catalog[]",
     "brand_ids[]",
     "catalog_ids[]",
     "size_ids[]",
@@ -82,8 +85,8 @@ def parse_vinted_url(url: str) -> dict:
         elif key in _SCALAR_PARAMS:
             params[key] = values[0] if values else ""
 
-        elif key in {"page", "time", "search_id"}:
-            # Ignore junk parameters
+        elif key in {"page", "time", "search_id"} or key.startswith("utm_"):
+            # Ignore unstable pagination/session/tracking parameters.
             pass
 
         else:
@@ -106,11 +109,13 @@ def extract_domains_from_url(url: str) -> list[str]:
     """
     try:
         parsed = urlparse(url)
-        host = parsed.hostname or ""
-        # Strip leading "www."
-        domain = host.removeprefix("www.")
-        if domain:
-            return [domain]
+        host = parsed.hostname or normalize_vinted_host(url)
+        representative = resolve_vinted_host_to_representative(host)
+        if representative:
+            return [representative]
+        normalized = normalize_vinted_host(host)
+        if normalized:
+            return [normalized]
     except Exception:
         pass
     return []

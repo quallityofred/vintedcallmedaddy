@@ -231,7 +231,7 @@ export function MonitorPreview() {
   const hasMonitors = monitors && monitors.length > 0;
 
   return (
-    <Card className="glass-panel overflow-hidden">
+    <Card className="glass-panel min-w-0 overflow-hidden">
       <CardHeader className="border-b border-white/10 p-4 sm:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-1">
@@ -345,7 +345,7 @@ export function MonitorPreview() {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="p-3 sm:p-5">
+      <CardContent className="min-w-0 p-3 sm:p-5">
         {loading ? (
             <div className="flex h-36 items-center justify-center rounded-2xl border border-white/10 bg-black/10">
                 <Loader2 className="size-5 animate-spin text-emerald-200" />
@@ -368,8 +368,8 @@ export function MonitorPreview() {
             </Button>
           </div>
         ) : (
-            <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/10">
-                <div className="overflow-x-auto">
+          <div className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-black/10">
+          <div className="max-w-full overflow-x-auto">
                     <Table className="min-w-[760px]">
                         <TableHeader>
                             <TableRow>

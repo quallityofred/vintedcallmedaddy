@@ -247,6 +247,34 @@ test("dashboard and monitors stay within the mobile viewport", async ({ page }) 
   await expect(page.locator("html")).toHaveJSProperty("scrollWidth", 390);
 });
 
+test("monitor domain selection shows a clean error when domains fail", async ({ page }) => {
+  await page.route("**/api/v1/auth/me*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ user: { id: 1, username: "user", is_admin: false } }),
+    });
+  });
+  await page.route("**/api/v1/monitors", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    });
+  });
+  await page.route("**/api/v1/monitors/domains", async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Internal server error" }),
+    });
+  });
+
+  await page.goto("/monitors");
+  await page.getByRole("button", { name: /New monitor/i }).click();
+  await expect(page.getByText("Target domains could not be loaded.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByText("Target Domains (0 / 0)")).toHaveCount(0);
+});
+
 test("login page posts credentials and shows safe API errors", async ({ page }) => {
   await page.route("**/api/v1/auth/csrf", async (route) => {
     await route.fulfill({

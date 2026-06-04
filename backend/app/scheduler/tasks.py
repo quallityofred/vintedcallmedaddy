@@ -164,8 +164,15 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					if monitor is None or not monitor.is_active:
 						return
 
-					# Items are available here, now process them
-					filtered_items = [i for i in items if i.seller_id not in hidden_seller_ids]
+					# Items are available here, now process them.
+					# Keep the first copy of a Vinted item ID across selected domains.
+					filtered_items: list[VintedItem] = []
+					seen_item_ids: set[int] = set()
+					for item in items:
+						if item.seller_id in hidden_seller_ids or item.id in seen_item_ids:
+							continue
+						seen_item_ids.add(item.id)
+						filtered_items.append(item)
 
 					logger.debug(f"Filtered {len(items)} items down to {len(filtered_items)} based on hidden sellers")
 					new_items_to_notify: list[VintedItem] = []
