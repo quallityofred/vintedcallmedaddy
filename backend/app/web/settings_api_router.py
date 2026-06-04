@@ -302,9 +302,12 @@ async def update_cloudflare_worker_settings(
 
     if request.cf_worker_mode is not None:
         user.cf_worker_mode = request.cf_worker_mode
+        logger.info(f"DEBUG: Setting cf_worker_mode to {user.cf_worker_mode} for user {user.id}")
 
+    db.add(user)
     await db.commit()
     await db.refresh(user)
+    logger.info(f"DEBUG: cf_worker_mode after commit/refresh: {user.cf_worker_mode}")
     return {"cloudflare_worker": {
         "url": user.cf_worker_url,
         "configured": bool(user.cf_worker_url),
