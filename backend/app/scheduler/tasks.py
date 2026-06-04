@@ -160,6 +160,7 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                     if user and user.cf_worker_url:
                         cf_fallback = CloudflareFallback(
                             worker_url=user.cf_worker_url,
+                            mode=user.cf_worker_mode,
                             block_threshold=user.cf_worker_block_threshold,
                             recovery_minutes=user.cf_worker_recovery_minutes,
                         )
@@ -169,9 +170,10 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                         per=60.0,
                     )
                     client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
-
+                
+                mode = user.cf_worker_mode if user else "auto"
                 try:
-                    items = await client.search_all_domains(params, domains)
+                    items = await client.search_all_domains(params, domains, mode=mode)
                 finally:
                     if owns_client:
                         await client.close()

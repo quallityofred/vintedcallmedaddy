@@ -35,10 +35,12 @@ class CloudflareFallback:
     def __init__(
         self,
         worker_url: str,
+        mode: str = "auto",
         block_threshold: int = 2,
         recovery_minutes: int = 10,
     ) -> None:
         self.worker_url = worker_url.rstrip("/") if worker_url else ""
+        self.mode = mode
         self.block_threshold = block_threshold
         self.recovery_minutes = recovery_minutes
         self._block_counts: dict[str, int] = {}
@@ -50,6 +52,12 @@ class CloudflareFallback:
         return bool(self.worker_url)
 
     def should_use_cf(self, domain: str) -> bool:
+        if self.mode == "direct":
+            return False
+        if self.mode == "worker":
+            return self.is_configured
+        
+        # Default/Auto mode
         if not self.is_configured:
             return False
         if self._using_cf.get(domain, False):
@@ -180,10 +188,12 @@ class VintedClient:
             logger.exception("CF Worker request failed for domain=%s", domain)
             return []
 
-    async def search(self, domain: str, params: dict) -> list[VintedItem]:
-        if self.cf_fallback and self.cf_fallback.should_use_cf(domain):
-            logger.info("Using CF Worker for domain=%s", domain)
-            return await self._search_via_cf(domain, params)
+    async def search(self, domain: str, params: dict, mode: str = "auto") -> list[VintedItem]:
+        if self.cf_fallback:
+            self.cf_fallback.mode = mode
+            if self.cf_fallback.should_use_cf(domain):
+                logger.info("Using CF Worker for domain=%s (mode=%s)", domain, mode)
+                return await self._search_via_cf(domain, params)
 
         await self.rate_limiter.acquire(domain)
         await self._warmup_session(domain)
@@ -245,11 +255,11 @@ class VintedClient:
             return []
 
     async def _search_domain_with_semaphore(
-        self, domain: str, params: dict
+        self, domain: str, params: dict, mode: str = "auto"
     ) -> list[VintedItem]:
         async with _domain_semaphore:
             try:
-                items = await self.search(domain, params)
+                items = await self.search(domain, params, mode=mode)
                 await asyncio.sleep(random.uniform(DOMAIN_DELAY_MIN, DOMAIN_DELAY_MAX))
                 return items
             except Exception:
@@ -257,13 +267,13 @@ class VintedClient:
                 return []
 
     async def search_all_domains(
-        self, params: dict, domains: list[str]
+        self, params: dict, domains: list[str], mode: str = "auto"
     ) -> list[VintedItem]:
         shuffled = list(domains)
         random.shuffle(shuffled)
 
         tasks = [
-            self._search_domain_with_semaphore(domain, params)
+            self._search_domain_with_semaphore(domain, params, mode=mode)
             for domain in shuffled
         ]
         results = await asyncio.gather(*tasks)
