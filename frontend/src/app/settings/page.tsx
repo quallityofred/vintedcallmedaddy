@@ -11,6 +11,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { 
+    Select, 
+    SelectContent, 
+    SelectItem, 
+    SelectTrigger, 
+    SelectValue 
+} from "@/components/ui/select";
 
 interface TelegramStatus {
   token_configured: boolean;
@@ -52,6 +59,7 @@ function SettingsContent() {
   const [cfUrl, setCfUrl] = useState("");
   const [cfBlock, setCfBlock] = useState("");
   const [cfRecovery, setCfRecovery] = useState("");
+  const [cfMode, setCfMode] = useState("auto");
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -148,6 +156,7 @@ function SettingsContent() {
           cf_worker_url: cfUrl,
           cf_worker_block_threshold: parseInt(cfBlock),
           cf_worker_recovery_minutes: parseInt(cfRecovery),
+          cf_worker_mode: cfMode,
         }),
       });
       if (!response.ok) throw new Error("Failed to update settings");
@@ -362,6 +371,24 @@ function SettingsContent() {
                   placeholder="https://worker.example.com"
                   value={cfUrl}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="cfMode">Routing Mode</Label>
+                <Select value={cfMode} onValueChange={(val) => val && setCfMode(val)}>
+                  <SelectTrigger id="cfMode">
+                    <SelectValue placeholder="Select mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto (Direct first, fallback to Worker)</SelectItem>
+                    <SelectItem value="direct">Direct only</SelectItem>
+                    <SelectItem value="worker">CF Worker only</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                    {cfMode === "auto" && "Uses direct first, falls back to Worker if blocked."}
+                    {cfMode === "direct" && "Never uses Worker."}
+                    {cfMode === "worker" && "Always uses Worker."}
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="cfBlock">Block threshold</Label>

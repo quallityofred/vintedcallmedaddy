@@ -42,6 +42,7 @@ class CloudflareWorkerUpdate(BaseModel):
     cf_worker_url: str | None = Field(default=None, max_length=2048)
     cf_worker_block_threshold: int | None = None
     cf_worker_recovery_minutes: int | None = None
+    cf_worker_mode: str | None = Field(default=None, pattern="^(auto|direct|worker)$")
 
 
 class ScraperSettingsUpdate(BaseModel):
@@ -217,6 +218,7 @@ async def _settings_response(db: AsyncSession, user: User) -> dict[str, object]:
             "configured": bool(user.cf_worker_url),
             "block_threshold": user.cf_worker_block_threshold,
             "recovery_minutes": user.cf_worker_recovery_minutes,
+            "mode": user.cf_worker_mode,
         },
         "can_edit_global_settings": user.is_admin,
     }
@@ -298,6 +300,9 @@ async def update_cloudflare_worker_settings(
             raise HTTPException(status_code=422, detail="Recovery minutes must be between 1 and 1440")
         user.cf_worker_recovery_minutes = request.cf_worker_recovery_minutes
 
+    if request.cf_worker_mode is not None:
+        user.cf_worker_mode = request.cf_worker_mode
+
     await db.commit()
     await db.refresh(user)
     return {"cloudflare_worker": {
@@ -305,6 +310,7 @@ async def update_cloudflare_worker_settings(
         "configured": bool(user.cf_worker_url),
         "block_threshold": user.cf_worker_block_threshold,
         "recovery_minutes": user.cf_worker_recovery_minutes,
+        "mode": user.cf_worker_mode,
     }}
 
 

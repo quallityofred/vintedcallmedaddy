@@ -29,6 +29,7 @@ class User(Base):
     cf_worker_block_threshold: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     cf_worker_recovery_minutes: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     is_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cf_worker_mode: Mapped[str] = mapped_column(String, default="auto", nullable=False)
     invite_code_id: Mapped[int | None] = mapped_column(ForeignKey("invite_codes.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 

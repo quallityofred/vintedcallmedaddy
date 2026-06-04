@@ -16,6 +16,7 @@ interface DebugData {
   last_check_completed_at: string | null;
   scheduler: { job_exists: boolean; next_run_time: string | null; job_id?: string };
   last_error: string | null;
+  cf_worker: { mode: string; configured: boolean; url_masked: string | null };
 }
 
 export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name: string }) {
@@ -39,6 +40,7 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
   useEffect(() => {
     if (!open) return;
     queueMicrotask(() => setLoading(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     fetchDebug();
     const interval = setInterval(fetchDebug, 3000);
     return () => clearInterval(interval);
@@ -73,6 +75,13 @@ export function MonitorDebugPanel({ monitorId, name }: { monitorId: number, name
             <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
                <p className="font-medium text-emerald-200">Scheduler Job</p>
                <p className="mt-1 text-muted-foreground">{data.scheduler.job_exists ? `Active (Next run: ${data.scheduler.next_run_time ? new Date(data.scheduler.next_run_time).toLocaleString() : 'unknown'})` : 'No active job'}</p>
+            </div>
+
+            <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
+               <p className="font-medium text-emerald-200">Cloudflare Worker</p>
+               <p className="mt-1 text-sm text-muted-foreground">Mode: {data.cf_worker.mode}</p>
+               <p className="text-sm text-muted-foreground">Configured: {data.cf_worker.configured ? 'Yes' : 'No'}</p>
+               {data.cf_worker.url_masked && <p className="text-xs text-muted-foreground mt-1">URL: {data.cf_worker.url_masked}</p>}
             </div>
 
             {data.last_error && (
