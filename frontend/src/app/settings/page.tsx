@@ -92,7 +92,7 @@ function SettingsContent() {
       try {
           const settings = await getTelegramTopicSettings();
           setTopicSettings(settings);
-          setTargetChatId(settings.telegram_topics_chat_id || "");
+          setTargetChatId(settings.chat_id || "");
       } catch {
           toast.error("Failed to load Telegram topic settings");
       }
@@ -104,11 +104,11 @@ function SettingsContent() {
       try {
           const csrfToken = await getCsrfToken();
           const settings = await patchTelegramTopicSettings({
-              telegram_topics_enabled: topicSettings?.telegram_topics_enabled,
-              telegram_topics_chat_id: targetChatId || undefined,
-              telegram_topics_auto_create: topicSettings?.telegram_topics_auto_create,
-              telegram_topics_recreate_deleted: topicSettings?.telegram_topics_recreate_deleted,
-              telegram_topics_fallback_to_main_chat: topicSettings?.telegram_topics_fallback_to_main_chat,
+              enabled: topicSettings?.enabled,
+              chat_id: targetChatId || undefined,
+              auto_create: topicSettings?.auto_create,
+              recreate_deleted: topicSettings?.recreate_deleted,
+              fallback_to_main_chat: topicSettings?.fallback_to_main_chat,
           }, csrfToken);
           setTopicSettings(settings);
           toast.success("Topic settings updated");
@@ -341,8 +341,8 @@ function SettingsContent() {
                     <div className="flex items-center space-x-2">
                         <Checkbox 
                             id="topicsEnabled" 
-                            checked={topicSettings.telegram_topics_enabled}
-                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_enabled: !!checked} : null)}
+                            checked={topicSettings.enabled}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, enabled: !!checked} : null)}
                         />
                         <Label htmlFor="topicsEnabled">Enable Telegram Topics</Label>
                     </div>
@@ -361,24 +361,24 @@ function SettingsContent() {
                     <div className="flex items-center space-x-2">
                         <Checkbox 
                             id="autoCreate" 
-                            checked={topicSettings.telegram_topics_auto_create}
-                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_auto_create: !!checked} : null)}
+                            checked={topicSettings.auto_create}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, auto_create: !!checked} : null)}
                         />
                         <Label htmlFor="autoCreate">Auto-create topics</Label>
                     </div>
                     <div className="flex items-center space-x-2">
                         <Checkbox 
                             id="recreateDeleted" 
-                            checked={topicSettings.telegram_topics_recreate_deleted}
-                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_recreate_deleted: !!checked} : null)}
+                            checked={topicSettings.recreate_deleted}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, recreate_deleted: !!checked} : null)}
                         />
                         <Label htmlFor="recreateDeleted">Recreate deleted topics</Label>
                     </div>
                     <div className="flex items-center space-x-2">
                         <Checkbox 
                             id="fallback" 
-                            checked={topicSettings.telegram_topics_fallback_to_main_chat}
-                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, telegram_topics_fallback_to_main_chat: !!checked} : null)}
+                            checked={topicSettings.fallback_to_main_chat}
+                            onCheckedChange={(checked) => setTopicSettings(prev => prev ? {...prev, fallback_to_main_chat: !!checked} : null)}
                         />
                         <Label htmlFor="fallback">Fallback to main chat</Label>
                     </div>

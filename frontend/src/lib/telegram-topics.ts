@@ -1,10 +1,10 @@
 
 export interface TelegramTopicSettings {
-  telegram_topics_enabled: boolean;
-  telegram_topics_chat_id: string;
-  telegram_topics_auto_create: boolean;
-  telegram_topics_recreate_deleted: boolean;
-  telegram_topics_fallback_to_main_chat: boolean;
+  enabled: boolean;
+  chat_id?: string;
+  auto_create: boolean;
+  recreate_deleted: boolean;
+  fallback_to_main_chat: boolean;
 }
 
 export interface MonitorTopicStatus {
