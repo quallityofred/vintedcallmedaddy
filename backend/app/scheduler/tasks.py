@@ -159,20 +159,15 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 
 			items = items or []
 
-			if not items:
-				async with _new_session() as db:
-					result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-					monitor = result.scalar_one_or_none()
-					if monitor and monitor.is_active:
-						await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
-						await db.commit()
-			else:
-				async with _new_session() as db:
-					result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-					monitor = result.scalar_one_or_none()
-					if monitor is None or not monitor.is_active:
-						return
+			async with _new_session() as db:
+				result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+				monitor = result.scalar_one_or_none()
+				if monitor is None or not monitor.is_active:
+					return
 
+				if not items:
+					await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
+				else:
 					# Items are available here, now process them.
 					# Keep the first copy of a Vinted item ID across selected domains.
 					filtered_items: list[VintedItem] = []
@@ -262,11 +257,14 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 						count=len(new_items_to_notify),
 						original_interval=original_interval,
 					)
+					
+
+					if new_items_to_notify:
+						asyncio.create_task(process_pending_notifications())
+
 					monitor.last_check_at = datetime.now(timezone.utc)
 					await db.commit()
 
-				if new_items_to_notify:
-					asyncio.create_task(process_pending_notifications())
 	except Exception as e:
 		logger.error(f"Error in check_monitor {monitor_id}: {e}")
 		raise
