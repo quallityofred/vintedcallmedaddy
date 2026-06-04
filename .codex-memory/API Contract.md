@@ -112,7 +112,19 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | `GET` | `/api/v1/telegram/status` | JSON | session | Returns masked/configured Telegram state and whether the current user's bot is running. |
 | `POST` | `/api/v1/telegram/start` | JSON | session + CSRF | Starts the current user's saved Telegram bot token without returning the token. |
 | `POST` | `/api/v1/telegram/stop` | JSON | session + CSRF | Stops the current user's Telegram bot without returning the token. |
-| `POST` | `/api/v1/telegram/test` | JSON | session + CSRF | Sends a test message using saved per-user credentials; failures return a generic safe message. |
+| `POST` | `/api/v1/telegram/test` | JSON | session + CSRF | Sends a test message using saved per-user credentials; failures return safe structured `code` and `detail` fields without exposing token/chat values. |
+
+Telegram test error codes currently used by the frontend:
+
+- `telegram_credentials_missing`
+- `telegram_invalid_token`
+- `telegram_invalid_chat_id`
+- `telegram_chat_not_found`
+- `telegram_bot_blocked`
+- `telegram_bot_busy`
+- `telegram_unavailable`
+- `telegram_rate_limited`
+- `telegram_test_failed`
 
 Current settings ownership:
 
@@ -197,6 +209,12 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - Pasted Vinted URLs from known aliases resolve to the representative marketplace when deriving domains.
 - URL parsing removes unstable `page`, `time`, `search_id`, and `utm_*` params while preserving stable catalog/brand/order filters.
 - Scheduler processing now dedupes scraper results by stable Vinted item ID before DB inserts, protecting cross-domain notification behavior even if a scraper returns duplicate IDs.
+
+## [2026-06-04] Update: Telegram test error contract
+
+- `POST /api/v1/telegram/test` now classifies common Telegram setup/runtime failures into safe user-facing errors instead of returning one vague `502`.
+- Missing credentials, invalid token, invalid chat ID, chat-not-found, blocked bot, bot busy/polling conflict, upstream timeout/unavailable, rate limit, and unknown failures are covered.
+- Responses include only safe `code` and `detail` fields plus `ok: false`; token/chat values and raw upstream payloads are not returned.
 
 
 ## [2026-06-03] Update: Found Items and Hidden Sellers APIs implemented.

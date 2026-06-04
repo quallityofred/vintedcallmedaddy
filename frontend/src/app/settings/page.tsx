@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { KeyRound, Loader2, Send, Globe, Cog } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Cog, Globe, KeyRound, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 
 import { AnimatedSection } from "@/components/animated-section";
@@ -20,6 +20,17 @@ interface TelegramStatus {
   chat_id_masked: string;
 }
 
+interface ApiErrorPayload {
+  detail?: string;
+  message?: string;
+  code?: string;
+}
+
+type Notice = {
+  type: "success" | "error" | "info";
+  text: string;
+};
+
 export default function SettingsPage() {
   return (
     <AuthGuard>
@@ -36,6 +47,7 @@ function SettingsContent() {
   const [saving, setSaving] = useState(false);
   const [savingCf, setSavingCf] = useState(false);
   const [actionInFlight, setActionInFlight] = useState<"start" | "stop" | "test" | null>(null);
+  const [telegramNotice, setTelegramNotice] = useState<Notice | null>(null);
   
   const [cfUrl, setCfUrl] = useState("");
   const [cfBlock, setCfBlock] = useState("");
@@ -79,8 +91,18 @@ function SettingsContent() {
     return csrf_token;
   };
 
+  const readApiMessage = async (response: Response, fallback: string) => {
+    try {
+      const data = (await response.json()) as ApiErrorPayload;
+      return data.detail || data.message || fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   const handleUpdateTelegram = async () => {
     setSaving(true);
+    setTelegramNotice(null);
     try {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/settings/telegram", {
@@ -95,13 +117,17 @@ function SettingsContent() {
           telegram_chat_id: chatId || undefined,
         }),
       });
-      if (!response.ok) throw new Error("Failed to update settings");
-      toast.success("Settings updated");
+      if (!response.ok) throw new Error(await readApiMessage(response, "Telegram credentials could not be saved"));
+      const message = "Telegram credentials saved. Saved values remain masked.";
+      toast.success(message);
+      setTelegramNotice({ type: "success", text: message });
       setToken("");
       setChatId("");
       void fetchSettings();
-    } catch {
-      toast.error("Failed to update settings");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Telegram credentials could not be saved";
+      toast.error(message);
+      setTelegramNotice({ type: "error", text: message });
     } finally {
       setSaving(false);
     }
@@ -136,6 +162,7 @@ function SettingsContent() {
 
   const handleAction = async (action: "start" | "stop" | "test") => {
     setActionInFlight(action);
+    setTelegramNotice(null);
     try {
       const csrfToken = await getCsrfToken();
       const response = await fetch(`/api/v1/telegram/${action}`, {
@@ -143,16 +170,33 @@ function SettingsContent() {
         credentials: "same-origin",
         headers: { "X-CSRF-Token": csrfToken },
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || `Failed to ${action} bot`);
-      toast.success(`Action ${action} successful`);
+      const data = (await response.json()) as ApiErrorPayload;
+      if (!response.ok) throw new Error(data.detail || data.message || `Failed to ${action} bot`);
+      const successMessage =
+        action === "test"
+          ? "Telegram test message sent."
+          : data.message || `Telegram bot ${action === "start" ? "started" : "stopped"}.`;
+      toast.success(successMessage);
+      setTelegramNotice({ type: "success", text: successMessage });
       void fetchSettings();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to ${action} bot`);
+      const message = err instanceof Error ? err.message : `Failed to ${action} bot`;
+      toast.error(message);
+      setTelegramNotice({ type: "error", text: message });
     } finally {
       setActionInFlight(null);
     }
   };
+
+  const tokenConfigured = Boolean(status?.token_configured);
+  const chatConfigured = Boolean(status?.chat_id_configured);
+  const telegramConfigured = tokenConfigured && chatConfigured;
+  const testDisabledReason = !tokenConfigured
+    ? "Add and save a bot token before sending a test message."
+    : !chatConfigured
+      ? "Add and save a chat ID before sending a test message."
+      : null;
+  const startDisabledReason = !tokenConfigured ? "Add and save a bot token before starting the bot." : null;
 
   return (
     <PageShell
@@ -177,6 +221,53 @@ function SettingsContent() {
               </div>
             ) : (
               <>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Bot token</p>
+                    <p className="mt-2 text-sm font-medium">
+                      {tokenConfigured ? status?.token_masked || "Configured" : "Not configured"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Chat ID</p>
+                    <p className="mt-2 text-sm font-medium">
+                      {chatConfigured ? status?.chat_id_masked || "Configured" : "Not configured"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Bot runtime</p>
+                    <p className="mt-2 inline-flex items-center gap-2 text-sm font-medium">
+                      {status?.bot_running ? (
+                        <>
+                          <CheckCircle2 className="size-4 text-emerald-200" />
+                          Running
+                        </>
+                      ) : (
+                        "Stopped"
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {telegramNotice ? (
+                  <div
+                    className={
+                      telegramNotice.type === "error"
+                        ? "rounded-2xl border border-red-300/20 bg-red-400/10 p-3 text-sm text-red-100"
+                        : "rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-50"
+                    }
+                  >
+                    <div className="flex gap-2">
+                      {telegramNotice.type === "error" ? (
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                      ) : (
+                        <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+                      )}
+                      <p>{telegramNotice.text}</p>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="token">Bot token</Label>
@@ -202,18 +293,26 @@ function SettingsContent() {
                     />
                   </div>
                 </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                  <p className="text-sm font-medium">Credential safety</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    Tokens and chat IDs are write-only in this form. After saving, only masked values are returned by
+                    the API and shown here.
+                  </p>
+                </div>
+
                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                   <Button className="sm:w-auto" disabled={saving} onClick={handleUpdateTelegram}>
                     {saving ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
                     {saving ? "Saving" : "Save credentials"}
                   </Button>
                   <Button
-                    disabled={actionInFlight !== null || !status?.token_configured || !status?.chat_id_configured}
+                    disabled={actionInFlight !== null || !telegramConfigured}
                     onClick={() => handleAction("test")}
                     variant="outline"
                   >
                     {actionInFlight === "test" ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-                    Send test
+                    {actionInFlight === "test" ? "Sending test" : "Send test"}
                   </Button>
                   {status?.bot_running ? (
                     <Button
@@ -222,18 +321,23 @@ function SettingsContent() {
                       variant="destructive"
                     >
                       {actionInFlight === "stop" ? <Loader2 className="size-4 animate-spin" /> : null}
-                      Stop bot
+                      {actionInFlight === "stop" ? "Stopping" : "Stop bot"}
                     </Button>
                   ) : (
                     <Button
-                      disabled={actionInFlight !== null || !status?.token_configured}
+                      disabled={actionInFlight !== null || !tokenConfigured}
                       onClick={() => handleAction("start")}
                     >
                       {actionInFlight === "start" ? <Loader2 className="size-4 animate-spin" /> : null}
-                      Start bot
+                      {actionInFlight === "start" ? "Starting" : "Start bot"}
                     </Button>
                   )}
                 </div>
+                {testDisabledReason || startDisabledReason ? (
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {testDisabledReason || startDisabledReason}
+                  </p>
+                ) : null}
               </>
             )}
           </CardContent>

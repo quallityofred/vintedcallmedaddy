@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -374,13 +375,12 @@ export function MonitorPreview() {
                         <TableHeader>
                             <TableRow>
                                 <TableHead className="w-10">
-                                    <input
+                                    <Checkbox
                                         aria-label="Select all monitors"
                                         checked={allSelected}
-                                        className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
+                                        className="size-4"
                                         disabled={!monitors?.length || loading}
-                                        onChange={toggleAll}
-                                        type="checkbox"
+                                        onCheckedChange={toggleAll}
                                     />
                                 </TableHead>
                                 <TableHead>Search</TableHead>
@@ -399,12 +399,11 @@ export function MonitorPreview() {
                                 return (
                                 <TableRow key={monitor.id} className={!monitor.is_active ? "opacity-70" : ""}>
                                     <TableCell>
-                                    <input
+                                    <Checkbox
                                         aria-label={`Select monitor ${monitor.name}`}
                                         checked={selectedIds.includes(monitor.id)}
-                                        className="size-4 rounded border-white/20 bg-white/5 accent-emerald-500"
-                                        onChange={() => toggleMonitor(monitor.id)}
-                                        type="checkbox"
+                                        className="size-4"
+                                        onCheckedChange={() => toggleMonitor(monitor.id)}
                                     />
                                     </TableCell>
                                     <TableCell className="max-w-[18rem]">

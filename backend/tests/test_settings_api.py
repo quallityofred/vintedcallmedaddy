@@ -276,3 +276,116 @@ async def test_telegram_api_controls_are_user_scoped_and_do_not_expose_token(db_
         assert "telegram-secret-abcdef" not in stop_response.text
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_telegram_test_returns_safe_error_when_credentials_missing(db_session):
+    user = await _create_user(db_session, username="telegram_missing_credentials")
+    _override_db(db_session)
+
+    client, csrf_token = await _authenticated_client(user, db_session, "telegram-missing-session")
+    async with client:
+        response = await client.post(
+            "/api/v1/telegram/test",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+
+    payload = response.json()
+    assert response.status_code == 400
+    assert payload["code"] == "telegram_credentials_missing"
+    assert payload["detail"] == "Telegram credentials are not configured. Add your bot token and chat ID first."
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc", "status_code", "code", "detail"),
+    [
+        (
+            ValueError("invalid literal for int() with base 10"),
+            400,
+            "telegram_invalid_chat_id",
+            "Telegram chat ID looks invalid. Check the chat ID and save it again.",
+        ),
+        (
+            RuntimeError("Unauthorized"),
+            400,
+            "telegram_invalid_token",
+            "Telegram bot token looks invalid. Check the token from BotFather and save it again.",
+        ),
+        (
+            RuntimeError("Bad Request: chat not found"),
+            400,
+            "telegram_chat_not_found",
+            "Telegram chat was not found. Open Telegram, start the bot, then try again.",
+        ),
+        (
+            RuntimeError("Forbidden: bot was blocked by the user"),
+            403,
+            "telegram_bot_blocked",
+            "The bot cannot message this chat. Make sure the bot is not blocked and has access to the chat.",
+        ),
+        (
+            RuntimeError("Conflict: terminated by other getUpdates request"),
+            409,
+            "telegram_bot_busy",
+            "Telegram bot is busy or already running elsewhere. Stop other bot sessions/webhooks and try again. Another process may already be using this bot token.",
+        ),
+        (
+            TimeoutError("timed out"),
+            503,
+            "telegram_unavailable",
+            "Telegram is unavailable or timed out. Try again in a moment.",
+        ),
+        (
+            RuntimeError("Too Many Requests: retry after 30"),
+            429,
+            "telegram_rate_limited",
+            "Telegram rate limit reached. Wait a bit before trying again.",
+        ),
+        (
+            RuntimeError("unexpected telegram failure"),
+            502,
+            "telegram_test_failed",
+            "Telegram test message failed. Check your bot token, chat ID, and bot access, then try again.",
+        ),
+    ],
+)
+async def test_telegram_test_classifies_safe_failures(
+    db_session,
+    monkeypatch,
+    exc: Exception,
+    status_code: int,
+    code: str,
+    detail: str,
+):
+    async def fake_send_telegram_test_message(token: str, chat_id: str) -> None:
+        raise exc
+
+    monkeypatch.setattr(
+        settings_api_router,
+        "_send_telegram_test_message",
+        fake_send_telegram_test_message,
+    )
+
+    user = await _create_user(
+        db_session,
+        username=f"telegram_failure_{code}",
+        telegram_bot_token="telegram-secret-abcdef",
+        telegram_chat_id="555123456",
+    )
+    _override_db(db_session)
+
+    client, csrf_token = await _authenticated_client(user, db_session, f"telegram-failure-session-{code}")
+    async with client:
+        response = await client.post(
+            "/api/v1/telegram/test",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+
+    payload = response.json()
+    assert response.status_code == status_code
+    assert payload == {"ok": False, "code": code, "detail": detail}
+    assert "telegram-secret-abcdef" not in response.text
+    assert "555123456" not in response.text
+    app.dependency_overrides.clear()

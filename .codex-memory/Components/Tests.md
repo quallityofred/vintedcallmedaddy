@@ -1,0 +1,145 @@
+﻿---
+type: component
+project: vintedbot
+tags:
+  - vintedbot
+  - component/tests
+---
+
+# Tests
+
+## Purpose
+
+- Provides regression coverage for selected auth, import/export, migration, scheduler, and startup scenarios.
+
+## Key Files
+
+- `backend/tests/conftest.py`
+- `backend/tests/test_admin_invite.py`
+- `backend/tests/test_audit_fixes.py`
+- `backend/tests/test_bot_startup_fix.py`
+- `backend/tests/test_fixes_v2.py`
+- `backend/tests/test_import_export.py`
+- `backend/tests/test_migration.py`
+- `backend/tests/test_overhaul.py`
+- `backend/tests/test_stress.py`
+- `frontend/tests/e2e/landing.spec.ts`
+
+## Current Snapshot
+
+- `poetry run pytest -q` passed with `16` tests on `2026-06-02`.
+- Frontend Phase 1 snapshot on `2026-06-02`:
+  - `npm run lint` passed in `frontend/`.
+  - `npm run build` passed in `frontend/`.
+  - `npm run test:e2e` passed in `frontend/` with one Chromium landing-page smoke test.
+- Frontend design pass snapshot on `2026-06-02`:
+  - `npm run lint` passed in `frontend/`.
+  - `npm run build` passed in `frontend/`.
+  - `npm run test:e2e` passed in `frontend/` with two Chromium smoke tests covering landing, dashboard, and settings.
+- Railway split/settings snapshot on `2026-06-03`:
+  - `cd backend && poetry install` completed.
+  - `cd backend && poetry run pytest -q` -> 30 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm install` completed with the known moderate frontend audit advisory still present.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed.
+  - `cd frontend && npm run test:e2e` -> 2 passed.
+  - `git diff --check` -> passed with line-ending warnings only.
+- Backend root/health connectivity snapshot on `2026-06-03`:
+  - `cd backend && poetry run pytest -q` -> 34 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed.
+  - `cd frontend && npm run test:e2e` -> 2 passed.
+  - `git diff --check` -> passed with line-ending warnings only.
+- JSON auth/login snapshot on `2026-06-03`:
+  - `cd backend && poetry run pytest -q` -> 36 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed.
+  - `cd frontend && npm run test:e2e` -> 3 passed.
+  - `git diff --check` -> passed with line-ending warnings only.
+- Auth/register API snapshot on `2026-06-03`:
+  - `cd backend && poetry run pytest tests/test_auth_api.py -q` -> 4 passed.
+  - `cd backend && poetry run pytest -q` -> 38 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed.
+  - `cd frontend && npm run test:e2e` -> 3 passed.
+  - `git diff --check` -> passed with line-ending warnings only.
+- Settings/Telegram API snapshot on `2026-06-03`:
+  - `cd backend && poetry run pytest tests/test_settings_api.py -q` -> 5 passed.
+  - `cd backend && poetry run pytest -q` -> 43 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` initially failed because ESLint scanned missing generated `test-results/`; fixed by ignoring Playwright output.
+  - `cd frontend && npm run lint` -> passed after ignore fix.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 3 passed with known Node `DEP0205` warning.
+  - `git diff --check` -> passed with line-ending warnings only.
+- API-first cleanup/auth guard snapshot on `2026-06-03`:
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd backend && poetry run pytest -q` -> 57 passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 6 passed with known Node `DEP0205` warning.
+  - `git diff --check` -> passed with line-ending warnings only.
+- Frontend UI/UX polish snapshot on `2026-06-03`:
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 6 passed with known Node `DEP0205` warning.
+  - `git diff --check` -> passed with line-ending warnings only.
+- Dedicated monitors page snapshot on `2026-06-04`:
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 7 passed with known Node `DEP0205` warning and expected isolated local backend proxy noise.
+- Unique Vinted domain loading snapshot on `2026-06-04`:
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 14 passed.
+  - `cd backend && poetry run pytest -q tests/test_fixes_v2.py` -> 4 passed.
+  - `cd backend && poetry run pytest -q tests/test_audit_fixes.py` -> 2 passed.
+  - `cd backend && poetry run pytest -q` -> 64 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 8 passed with known Node `DEP0205` warning and expected isolated local backend proxy noise.
+- Telegram/settings/checkbox polish snapshot on `2026-06-04`:
+  - `cd backend && poetry run pytest -q tests/test_settings_api.py` -> 14 passed.
+  - `cd backend && poetry run pytest -q` -> 73 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 8 passed with known Node `DEP0205` warning and expected isolated local backend proxy noise.
+  - `git diff --check` -> passed with line-ending warnings only.
+
+## Coverage Gaps
+
+- Route-table/audit tests now cover active API-first routes and absence of removed legacy UI routes.
+- No template-render test for `/settings`.
+- No end-to-end seller-hide persistence test.
+- No test for shared-system-log isolation.
+- No concurrency test for invite consumption.
+- No tests yet for missing Next-ready dashboard/settings/monitor/item/hidden-seller APIs listed in [[API Contract]].
+
+## Related Issues
+
+- [[Issues/ISS-001 Settings page misses required context|ISS-001]]
+- [[Issues/ISS-002 Admin invite management routes are missing|ISS-002]]
+- [[Issues/ISS-003 Hide seller flow is broken and not user-scoped|ISS-003]]
+- [[Issues/ISS-004 Dashboard exposes shared system logs to every user|ISS-004]]
+- [[Issues/ISS-007 Invite code consumption is race-prone|ISS-007]]
+
+- 2026-06-02: Added `tests/test_audit_resolutions.py`; full suite now has 26 passing tests covering audit fixes.
+- 2026-06-02: Added frontend Playwright config and `frontend/tests/e2e/landing.spec.ts` for the Next.js landing page.
+- 2026-06-02: Expanded `frontend/tests/e2e/landing.spec.ts` to verify the scratch-designed monitor preview plus `/dashboard` and `/settings` placeholders.
+- 2026-06-03: Added backend route tests for production `/`, development `/`, `/dashboard`, `/health`, and `/api/health`; updated Playwright smoke coverage for the frontend backend health card.
+- 2026-06-03: Added `backend/tests/test_auth_api.py` for CSRF, login success/failure, `/me`, and logout; expanded Playwright login coverage for API error states.
+- 2026-06-03: Expanded `backend/tests/test_auth_api.py` to cover JSON registration success, CSRF enforcement, invite consumption, duplicate username, password mismatch, and invalid invite cases.
+- 2026-06-03: Added `backend/tests/test_settings_api.py` for versioned settings/Telegram APIs, including auth requirements, CSRF, credential masking, admin-only global updates, validation, and faked Telegram controls.
+- 2026-06-03: Rewrote legacy route-table/audit tests to assert the API-first route surface and removed legacy UI routes.
+- 2026-06-03: Expanded Playwright coverage for protected-route redirects, admin-only guard behavior, and login/register `next` redirects.
+- 2026-06-03: Updated Playwright landing smoke assertion after replacing setup-oriented landing copy with product-ready copy.
+- 2026-06-04: Expanded Playwright coverage for unauthenticated `/monitors` redirect, authenticated `Monitors` navigation, dashboard monitor summary, `/monitors` monitor dialog/domain selection, and mobile page-level overflow checks.
+- 2026-06-04: Added backend tests for `/api/v1/monitors/domains`, representative validation, alias URL normalization, URL cleaning, and scheduler cross-domain item-ID dedup. Added frontend E2E coverage for domain selector failure/retry state.
+
+## Related Frontend Notes
+
+- [[Components/Frontend Next.js]]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -19,6 +21,14 @@ from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db, get_scraper_client, is_bot_running, start_bot, stop_bot
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TelegramErrorInfo:
+    status_code: int
+    code: str
+    detail: str
 
 
 class TelegramSettingsUpdate(BaseModel):
@@ -84,6 +94,90 @@ def _telegram_payload(user: User) -> dict[str, object]:
         "chat_id_masked": mask_secret(chat_id),
         "bot_running": is_bot_running(token) if token else False,
     }
+
+
+def _telegram_error_response(error: TelegramErrorInfo) -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "code": error.code, "detail": error.detail},
+        status_code=error.status_code,
+    )
+
+
+def _classify_telegram_error(exc: Exception) -> TelegramErrorInfo:
+    class_name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    text = f"{class_name}: {message}"
+
+    if "retry after" in text or "too many requests" in text or "rate limit" in text:
+        return TelegramErrorInfo(
+            status_code=429,
+            code="telegram_rate_limited",
+            detail="Telegram rate limit reached. Wait a bit before trying again.",
+        )
+
+    if any(marker in text for marker in ("conflict", "getupdates", "already running", "webhook", "polling")):
+        return TelegramErrorInfo(
+            status_code=409,
+            code="telegram_bot_busy",
+            detail=(
+                "Telegram bot is busy or already running elsewhere. "
+                "Stop other bot sessions/webhooks and try again. "
+                "Another process may already be using this bot token."
+            ),
+        )
+
+    if "blocked" in text or "forbidden" in text:
+        return TelegramErrorInfo(
+            status_code=403,
+            code="telegram_bot_blocked",
+            detail="The bot cannot message this chat. Make sure the bot is not blocked and has access to the chat.",
+        )
+
+    if "chat not found" in text or "user not found" in text:
+        return TelegramErrorInfo(
+            status_code=400,
+            code="telegram_chat_not_found",
+            detail="Telegram chat was not found. Open Telegram, start the bot, then try again.",
+        )
+
+    if isinstance(exc, ValueError) or "invalid chat" in text or "chat id" in text:
+        return TelegramErrorInfo(
+            status_code=400,
+            code="telegram_invalid_chat_id",
+            detail="Telegram chat ID looks invalid. Check the chat ID and save it again.",
+        )
+
+    if any(marker in text for marker in ("tokenvalidationerror", "unauthorized", "invalid token", "bot token")):
+        return TelegramErrorInfo(
+            status_code=400,
+            code="telegram_invalid_token",
+            detail="Telegram bot token looks invalid. Check the token from BotFather and save it again.",
+        )
+
+    if any(
+        marker in text
+        for marker in (
+            "telegramnetworkerror",
+            "telegramservererror",
+            "timeout",
+            "timed out",
+            "connection",
+            "unavailable",
+            "bad gateway",
+            "server error",
+        )
+    ):
+        return TelegramErrorInfo(
+            status_code=503,
+            code="telegram_unavailable",
+            detail="Telegram is unavailable or timed out. Try again in a moment.",
+        )
+
+    return TelegramErrorInfo(
+        status_code=502,
+        code="telegram_test_failed",
+        detail="Telegram test message failed. Check your bot token, chat ID, and bot access, then try again.",
+    )
 
 
 def _global_settings_payload(saved: dict[str, str]) -> dict[str, object]:
@@ -292,14 +386,19 @@ async def telegram_test(
     token = user.telegram_bot_token or ""
     chat_id = user.telegram_chat_id or ""
     if not token or not chat_id:
-        raise HTTPException(status_code=400, detail="Telegram bot token and chat ID are not configured")
+        return _telegram_error_response(
+            TelegramErrorInfo(
+                status_code=400,
+                code="telegram_credentials_missing",
+                detail="Telegram credentials are not configured. Add your bot token and chat ID first.",
+            )
+        )
 
     try:
         await _send_telegram_test_message(token, chat_id)
-    except Exception:
-        return JSONResponse(
-            {"ok": False, "message": "Telegram test message failed"},
-            status_code=502,
-        )
+    except Exception as exc:
+        error = _classify_telegram_error(exc)
+        logger.warning("Telegram test message failed for user_id=%s code=%s", user.id, error.code)
+        return _telegram_error_response(error)
 
     return {"ok": True, "message": "Telegram test message sent", "telegram": _telegram_payload(user)}
