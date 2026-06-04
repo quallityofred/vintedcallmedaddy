@@ -119,6 +119,7 @@ export function LoginForm({ nextPath }: LoginFormProps) {
                 className="pl-9"
                 disabled={isSubmitting}
                 id="username"
+                name="username"
                 onChange={(event) => setUsername(event.target.value)}
                 placeholder="username"
                 required
@@ -132,6 +133,7 @@ export function LoginForm({ nextPath }: LoginFormProps) {
               autoComplete="current-password"
               disabled={isSubmitting}
               id="password"
+              name="password"
               onChange={(event) => setPassword(event.target.value)}
               placeholder="password"
               required
