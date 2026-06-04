@@ -22,7 +22,7 @@ export async function fetchCurrentUser(): Promise<AuthUser | null> {
     return null;
   }
   if (!response.ok) {
-    throw new Error("Unable to load current user");
+    throw new Error(`Unable to load current user (status: ${response.status})`);
   }
 
   const payload = (await response.json()) as { user?: AuthUser };

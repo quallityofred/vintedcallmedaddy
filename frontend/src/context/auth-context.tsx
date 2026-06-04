@@ -25,7 +25,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const currentUser = await fetchCurrentUser();
       setUser(currentUser);
     } catch (error) {
-      console.error("Auth refresh error:", error);
+      // Only log errors that are not 401
+      if (error instanceof Error && !error.message.includes("status: 401")) {
+          console.error("Auth refresh error:", error);
+      }
       setUser(null);
     } finally {
       setLoading(false);
