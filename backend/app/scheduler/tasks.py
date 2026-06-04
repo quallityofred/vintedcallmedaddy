@@ -338,10 +338,13 @@ async def process_pending_notifications() -> None:
 						if monitor and monitor.user_id:
 							monitor_name = monitor.name
 							user = await db2.get(User, monitor.user_id)
-							if user and user.telegram_bot_token and user.telegram_chat_id:
+							if user and user.telegram_bot_token and user.telegram_chat_id and user.is_telegram_enabled:
 								from app.telegram.bot import get_or_create_bot
 								bot_to_use, _ = get_or_create_bot(user.telegram_bot_token)
 								chat_id_to_use = int(user.telegram_chat_id)
+							else:
+								# Skip if disabled or not configured
+								continue
 
 					if bot_to_use and chat_id_to_use is not None:
 						await send_item_notification(bot_to_use, chat_id_to_use, item, monitor_name=monitor_name)

@@ -373,7 +373,8 @@ async def test_pending_notification_uses_user_credentials_and_safe_html(db_sessi
     await db_session.execute(update(FoundItem).values(notified=True))
     await db_session.commit()
 
-    user = User(username="notify_payload_user", telegram_bot_token="runtime-test-token", telegram_chat_id="424242")
+    user = User(username="notify_payload_user", telegram_bot_token="runtime-test-token", telegram_chat_id="424242", is_telegram_enabled=True)
+
     user.set_password("p")
     monitor = Monitor(
         user_id=None,
@@ -504,3 +505,28 @@ def test_monitor_scheduler_add_remove_update_and_trigger():
     finally:
         if scheduler.scheduler.running:
             scheduler.scheduler.shutdown(wait=False)
+
+@pytest.mark.asyncio
+async def test_notification_skipped_if_telegram_disabled(db_session):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+
+    user = User(username='notify_disabled_user', telegram_bot_token='test-token', telegram_chat_id='123', is_telegram_enabled=False)
+    user.set_password('p')
+    monitor = Monitor(user_id=None, name='Disabled', original_url='u', params_json='{}', domains_json='["vinted.fr"]', last_check_at=datetime.now(timezone.utc))
+    db_session.add_all([user, monitor])
+    await db_session.commit()
+    monitor.user_id = user.id
+    item = FoundItem(monitor_id=monitor.id, vinted_item_id=111, domain='vinted.fr', title='Item', price=10.0, currency='EUR', brand='B', size='S', condition='C', photo_url='', item_url='u', seller_id=1, notified=False)
+    db_session.add(item)
+    await db_session.commit()
+
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+
+    with patch('app.telegram.bot.get_or_create_bot', return_value=(fake_bot, MagicMock())) as get_bot:
+        await process_pending_notifications()
+
+    get_bot.assert_not_called()
+    fake_bot.send_message.assert_not_awaited()
+    await db_session.refresh(item)
+    assert item.notified is False
