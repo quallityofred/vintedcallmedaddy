@@ -344,8 +344,8 @@ def _runtime_search_params(params: dict) -> dict:
 	search_params.pop("page", None)
 	search_params.pop("search_id", None)
 
-	# Keep category/catalog aliases as catalog[]
-	catalog_aliases = ["catalog", "catalog_ids", "catalog_ids[]"]
+	# Map catalog aliases to Vinted API expected key: catalog_ids[]
+	catalog_aliases = ["catalog[]", "catalog", "catalog_ids"]
 	found_catalogs = set()
 	for alias in catalog_aliases:
 		if alias in search_params:
@@ -356,7 +356,7 @@ def _runtime_search_params(params: dict) -> dict:
 				found_catalogs.add(values)
 	
 	if found_catalogs:
-		search_params["catalog[]"] = sorted(list(found_catalogs))
+		search_params["catalog_ids[]"] = sorted(list(found_catalogs))
 
 	return search_params
 
@@ -1027,7 +1027,24 @@ async def process_pending_notifications() -> None:
 						await db.commit()
 						logger.info("Telegram notification sent for item %s", fi.vinted_item_id)
 				except Exception as exc:
-					# ... error handling logic ...
+					# Restore error handling logic for Telegram topic failures
+					if delivery_target and delivery_target.topic_id is not None:
+						try:
+							async with _new_session() as db3:
+								topic = await db3.get(MonitorTelegramTopic, delivery_target.topic_id)
+								if topic is not None:
+									info = await record_topic_send_failure(db3, topic=topic, exc=exc)
+									logger.warning(
+										"Telegram topic notification failed: code=%s monitor_id=%s item_id=%s",
+										info.code,
+										fi.monitor_id,
+										fi.vinted_item_id,
+									)
+						except Exception:
+							logger.exception(
+								"Failed to record Telegram topic notification error for item %s",
+								fi.vinted_item_id,
+							)
 					logger.exception("Notification failed for item %s", fi.vinted_item_id)
 
 
