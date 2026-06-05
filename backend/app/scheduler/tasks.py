@@ -19,8 +19,9 @@ from app.config import get_settings
 from app.database import get_session_factory
 from app.models import FoundItem, HiddenSeller, Monitor, MonitorTelegramTopic, SeenItem, User
 from app.scraper.client import VintedClient
-from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
+from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters, item_matches_monitor_filters
 from app.scraper.parser import VintedItem
+from app.scraper.url_parser import parse_vinted_url
 from app.telegram.notifications import send_item_notification
 from app.telegram.topic_service import ensure_monitor_topic, record_topic_send_failure
 
@@ -348,6 +349,25 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 			return None
 
 		params = json.loads(monitor.params_json)
+		monitor_filters = extract_monitor_filters(params)
+		if not has_restrictive_filters(monitor_filters):
+			url_params = parse_vinted_url(monitor.original_url)
+			url_filters = extract_monitor_filters(url_params)
+			if has_restrictive_filters(url_filters):
+				url_params["_original_interval"] = params.get("_original_interval", monitor.interval_sec)
+				params = url_params
+				monitor_filters = url_filters
+				logger.warning(
+					"Using monitor URL-derived filters because stored params are not restrictive: monitor_id=%s",
+					monitor.id,
+				)
+			elif "vinted." in monitor.original_url.lower():
+				monitor.last_check_status = "failed"
+				monitor.last_error = "Monitor URL has no searchable filters; refusing unfiltered marketplace check."
+				monitor.last_check_completed_at = datetime.now(timezone.utc)
+				await db.commit()
+				logger.warning("Skipping unfiltered Vinted monitor: monitor_id=%s", monitor.id)
+				return None
 		domains = json.loads(monitor.domains_json)
 		hidden_result = await db.execute(
 			select(HiddenSeller.seller_id).where(HiddenSeller.user_id == monitor.user_id)
@@ -360,7 +380,7 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 			monitor_name=monitor.name,
 			params=params,
 			domains=domains,
-			monitor_filters=extract_monitor_filters(params),
+			monitor_filters=monitor_filters,
 			hidden_seller_ids=hidden_seller_ids,
 			is_cold_start=monitor.last_check_at is None,
 			original_interval=params.get("_original_interval", monitor.interval_sec),

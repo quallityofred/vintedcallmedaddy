@@ -52,6 +52,35 @@ async def test_items_api_scoping(db_session):
 
     app.dependency_overrides.clear()
 
+
+@pytest.mark.asyncio
+async def test_dashboard_recent_items_are_user_scoped(db_session):
+    user1 = await _create_user(db_session, "recent_user1")
+    user2 = await _create_user(db_session, "recent_user2")
+    _override_db(db_session)
+
+    m1 = Monitor(user_id=user1.id, name="User 1 Monitor", original_url="u1", params_json="{}", domains_json="[]")
+    m2 = Monitor(user_id=user2.id, name="User 2 Monitor", original_url="u2", params_json="{}", domains_json="[]")
+    db_session.add_all([m1, m2])
+    await db_session.commit()
+
+    db_session.add_all([
+        FoundItem(monitor_id=m1.id, vinted_item_id=101, domain="v.fr", title="Expected Brand", price=1.0, currency="EUR", brand="Target", size="S", condition="C", photo_url="p", item_url="u1", seller_id=10),
+        FoundItem(monitor_id=m2.id, vinted_item_id=202, domain="v.fr", title="Other User Brand", price=2.0, currency="EUR", brand="Other", size="S", condition="C", photo_url="p", item_url="u2", seller_id=20),
+    ])
+    await db_session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await _login_user(client, "recent_user1")
+        response = await client.get("/api/v1/items?limit=10")
+        assert response.status_code == 200
+        titles = [item["title"] for item in response.json()["items"]]
+        assert titles == ["Expected Brand"]
+        assert "Other User Brand" not in titles
+
+    app.dependency_overrides.clear()
+
 @pytest.mark.asyncio
 async def test_hidden_sellers_api(db_session):
     user = await _create_user(db_session, "user_hidden")

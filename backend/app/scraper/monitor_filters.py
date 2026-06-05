@@ -78,3 +78,16 @@ def item_matches_monitor_filters(item: VintedItem, filters: MonitorFilters) -> t
         if str(item.brand_id) not in filters.brand_ids:
             return False, "wrong_brand"
     return True, None
+
+
+def has_restrictive_filters(filters: MonitorFilters) -> bool:
+    return bool(
+        filters.brand_ids
+        or filters.catalog_ids
+        or filters.size_ids
+        or filters.status_ids
+        or filters.color_ids
+        or filters.price_from is not None
+        or filters.price_to is not None
+        or filters.search_text is not None
+    )

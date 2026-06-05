@@ -8,6 +8,7 @@ Vinted catalog URL example:
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import parse_qs, urlparse, urlunparse, urlencode
 
 from app.scraper.domains import normalize_vinted_host, resolve_vinted_host_to_representative
@@ -46,6 +47,33 @@ _IGNORED_PARAMS = {
     "source",
     "ref",
 }
+
+
+def _parse_int_values(values: list[str]) -> list[int]:
+    parsed: list[int] = []
+    for value in values:
+        for part in str(value).split(","):
+            text = part.strip()
+            if text.isdigit():
+                parsed.append(int(text))
+    return parsed
+
+
+def _first_path_id(path: str, *prefixes: str) -> int | None:
+    normalized_path = path.strip("/")
+    for prefix in prefixes:
+        match = re.match(rf"^{re.escape(prefix.strip('/'))}/(\d+)(?:-|/|$)", normalized_path)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _append_unique_int(params: dict, key: str, value: int | None) -> None:
+    if value is None:
+        return
+    values = params.setdefault(key, [])
+    if value not in values:
+        values.append(value)
 
 
 def parse_vinted_url(url: str) -> dict:
@@ -89,7 +117,7 @@ def parse_vinted_url(url: str) -> dict:
         if normalised_key in _ARRAY_PARAMS or (key + "[]") in _ARRAY_PARAMS:
             array_key = normalised_key if normalised_key in _ARRAY_PARAMS else key + "[]"
             # Ensure array parameters are always lists, containing ints.
-            params[array_key] = [int(v) for v in values if v.isdigit()]
+            params[array_key] = _parse_int_values(values)
 
         elif key in _SCALAR_PARAMS:
             if key == "order":
@@ -108,6 +136,9 @@ def parse_vinted_url(url: str) -> dict:
         else:
             # Preserve any unknown non-empty scalar param as-is
             params[key] = val
+
+    _append_unique_int(params, "catalog[]", _first_path_id(parsed.path, "catalog"))
+    _append_unique_int(params, "brand_ids[]", _first_path_id(parsed.path, "brand", "brands"))
 
     # Always enforce sort to newest
     params["order"] = "newest_first"

@@ -63,6 +63,24 @@ def test_parse_vinted_url_preserves_arrays():
     assert params["brand_ids[]"] == [1, 2]
 
 
+def test_parse_vinted_url_preserves_comma_separated_brand_ids():
+    url = "https://www.vinted.fr/catalog?brand_ids=1,2"
+    params = parse_vinted_url(url)
+    assert params["brand_ids[]"] == [1, 2]
+
+
+def test_parse_vinted_url_extracts_catalog_path_filter():
+    url = "https://www.vinted.fr/catalog/76-women-clothes"
+    params = parse_vinted_url(url)
+    assert params["catalog[]"] == [76]
+
+
+def test_parse_vinted_url_extracts_brand_path_filter():
+    url = "https://www.vinted.fr/brands/123-number-nine"
+    params = parse_vinted_url(url)
+    assert params["brand_ids[]"] == [123]
+
+
 def test_url_normalization_preserves_multiple_brand_ids():
     url = "https://www.vinted.fr/catalog?brand_ids[]=50&brand_ids[]=10&page=1&time=123"
 
@@ -155,3 +173,26 @@ def test_parse_response_extracts_brand_id():
 
     assert len(items) == 1
     assert items[0].brand_id == 123
+
+
+def test_parse_response_extracts_brand_id_from_real_nested_shape():
+    items = parse_response(
+        {
+            "items": [
+                {
+                    "id": 11,
+                    "title": "Nested Brand",
+                    "brand_dto": {"id": "456", "title": "Brand"},
+                    "brand_title": "Brand",
+                    "photo": {"url": "https://example.test/photo.jpg"},
+                    "url": "https://www.vinted.fr/items/11",
+                    "user": {"id": 8},
+                    "price": {"amount": "12.50", "currency_code": "EUR"},
+                }
+            ]
+        },
+        "vinted.fr",
+    )
+
+    assert len(items) == 1
+    assert items[0].brand_id == 456

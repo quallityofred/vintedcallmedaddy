@@ -1,8 +1,11 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.models import Monitor, User
 from app.scheduler import tasks
 
 
@@ -221,3 +224,65 @@ async def test_db_session_is_not_held_during_mocked_scraper_network_call(monkeyp
     await tasks.check_monitor(1, scraper_client=FakeClient())
 
     assert scraper_saw_session_open is False
+
+
+@pytest.mark.asyncio
+async def test_check_context_uses_url_brand_filter_when_stored_params_are_stale(db_session, monkeypatch):
+    user = User(username="stale_params_user", telegram_bot_token="", telegram_chat_id="")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="number (n)ine",
+        original_url="https://www.vinted.fr/brands/123-number-nine",
+        params_json=json.dumps({"order": "newest_first", "_original_interval": 120}),
+        domains_json='["vinted.fr"]',
+        interval_sec=120,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(tasks, "AsyncSessionLocal", session_factory)
+
+    context = await tasks._load_monitor_check_context(monitor.id)
+
+    assert context is not None
+    assert context.params["brand_ids[]"] == [123]
+    assert context.monitor_filters.brand_ids == {"123"}
+    assert "brand_ids" in context.monitor_filters.filter_keys
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_vinted_monitor_is_refused_before_marketplace_check(db_session, monkeypatch):
+    user = User(username="unfiltered_monitor_user", telegram_bot_token="", telegram_chat_id="")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Unfiltered",
+        original_url="https://www.vinted.fr/catalog",
+        params_json=json.dumps({"order": "newest_first"}),
+        domains_json='["vinted.fr"]',
+        interval_sec=120,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(tasks, "AsyncSessionLocal", session_factory)
+
+    context = await tasks._load_monitor_check_context(monitor.id)
+
+    assert context is None
+    await db_session.refresh(monitor)
+    assert monitor.last_check_status == "failed"
+    assert "no searchable filters" in monitor.last_error

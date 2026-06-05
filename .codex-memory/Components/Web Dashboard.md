@@ -70,6 +70,7 @@ tags:
 - 2026-06-04: Settings CF Worker routing-mode save now shows backend validation details instead of a generic Failed message. Direct/Auto saves persist through PATCH/GET in tests; Worker-only mode requires a configured Worker URL and keeps the selected value visible on validation failure.
 - 2026-06-04: Monitor debug trigger no longer nests a button inside a dialog trigger, preventing Next dev overlay/runtime markup issues. Debug output still handles missing `cf_worker` and shows only masked Worker URL.
 - 2026-06-05: `/monitors` no longer refreshes stable Telegram topic settings every monitor poll or mounts one topic-status GET per monitor card. It uses one read-only batch topic-status request, keeps individual POST actions for Ensure/Test, and polls the monitor list less aggressively while the tab is visible.
+- 2026-06-05: Dashboard Recent Items uses `/api/v1/items`, which is scoped through `FoundItem -> Monitor -> current_user`. Regression coverage now asserts another user's findings cannot appear in a user's recent-items list.
 
 ## Related Plans
 

@@ -67,6 +67,8 @@ def _extract_brand_id(item: dict) -> int | None:
     candidates = [
         item.get("brand_id"),
         item.get("brand", {}).get("id") if isinstance(item.get("brand"), dict) else None,
+        item.get("brand_dto", {}).get("id") if isinstance(item.get("brand_dto"), dict) else None,
+        item.get("brand_details", {}).get("id") if isinstance(item.get("brand_details"), dict) else None,
     ]
     for candidate in candidates:
         try:
