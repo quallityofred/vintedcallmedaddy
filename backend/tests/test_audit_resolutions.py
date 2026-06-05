@@ -82,6 +82,8 @@ async def test_backend_root_returns_api_info_in_production_without_frontend(monk
         "health": "/health",
         "api_health": "/api/health",
         "api": "/api/v1",
+        "health_schema_version": 2,
+        "code_version": "readiness-v3",
     }
 
 

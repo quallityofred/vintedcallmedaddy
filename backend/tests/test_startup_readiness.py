@@ -1,6 +1,10 @@
+import asyncio
+import time
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 import app.app_main as app_main
 
@@ -59,3 +63,48 @@ async def test_background_startup_degrades_when_db_never_becomes_ready(monkeypat
     assert app.state.db_ready is False
     assert app.state.startup_status == "degraded"
     assert app.state.startup_error == "database_startup_failed"
+
+
+@pytest.mark.asyncio
+async def test_api_health_exposes_schema_and_code_marker():
+    app = app_main.create_app()
+    app.state.startup_status = "ready"
+    app.state.db_ready = True
+    app.state.scheduler_ready = True
+    app.state.startup_error = None
+    app.state.scheduler = None
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["health_schema_version"] == app_main.HEALTH_SCHEMA_VERSION
+    assert payload["code_version"] == app_main.CODE_VERSION
+    assert "startup_status" in payload
+    assert "database_status" in payload
+    assert "scheduler_ready" in payload
+    assert "startup_error" in payload
+
+
+def test_lifespan_releases_liveness_before_slow_background_startup(monkeypatch):
+    async def slow_init_db():
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(app_main, "init_db", slow_init_db)
+    monkeypatch.setattr(app_main.settings, "startup_db_timeout_seconds", 30)
+    monkeypatch.setattr(app_main.settings, "startup_db_max_attempts", 1)
+
+    app = app_main.create_app()
+    started = time.monotonic()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        elapsed = time.monotonic() - started
+        health = client.get("/health")
+        api_health = client.get("/api/health")
+
+    assert elapsed < 2
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok", "service": "vinted-monitor"}
+    assert api_health.status_code == 200
+    assert api_health.json()["health_schema_version"] == app_main.HEALTH_SCHEMA_VERSION

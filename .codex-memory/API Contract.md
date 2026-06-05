@@ -305,3 +305,10 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - Next.js protected routes now guard `/dashboard`, `/settings`, and `/admin` through `GET /api/v1/auth/me`.
 - Unauthenticated users redirect to `/login?next=/dashboard`, `/login?next=/settings`, or `/login?next=/admin`.
 - Login and registration preserve a sanitized same-origin `next` path and default to `/dashboard`.
+
+## [2026-06-05] Update: Backend health deploy markers
+
+- `GET /api/health` includes safe readiness/deploy fields: `health_schema_version`, `code_version`, optional short `commit`, `startup_status`, `database_status`, `scheduler_ready`, and `startup_error`.
+- Backend `/` service JSON also includes `health_schema_version` and `code_version` when it returns JSON instead of redirecting to `FRONTEND_URL`.
+- `GET /health` remains a minimal liveness probe with `status` and `service` only, so Railway can check liveness without waiting for optional background startup work.
+- If production `/api/health` returns only the old `status`, `scheduler_jobs`, and `bots_running` shape, the public backend is not serving the current readiness build.

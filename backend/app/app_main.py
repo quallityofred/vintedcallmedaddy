@@ -23,6 +23,8 @@ from app.web.dependencies import RequireLoginException, restore_persisted_bot
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+HEALTH_SCHEMA_VERSION = 2
+CODE_VERSION = "readiness-v3"
 
 
 def _is_production_runtime() -> bool:
@@ -35,11 +37,21 @@ def _backend_root_payload() -> dict[str, object]:
     return {
         "service": "vintedbot-backend",
         "status": "ok",
+        "health_schema_version": HEALTH_SCHEMA_VERSION,
+        "code_version": CODE_VERSION,
         "frontend": settings.frontend_url or None,
         "health": "/health",
         "api_health": "/api/health",
         "api": "/api/v1",
     }
+
+
+def _safe_commit_marker() -> str | None:
+    for name in ("RAILWAY_GIT_COMMIT_SHA", "GITHUB_SHA", "COMMIT_SHA"):
+        value = os.getenv(name, "").strip()
+        if value:
+            return value[:7]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +175,6 @@ async def lifespan(app: FastAPI):
     # Stop all bots
     try:
         from app.telegram.bot import _polling_tasks, _bots
-        import asyncio
         for token, task in list(_polling_tasks.items()):
             if not task.done():
                 task.cancel()
@@ -290,6 +301,9 @@ def create_app() -> FastAPI:
         bots_running = count_running_bots()
         return {
             "status": "ok",
+            "health_schema_version": HEALTH_SCHEMA_VERSION,
+            "code_version": CODE_VERSION,
+            "commit": _safe_commit_marker(),
             "startup_status": getattr(request.app.state, "startup_status", "unknown"),
             "database_status": "ready" if getattr(request.app.state, "db_ready", False) else "not_ready",
             "scheduler_ready": bool(getattr(request.app.state, "scheduler_ready", False)),
