@@ -151,18 +151,21 @@ def test_monitor_check_backpressure_defaults_are_conservative():
     assert settings.monitor_check_global_concurrency == 2
     assert settings.monitor_check_per_user_concurrency == 1
     assert settings.monitor_check_acquire_timeout_seconds == 2.0
+    assert settings.monitor_check_max_pages_per_domain == 1
 
 
 def test_monitor_check_backpressure_env_overrides(monkeypatch):
     monkeypatch.setenv("MONITOR_CHECK_GLOBAL_CONCURRENCY", "4")
     monkeypatch.setenv("MONITOR_CHECK_PER_USER_CONCURRENCY", "2")
     monkeypatch.setenv("MONITOR_CHECK_ACQUIRE_TIMEOUT_SECONDS", "1.5")
+    monkeypatch.setenv("MONITOR_CHECK_MAX_PAGES_PER_DOMAIN", "3")
 
     settings = app_config.Settings(_env_file=None)
 
     assert settings.monitor_check_global_concurrency == 4
     assert settings.monitor_check_per_user_concurrency == 2
     assert settings.monitor_check_acquire_timeout_seconds == 1.5
+    assert settings.monitor_check_max_pages_per_domain == 3
 
 
 @pytest.mark.parametrize("value", ["true", "1", "yes"])

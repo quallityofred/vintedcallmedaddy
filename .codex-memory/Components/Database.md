@@ -46,4 +46,5 @@ tags:
 - 2026-06-03: Runtime settings are loaded from `AppSettings` on backend startup and can be updated by admins from the Jinja settings UI without requiring Railway env changes.
 - 2026-06-04: Added startup migration coverage for missing `users.cf_worker_url`, `users.cf_worker_block_threshold`, `users.cf_worker_recovery_minutes`, `users.is_telegram_enabled`, and `users.cf_worker_mode`; invalid/null `cf_worker_mode` values normalize to `auto`.
 - 2026-06-05: Scheduler monitor checks no longer hold an async DB session while waiting on Vinted network calls. This is paired with global/per-user scheduler backpressure to keep the small Supabase Session pooler connection budget from being consumed by long-running scraper operations.
+- 2026-06-05: Delta scraping uses the existing `SeenItem` schema without migration. Seen boundaries are domain-aware through the existing unique key `user_id + vinted_item_id + domain`; `FoundItem` remains `monitor_id + vinted_item_id + domain`. This preserves selected-domain independence without adding monitor-specific seen rows.
 

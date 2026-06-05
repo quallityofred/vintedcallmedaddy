@@ -84,8 +84,8 @@ async def test_cross_user_notifications(db_session):
 
 
 @pytest.mark.asyncio
-async def test_cross_domain_duplicate_item_ids_are_processed_once(db_session):
-    """Only new stable item IDs should be processed when selected domains overlap."""
+async def test_cross_domain_duplicate_item_ids_are_processed_per_domain(db_session):
+    """Selected domains are processed independently, even when stable item IDs overlap."""
     user = User(username="cross_domain_user", telegram_bot_token="t", telegram_chat_id="c")
     user.set_password("p")
     db_session.add(user)
@@ -154,16 +154,21 @@ async def test_cross_domain_duplicate_item_ids_are_processed_once(db_session):
         await check_monitor(monitor.id, scraper_client=mock_client)
 
     seen_result = await db_session.execute(
-        select(SeenItem).where(SeenItem.user_id == user.id).order_by(SeenItem.vinted_item_id)
+        select(SeenItem).where(SeenItem.user_id == user.id).order_by(SeenItem.vinted_item_id, SeenItem.domain)
     )
     seen_items = seen_result.scalars().all()
-    assert [item.vinted_item_id for item in seen_items] == [1001, 1002]
+    assert [(item.vinted_item_id, item.domain) for item in seen_items] == [
+        (1001, "vinted.de"),
+        (1001, "vinted.fr"),
+        (1002, "vinted.de"),
+    ]
 
     found_result = await db_session.execute(
-        select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id)
+        select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id, FoundItem.domain)
     )
     found_items = found_result.scalars().all()
     assert [(item.vinted_item_id, item.domain) for item in found_items] == [
+        (1001, "vinted.de"),
         (1001, "vinted.fr"),
         (1002, "vinted.de"),
     ]
@@ -252,7 +257,7 @@ async def test_cold_start_repeat_then_new_item_sends_only_new_notification(db_se
     mock_client.search_all_domains = AsyncMock(side_effect=[
         [make_item(1), make_item(2), make_item(3)],
         [make_item(1), make_item(2), make_item(3)],
-        [make_item(1), make_item(2), make_item(3), make_item(4)],
+        [make_item(4), make_item(1), make_item(2), make_item(3)],
     ])
     mock_client.close = AsyncMock()
     notify_mock = AsyncMock()
@@ -462,7 +467,7 @@ async def test_cold_start_brand_monitor_seeds_matching_seen_only(db_session):
 
 
 @pytest.mark.asyncio
-async def test_cross_domain_duplicate_seen_on_later_check_is_not_new(db_session):
+async def test_cross_domain_duplicate_seen_on_later_check_is_domain_independent(db_session):
     user = User(username="cross_domain_later_user", telegram_bot_token="t", telegram_chat_id="c")
     user.set_password("p")
     db_session.add(user)
@@ -534,14 +539,16 @@ async def test_cross_domain_duplicate_seen_on_later_check_is_not_new(db_session)
         await check_monitor(monitor.id, scraper_client=mock_client)
         await check_monitor(monitor.id, scraper_client=mock_client)
 
-    seen_items = (await db_session.execute(select(SeenItem).where(SeenItem.user_id == user.id).order_by(SeenItem.vinted_item_id))).scalars().all()
+    seen_items = (await db_session.execute(select(SeenItem).where(SeenItem.user_id == user.id).order_by(SeenItem.vinted_item_id, SeenItem.domain))).scalars().all()
     assert [(item.vinted_item_id, item.domain) for item in seen_items] == [
+        (7001, "vinted.de"),
         (7001, "vinted.fr"),
         (7002, "vinted.de"),
     ]
 
-    found_items = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id))).scalars().all()
+    found_items = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id, FoundItem.domain))).scalars().all()
     assert [(item.vinted_item_id, item.domain) for item in found_items] == [
+        (7001, "vinted.de"),
         (7001, "vinted.fr"),
         (7002, "vinted.de"),
     ]

@@ -1,6 +1,7 @@
 
 # Copied implementation from app/scheduler/app_scheduler_tasks.py
 import asyncio
+import inspect
 import json
 import logging
 import random
@@ -18,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_session_factory
 from app.models import FoundItem, HiddenSeller, Monitor, MonitorTelegramTopic, SeenItem, User
-from app.scraper.client import VintedClient
+from app.scraper.client import DomainSearchResult, VintedClient
 from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters, item_matches_monitor_filters
 from app.scraper.parser import VintedItem
 from app.scraper.url_parser import parse_vinted_url
@@ -82,6 +83,23 @@ class MonitorCheckContext:
 
 
 @dataclass
+class DomainDeltaResult:
+	domain: str
+	raw_count: int
+	accepted_count: int
+	new_candidate_count: int
+	seen_boundary_hit: bool
+	stopped_at_seen_item_id: int | None
+	skipped_by_filter_count: int
+	missing_brand_id_count: int
+	request_count: int
+	duration_ms: int
+	error: str | None
+	new_items: list[VintedItem]
+	baseline_items: list[VintedItem]
+
+
+@dataclass
 class CheckCapacityLease:
 	user_id: int
 	global_acquired: bool = False
@@ -133,6 +151,7 @@ def get_backpressure_state() -> dict[str, int | float]:
 		"monitor_check_global_concurrency": settings.monitor_check_global_concurrency,
 		"monitor_check_per_user_concurrency": settings.monitor_check_per_user_concurrency,
 		"monitor_check_acquire_timeout_seconds": settings.monitor_check_acquire_timeout_seconds,
+		"monitor_check_max_pages_per_domain": settings.monitor_check_max_pages_per_domain,
 		"running_monitor_checks": len(_running_checks),
 		"monitor_check_global_active": max(
 			0,
@@ -291,13 +310,116 @@ async def _update_monitor_interval(
 			monitor.interval_sec = min(new_interval, MAX_INTERVAL_SECONDS)
 
 
-async def _has_seen_item(db, user_id: int, item_id: int) -> bool:
+def _runtime_search_params(params: dict) -> dict:
+	search_params = dict(params)
+	search_params["order"] = "newest_first"
+	search_params.pop("page", None)
+	return search_params
+
+
+async def _load_seen_item_ids(db, user_id: int, domain: str, item_ids: set[int]) -> set[int]:
+	if not item_ids:
+		return set()
 	result = await db.execute(
-		select(SeenItem.id)
-		.where(SeenItem.user_id == user_id, SeenItem.vinted_item_id == item_id)
-		.limit(1)
+		select(SeenItem.vinted_item_id)
+		.where(
+			SeenItem.user_id == user_id,
+			SeenItem.domain == domain,
+			SeenItem.vinted_item_id.in_(item_ids),
+		)
 	)
-	return result.scalar_one_or_none() is not None
+	return {int(row[0]) for row in result.fetchall()}
+
+
+async def _fetch_domain_results(
+	client: VintedClient,
+	*,
+	params: dict,
+	domains: list[str],
+	mode: str,
+) -> list[DomainSearchResult]:
+	search_params = _runtime_search_params(params)
+	max_pages = max(1, settings.monitor_check_max_pages_per_domain)
+	if max_pages > 1:
+		logger.warning(
+			"monitor_check_max_pages_per_domain=%s configured, but delta checks currently fetch page 1 only",
+			max_pages,
+		)
+
+	search_domains = getattr(client, "search_domains", None)
+	if search_domains is not None and inspect.iscoroutinefunction(search_domains):
+		return await search_domains(search_params, domains, mode=mode)
+
+	items = await client.search_all_domains(search_params, domains, mode=mode)
+	by_domain: dict[str, list[VintedItem]] = {domain: [] for domain in domains}
+	for item in items or []:
+		by_domain.setdefault(item.domain, []).append(item)
+	return [
+		DomainSearchResult(domain=domain, items=by_domain.get(domain, []), request_count=1)
+		for domain in domains
+	]
+
+
+async def _select_domain_delta_items(
+	db,
+	*,
+	context: MonitorCheckContext,
+	result: DomainSearchResult,
+) -> DomainDeltaResult:
+	raw_items = result.items or []
+	accepted_items: list[VintedItem] = []
+	accepted_ids: set[int] = set()
+	skipped_by_filter_count = 0
+	missing_brand_id_count = 0
+	seen_in_result: set[int] = set()
+
+	for item in raw_items:
+		if item.seller_id in context.hidden_seller_ids:
+			continue
+		if item.id in seen_in_result:
+			continue
+		seen_in_result.add(item.id)
+		matches_filters, skip_reason = item_matches_monitor_filters(item, context.monitor_filters)
+		if not matches_filters:
+			skipped_by_filter_count += 1
+			if skip_reason == "missing_brand_id":
+				missing_brand_id_count += 1
+			continue
+		accepted_items.append(item)
+		accepted_ids.add(item.id)
+
+	seen_ids = await _load_seen_item_ids(db, context.user_id, result.domain, accepted_ids)
+	new_items: list[VintedItem] = []
+	baseline_items: list[VintedItem] = []
+	seen_boundary_hit = False
+	stopped_at_seen_item_id: int | None = None
+
+	for item in accepted_items:
+		if context.is_cold_start:
+			if item.id not in seen_ids:
+				baseline_items.append(item)
+			continue
+		if item.id in seen_ids:
+			seen_boundary_hit = True
+			stopped_at_seen_item_id = item.id
+			break
+		new_items.append(item)
+
+	return DomainDeltaResult(
+		domain=result.domain,
+		raw_count=len(raw_items),
+		accepted_count=len(accepted_items),
+		new_candidate_count=len(new_items),
+		seen_boundary_hit=seen_boundary_hit,
+		stopped_at_seen_item_id=stopped_at_seen_item_id,
+		skipped_by_filter_count=skipped_by_filter_count,
+		missing_brand_id_count=missing_brand_id_count,
+		request_count=result.request_count,
+		duration_ms=result.duration_ms,
+		error=result.error,
+		new_items=new_items,
+		baseline_items=baseline_items,
+	)
 
 
 async def _try_start_monitor_check(monitor_id: int) -> bool:
@@ -445,17 +567,15 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                 client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
 
             try:
-                items = await client.search_all_domains(
-                    context.params,
-                    context.domains,
+                domain_results = await _fetch_domain_results(
+                    client,
+                    params=context.params,
+                    domains=context.domains,
                     mode=context.cf_worker_mode,
                 )
             finally:
                 if owns_client:
                     await client.close()
-
-            items = items or []
-            raw_result_count = len(items)
 
             async with _new_session() as db:
                 result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
@@ -463,79 +583,101 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                 if monitor is None or not monitor.is_active:
                     return
 
-                if not items:
+                raw_result_count = sum(len(result.items or []) for result in domain_results)
+                if not domain_results or raw_result_count == 0:
                     await _update_monitor_interval(db, monitor, False, original_interval=context.original_interval)
                     monitor.last_check_status = "success_zero_items"
                 else:
-                    # Items are available here, now process them.
-                    # Keep the first copy of a Vinted item ID across selected domains.
-                    filtered_items: list[VintedItem] = []
-                    seen_item_ids: set[int] = set()
-                    skipped_by_filter_count = 0
-                    missing_brand_id_count = 0
-                    for item in items:
-                        if item.seller_id in context.hidden_seller_ids or item.id in seen_item_ids:
-                            continue
-                        matches_filters, skip_reason = item_matches_monitor_filters(item, context.monitor_filters)
-                        if not matches_filters:
-                            skipped_by_filter_count += 1
-                            if skip_reason == "missing_brand_id":
-                                missing_brand_id_count += 1
-                            continue
-                        seen_item_ids.add(item.id)
-                        filtered_items.append(item)
+                    domain_deltas = [
+                        await _select_domain_delta_items(
+                            db,
+                            context=context,
+                            result=result,
+                        )
+                        for result in domain_results
+                    ]
+
+                    accepted_count = sum(delta.accepted_count for delta in domain_deltas)
+                    skipped_by_filter_count = sum(delta.skipped_by_filter_count for delta in domain_deltas)
+                    missing_brand_id_count = sum(delta.missing_brand_id_count for delta in domain_deltas)
+                    seen_boundary_hits = sum(1 for delta in domain_deltas if delta.seen_boundary_hit)
+                    request_count = sum(delta.request_count for delta in domain_deltas)
+                    checked_domain_count = len(domain_deltas)
 
                     logger.info(
-                        "Monitor check filtered results: monitor_id=%s monitor_name=%s filter_keys=%s "
-                        "raw_result_count=%s accepted_count=%s skipped_by_filter_count=%s "
+                        "Monitor delta check results: monitor_id=%s user_id=%s monitor_name=%s filter_keys=%s "
+                        "selected_domain_count=%s checked_domain_count=%s request_count=%s raw_count=%s "
+                        "accepted_count=%s new_count=%s seen_boundary_hits=%s skipped_by_filter_count=%s "
                         "missing_brand_id_count=%s cold_start=%s",
                         monitor.id,
+                        context.user_id,
                         monitor.name,
                         context.monitor_filters.filter_keys,
+                        len(context.domains),
+                        checked_domain_count,
+                        request_count,
                         raw_result_count,
-                        len(filtered_items),
+                        accepted_count,
+                        sum(delta.new_candidate_count for delta in domain_deltas),
+                        seen_boundary_hits,
                         skipped_by_filter_count,
                         missing_brand_id_count,
                         context.is_cold_start,
                     )
+                    for delta in domain_deltas:
+                        logger.info(
+                            "Monitor domain delta: monitor_id=%s domain=%s raw_count=%s accepted_count=%s "
+                            "new_candidate_count=%s seen_boundary_hit=%s stopped_at_seen_item_id=%s "
+                            "skipped_by_filter_count=%s missing_brand_id_count=%s request_count=%s duration_ms=%s error=%s",
+                            monitor.id,
+                            delta.domain,
+                            delta.raw_count,
+                            delta.accepted_count,
+                            delta.new_candidate_count,
+                            delta.seen_boundary_hit,
+                            delta.stopped_at_seen_item_id,
+                            delta.skipped_by_filter_count,
+                            delta.missing_brand_id_count,
+                            delta.request_count,
+                            delta.duration_ms,
+                            delta.error,
+                        )
 
                     seen_items_to_insert = []
                     found_items_to_insert = []
                     new_items_to_notify: list[VintedItem] = []
 
                     now = datetime.now(timezone.utc)
-                    for item in filtered_items:
-                        already_seen = await _has_seen_item(db, context.user_id, item.id)
-                        if already_seen:
-                            continue
+                    for delta in domain_deltas:
+                        delta_items = delta.baseline_items if context.is_cold_start else delta.new_items
+                        for item in delta_items:
+                            seen_items_to_insert.append({
+                                "user_id": context.user_id,
+                                "vinted_item_id": item.id,
+                                "domain": item.domain,
+                                "seen_at": now,
+                            })
 
-                        seen_items_to_insert.append({
-                            "user_id": context.user_id,
-                            "vinted_item_id": item.id,
-                            "domain": item.domain,
-                            "seen_at": now,
-                        })
+                            if context.is_cold_start:
+                                continue
 
-                        if context.is_cold_start:
-                            continue
-
-                        found_items_to_insert.append({
-                            "monitor_id": monitor_id,
-                            "vinted_item_id": item.id,
-                            "domain": item.domain,
-                            "title": item.title,
-                            "price": item.price,
-                            "currency": item.currency,
-                            "brand": item.brand,
-                            "size": item.size,
-                            "condition": item.condition,
-                            "photo_url": item.photo_url,
-                            "item_url": item.item_url,
-                            "seller_id": item.seller_id,
-                            "found_at": now,
-                            "notified": False,
-                        })
-                        new_items_to_notify.append(item)
+                            found_items_to_insert.append({
+                                "monitor_id": monitor_id,
+                                "vinted_item_id": item.id,
+                                "domain": item.domain,
+                                "title": item.title,
+                                "price": item.price,
+                                "currency": item.currency,
+                                "brand": item.brand,
+                                "size": item.size,
+                                "condition": item.condition,
+                                "photo_url": item.photo_url,
+                                "item_url": item.item_url,
+                                "seller_id": item.seller_id,
+                                "found_at": now,
+                                "notified": False,
+                            })
+                            new_items_to_notify.append(item)
 
                     if seen_items_to_insert:
                         stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])

@@ -3,6 +3,7 @@ import asyncio
 import logging
 import random
 import time
+from dataclasses import dataclass
 from urllib.parse import urlencode
 
 from curl_cffi.requests import AsyncSession
@@ -29,6 +30,15 @@ USER_AGENTS = [
 ]
 
 _domain_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOMAINS)
+
+
+@dataclass
+class DomainSearchResult:
+    domain: str
+    items: list[VintedItem]
+    request_count: int = 1
+    duration_ms: int = 0
+    error: str | None = None
 
 
 class CloudflareFallback:
@@ -256,19 +266,29 @@ class VintedClient:
 
     async def _search_domain_with_semaphore(
         self, domain: str, params: dict, mode: str = "auto"
-    ) -> list[VintedItem]:
+    ) -> DomainSearchResult:
+        started = time.monotonic()
         async with _domain_semaphore:
             try:
                 items = await self.search(domain, params, mode=mode)
                 await asyncio.sleep(random.uniform(DOMAIN_DELAY_MIN, DOMAIN_DELAY_MAX))
-                return items
-            except Exception:
+                return DomainSearchResult(
+                    domain=domain,
+                    items=items,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+            except Exception as exc:
                 logger.warning("Domain search failed for %s", domain)
-                return []
+                return DomainSearchResult(
+                    domain=domain,
+                    items=[],
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    error=type(exc).__name__,
+                )
 
-    async def search_all_domains(
+    async def search_domains(
         self, params: dict, domains: list[str], mode: str = "auto"
-    ) -> list[VintedItem]:
+    ) -> list[DomainSearchResult]:
         shuffled = list(domains)
         random.shuffle(shuffled)
 
@@ -276,12 +296,17 @@ class VintedClient:
             self._search_domain_with_semaphore(domain, params, mode=mode)
             for domain in shuffled
         ]
-        results = await asyncio.gather(*tasks)
+        return await asyncio.gather(*tasks)
+
+    async def search_all_domains(
+        self, params: dict, domains: list[str], mode: str = "auto"
+    ) -> list[VintedItem]:
+        results = await self.search_domains(params, domains, mode=mode)
 
         seen_ids: set[int] = set()
         unique_items: list[VintedItem] = []
-        for items in results:
-            for item in items:
+        for result in results:
+            for item in result.items:
                 if item.id not in seen_ids:
                     seen_ids.add(item.id)
                     unique_items.append(item)

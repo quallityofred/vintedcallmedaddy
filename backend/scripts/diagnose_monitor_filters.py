@@ -20,6 +20,16 @@ def _safe_json_loads(value: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _safe_json_list(value: str) -> list[str]:
+    try:
+        data = json.loads(value or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, str)]
+
+
 def _derived_params_differ(monitor: Monitor, stored_params: dict) -> bool:
     try:
         derived = parse_vinted_url(monitor.original_url)
@@ -68,6 +78,18 @@ async def main() -> None:
             found_count = await db.scalar(
                 select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
             )
+            seen_by_domain_result = await db.execute(
+                select(SeenItem.domain, func.count(SeenItem.id))
+                .where(SeenItem.user_id == monitor.user_id)
+                .group_by(SeenItem.domain)
+                .order_by(SeenItem.domain.asc())
+            )
+            found_by_domain_result = await db.execute(
+                select(FoundItem.domain, func.count(FoundItem.id))
+                .where(FoundItem.monitor_id == monitor.id)
+                .group_by(FoundItem.domain)
+                .order_by(FoundItem.domain.asc())
+            )
             latest_result = await db.execute(
                 select(FoundItem)
                 .where(FoundItem.monitor_id == monitor.id)
@@ -93,6 +115,7 @@ async def main() -> None:
                         "monitor_id": monitor.id,
                         "monitor_name": monitor.name,
                         "original_url": monitor.original_url,
+                        "selected_domains": _safe_json_list(monitor.domains_json),
                         "stored_filter_keys": filters.filter_keys,
                         "url_filter_keys": url_filters.filter_keys,
                         "stored_brand_ids": sorted(filters.brand_ids),
@@ -100,7 +123,13 @@ async def main() -> None:
                         "stored_has_restrictive_filters": has_restrictive_filters(filters),
                         "url_has_restrictive_filters": has_restrictive_filters(url_filters),
                         "seen_count": seen_count,
+                        "seen_count_by_domain": {
+                            row[0]: row[1] for row in seen_by_domain_result.fetchall()
+                        },
                         "found_count": found_count,
+                        "found_count_by_domain": {
+                            row[0]: row[1] for row in found_by_domain_result.fetchall()
+                        },
                         "params_differ_from_original_url": _derived_params_differ(monitor, stored_params),
                         "latest_found_items": latest_items,
                     },

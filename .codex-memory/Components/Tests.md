@@ -251,6 +251,7 @@ tags:
 - 2026-06-05: Added `backend/tests/test_scheduler_backpressure.py` for global/per-user monitor check limits, same-monitor overlap prevention, semaphore release on success/failure, and no DB session held during mocked scraper work. Added config env/default tests, `/api/health` backpressure field assertions, and manual Check Now busy-response coverage.
 - 2026-06-05: Added regression coverage for recent-items monitor correctness: comma/path Vinted filter parsing, nested brand-id extraction, scheduler URL-derived filter fallback when stored params are stale, refusal of unfiltered Vinted monitors, and explicit `/api/v1/items` recent-items user scoping.
 - 2026-06-05: Added `frontend/tests/e2e/async-actions.spec.ts` for exact-key async action behavior: monitor Pause remains pending while another monitor Check runs, topic settings Save/Verify have independent pending states, and Recent Items hide-seller loading is scoped per seller. Frontend lint/build/e2e passed with the known Node `DEP0205` warning and existing mocked-test backend proxy noise.
+- 2026-06-05: Added `backend/tests/test_delta_scraping.py` for delta monitor checks: stop at first accepted seen item, wrong/missing-brand items not acting as boundaries, cold-start multi-domain baseline without `FoundItem`, all selected domains checked, per-domain boundaries, `newest_first` runtime params, first-page default, and domain-aware seen lookup. Updated older cross-domain tests to match the selected-domain-independent contract.
 
 ## Related Frontend Notes
 

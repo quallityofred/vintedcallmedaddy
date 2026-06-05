@@ -116,10 +116,11 @@ tags:
 - 2026-06-04: Monitor domains API now exposes unique Vinted marketplace representatives and validates monitor create/update target domains against that registry.
 - 2026-06-04: Monitor list/detail/create/update/control responses now include selected representative `domains` so frontend edit forms can initialize from persisted state.
 - 2026-06-04: Telegram test API now returns safe classified setup/runtime error codes for the Next settings UI.
-- 2026-06-04: Monitor runtime was verified and tightened: cold start writes `SeenItem` baseline only, user-level stable item IDs dedupe repeats across domains, and Telegram notifications use safe HTML through the monitor owner's saved credentials.
+- 2026-06-04: Monitor runtime was verified and tightened: cold start writes `SeenItem` baseline only and Telegram notifications use safe HTML through the monitor owner's saved credentials.
 - 2026-06-04: Telegram bot stop/status was hardened: stop no longer reports success until polling ends, timeout/incomplete stops remain visible as running, `/api/health` prunes stale bot tasks, and a safe cleanup script can clear webhook/pending-update state without printing credentials.
 - 2026-06-04: CF Worker routing mode persistence was hardened with startup user-column migrations, explicit `cf_worker_mode` PATCH/GET tests, frontend payload/error handling tests, and a fixed monitor debug trigger.
 - 2026-06-05: Frontend action buttons now use a shared exact-key async action model. Monitor mutations update local state from returned API data where available, same-monitor conflicting actions are disabled, unrelated monitor/seller/settings actions keep independent loading state, and stale monitor poll responses are ignored after newer mutations.
+- 2026-06-05: Monitor checks now use per-domain delta scraping: every selected domain is checked, runtime params force `newest_first`, page 1 is the default, wrong/missing-brand items do not act as a boundary, and each domain stops at its first accepted seen item.
 
 ## Recommended Obsidian Graph Groups
 
