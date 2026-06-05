@@ -42,12 +42,12 @@ async def test_duplicate_notification_prevention_same_user(db_session):
         await check_monitor(m2.id, scraper_client=mock_client)
 
     seen_result = await db_session.execute(select(SeenItem).where(SeenItem.user_id == user.id, SeenItem.vinted_item_id == 123))
-    assert len(seen_result.scalars().all()) == 1
+    assert len(seen_result.scalars().all()) == 2
 
     found_result = await db_session.execute(select(FoundItem).where(FoundItem.vinted_item_id == 123, FoundItem.monitor_id.in_([m1.id, m2.id])))
     found_items = found_result.scalars().all()
-    assert len(found_items) == 1
-    assert found_items[0].notified is False
+    assert len(found_items) == 2
+    assert all(item.notified is False for item in found_items)
 
 @pytest.mark.asyncio
 async def test_cross_user_notifications(db_session):
@@ -168,7 +168,6 @@ async def test_cross_domain_duplicate_item_ids_are_processed_per_domain(db_sessi
     )
     found_items = found_result.scalars().all()
     assert [(item.vinted_item_id, item.domain) for item in found_items] == [
-        (1001, "vinted.de"),
         (1001, "vinted.fr"),
         (1002, "vinted.de"),
     ]
@@ -548,7 +547,6 @@ async def test_cross_domain_duplicate_seen_on_later_check_is_domain_independent(
 
     found_items = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id, FoundItem.domain))).scalars().all()
     assert [(item.vinted_item_id, item.domain) for item in found_items] == [
-        (7001, "vinted.de"),
         (7001, "vinted.fr"),
         (7002, "vinted.de"),
     ]

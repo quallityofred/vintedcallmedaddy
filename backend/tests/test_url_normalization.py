@@ -149,8 +149,7 @@ def test_missing_brand_id_is_handled_safely_for_brand_monitor():
         seller_id=3,
     )
 
-    # Now lenient on missing brand_id
-    assert item_matches_monitor_filters(item, filters) == (True, None)
+    assert item_matches_monitor_filters(item, filters) == (False, "missing_brand_id")
 
 def test_parse_response_extracts_brand_id():
     items = parse_response(

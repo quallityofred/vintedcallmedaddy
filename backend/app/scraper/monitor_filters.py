@@ -73,12 +73,10 @@ def extract_monitor_filters(params: dict[str, Any]) -> MonitorFilters:
 
 def item_matches_monitor_filters(item: VintedItem, filters: MonitorFilters) -> tuple[bool, str | None]:
     if filters.brand_ids:
-        if item.brand_id is not None:
-            if str(item.brand_id) not in filters.brand_ids:
-                return False, "wrong_brand"
-        # If brand_id is None, we are lenient and allow it.
-        # Vinted API summary objects often omit brand_id.
-        # Since the query itself is brand-filtered, we trust the marketplace results.
+        if item.brand_id is None:
+            return False, "missing_brand_id"
+        if str(item.brand_id) not in filters.brand_ids:
+            return False, "wrong_brand"
     return True, None
 
 

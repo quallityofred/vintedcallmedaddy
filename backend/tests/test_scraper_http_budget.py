@@ -2,8 +2,9 @@ import asyncio
 import time
 import pytest
 from unittest.mock import MagicMock, patch
+from contextlib import asynccontextmanager
 
-from app.scraper.client import HttpBudgetLimiter
+from app.scraper.client import HttpBudgetLimiter, VintedClient
 from app.config import Settings
 
 @pytest.fixture
@@ -77,3 +78,61 @@ async def test_different_domains_concurrency(mock_settings):
                 assert stats["scraper_active_http_requests"] == 2
                 assert stats["scraper_active_http_requests_by_domain"]["vinted.pl"] == 1
                 assert stats["scraper_active_http_requests_by_domain"]["vinted.fr"] == 1
+
+
+@pytest.mark.asyncio
+async def test_item_detail_fetch_uses_http_budget(monkeypatch):
+    class FakeBudget:
+        def __init__(self):
+            self.acquired_domains = []
+
+        @asynccontextmanager
+        async def acquire(self, domain):
+            self.acquired_domains.append(domain)
+            yield
+
+        def report_block(self, domain):
+            pass
+
+    class FakeRateLimiter:
+        def __init__(self):
+            self.acquired_domains = []
+
+        async def acquire(self, domain):
+            self.acquired_domains.append(domain)
+
+        def report_success(self, domain):
+            pass
+
+        def report_error(self, domain):
+            pass
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "item": {
+                    "id": 123,
+                    "created_at": "2026-06-06T10:00:00Z",
+                    "catalog_id": 1231,
+                }
+            }
+
+    class FakeSession:
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    fake_budget = FakeBudget()
+    fake_rate_limiter = FakeRateLimiter()
+    client = VintedClient(rate_limiter=fake_rate_limiter)
+    monkeypatch.setattr("app.scraper.client._http_budget", fake_budget)
+    monkeypatch.setattr(client, "_warmup_session", lambda domain: asyncio.sleep(0))
+    monkeypatch.setattr(client, "_ensure_session", lambda domain: asyncio.sleep(0, result=FakeSession()))
+
+    detail = await client.fetch_item_detail("vinted.pl", 123)
+
+    assert fake_rate_limiter.acquired_domains == ["vinted.pl"]
+    assert fake_budget.acquired_domains == ["vinted.pl"]
+    assert detail is not None
+    assert detail.catalog_ids == frozenset({"1231"})

@@ -3,8 +3,7 @@ from unittest.mock import MagicMock, patch
 from app.scraper.parser import VintedItem
 from app.scraper.monitor_filters import MonitorFilters, item_matches_monitor_filters
 
-def test_nike_brand_id_missing_lenient_match():
-    # Item with brand_title "Nike" but brand_id None (common in summary API)
+def test_nike_brand_id_missing_is_skipped_for_brand_monitor():
     item = VintedItem(
         id=123,
         title="Nike Shoes",
@@ -33,10 +32,9 @@ def test_nike_brand_id_missing_lenient_match():
         order=None
     )
     
-    # Should match because we are lenient on missing brand_id
     matches, reason = item_matches_monitor_filters(item, filters)
-    assert matches is True
-    assert reason is None
+    assert matches is False
+    assert reason == "missing_brand_id"
 
 def test_wrong_brand_id_still_filtered():
     # Item with brand_id 999 (Not Nike)

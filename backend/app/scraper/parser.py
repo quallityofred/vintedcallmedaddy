@@ -1,6 +1,8 @@
 # app/scraper/parser.py
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,14 @@ class VintedItem:
     domain: str
     seller_id: int
     brand_id: int | None = None
+
+
+@dataclass(frozen=True)
+class VintedItemDetail:
+    item_id: int
+    listed_at: datetime | None = None
+    catalog_ids: frozenset[str] = frozenset()
+    category_ids: frozenset[str] = frozenset()
 
 
 def _is_promoted_item(item: dict) -> bool:
@@ -78,6 +88,149 @@ def _extract_brand_id(item: dict) -> int | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            # Vinted timestamps are usually seconds. Treat very large values as ms.
+            timestamp = float(value) / 1000 if float(value) > 10_000_000_000 else float(value)
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return _parse_datetime(int(text))
+        try:
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _walk_values(obj: Any):
+    if isinstance(obj, dict):
+        yield obj
+        for value in obj.values():
+            yield from _walk_values(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _walk_values(value)
+
+
+def _extract_detail_time(item: dict) -> datetime | None:
+    preferred_keys = (
+        "created_at",
+        "created_at_ts",
+        "listed_at",
+        "uploaded_at",
+        "publication_date",
+        "published_at",
+    )
+    for key in preferred_keys:
+        parsed = _parse_datetime(item.get(key))
+        if parsed:
+            return parsed
+
+    for obj in _walk_values(item):
+        for key, value in obj.items():
+            key_text = str(key).lower()
+            if any(token in key_text for token in ("created", "listed", "uploaded", "published")):
+                parsed = _parse_datetime(value)
+                if parsed:
+                    return parsed
+    return None
+
+
+def _extract_int_id(value: Any) -> str | None:
+    try:
+        if value is not None and str(value).strip():
+            return str(int(value))
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _extract_detail_category_ids(item: dict) -> tuple[frozenset[str], frozenset[str]]:
+    catalog_ids: set[str] = set()
+    category_ids: set[str] = set()
+
+    for key in ("catalog_id", "catalog_ids"):
+        values = item.get(key)
+        if not isinstance(values, list):
+            values = [values]
+        for value in values:
+            parsed = _extract_int_id(value)
+            if parsed:
+                catalog_ids.add(parsed)
+
+    for key in ("category_id", "category_ids"):
+        values = item.get(key)
+        if not isinstance(values, list):
+            values = [values]
+        for value in values:
+            parsed = _extract_int_id(value)
+            if parsed:
+                category_ids.add(parsed)
+
+    for obj in _walk_values(item):
+        if not isinstance(obj, dict):
+            continue
+        for key, value in obj.items():
+            key_text = str(key).lower()
+            if key_text == "id":
+                continue
+            if any(token in key_text for token in ("catalog", "category", "breadcrumb")):
+                if isinstance(value, dict):
+                    parsed = _extract_int_id(value.get("id"))
+                    if parsed:
+                        if "catalog" in key_text:
+                            catalog_ids.add(parsed)
+                        else:
+                            category_ids.add(parsed)
+                elif isinstance(value, list):
+                    for entry in value:
+                        if isinstance(entry, dict):
+                            parsed = _extract_int_id(entry.get("id"))
+                        else:
+                            parsed = _extract_int_id(entry)
+                        if parsed:
+                            if "catalog" in key_text:
+                                catalog_ids.add(parsed)
+                            else:
+                                category_ids.add(parsed)
+                else:
+                    parsed = _extract_int_id(value)
+                    if parsed:
+                        if "catalog" in key_text:
+                            catalog_ids.add(parsed)
+                        else:
+                            category_ids.add(parsed)
+
+    return frozenset(catalog_ids), frozenset(category_ids)
+
+
+def parse_item_detail(data: dict, item_id: int) -> VintedItemDetail:
+    item = data.get("item", data) if isinstance(data, dict) else {}
+    if not isinstance(item, dict):
+        item = {}
+    catalog_ids, category_ids = _extract_detail_category_ids(item)
+    return VintedItemDetail(
+        item_id=item_id,
+        listed_at=_extract_detail_time(item),
+        catalog_ids=catalog_ids,
+        category_ids=category_ids,
+    )
 
 
 def parse_response(data: dict, domain: str) -> list[VintedItem]:

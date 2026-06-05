@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from curl_cffi.requests import AsyncSession
 import httpx
 
-from app.scraper.parser import VintedItem, parse_response
+from app.scraper.parser import VintedItem, VintedItemDetail, parse_item_detail, parse_response
 from app.scraper.rate_limiter import TokenBucketLimiter
 from app.config import get_settings
 
@@ -331,6 +331,48 @@ class VintedClient:
             if self.cf_fallback:
                 self.cf_fallback.report_block(domain)
             return []
+
+    async def fetch_item_detail(self, domain: str, item_id: int) -> VintedItemDetail | None:
+        await self.rate_limiter.acquire(domain)
+        await self._warmup_session(domain)
+
+        session = await self._ensure_session(domain)
+        url = f"https://www.{domain}/api/v2/items/{item_id}/details"
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": f"https://www.{domain}/items/{item_id}",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+        try:
+            async with _http_budget.acquire(domain):
+                response = await session.get(url, headers=headers, timeout=20.0)
+
+            if response.status_code == 200:
+                self.rate_limiter.report_success(domain)
+                data = response.json()
+                return parse_item_detail(data, item_id)
+
+            if response.status_code in (403, 429):
+                logger.warning("Blocked on item detail domain=%s status=%d", domain, response.status_code)
+                self.rate_limiter.report_error(domain)
+                _http_budget.report_block(domain)
+                if self.cf_fallback:
+                    self.cf_fallback.report_block(domain)
+                return None
+
+            if response.status_code == 404:
+                logger.info("Item detail not found domain=%s item_id=%s", domain, item_id)
+                return None
+
+            logger.warning("Unexpected item detail status=%d domain=%s", response.status_code, domain)
+            return None
+        except Exception:
+            logger.exception("Item detail request failed for domain=%s item_id=%s", domain, item_id)
+            self.rate_limiter.report_error(domain)
+            return None
 
     async def _search_domain_with_semaphore(
         self, domain: str, params: dict, mode: str = "auto"

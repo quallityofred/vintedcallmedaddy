@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from app.models import User, Monitor, FoundItem, SeenItem
 from app.scraper.client import VintedClient, DomainSearchResult
-from app.scraper.parser import VintedItem
+from app.scraper.parser import VintedItem, VintedItemDetail
 
 from app.scheduler import tasks
 
@@ -60,6 +60,9 @@ class FakeDomainClient:
             DomainSearchResult(domain=d, items=self.results.get(d, []), request_count=1, duration_ms=10)
             for d in domains
         ]
+
+    async def fetch_item_detail(self, domain, item_id):
+        return VintedItemDetail(item_id=item_id, listed_at=datetime.now(timezone.utc))
     
     async def close(self):
         pass
@@ -119,15 +122,14 @@ async def test_delta_wrong_brand_and_missing_brand_behavior(db_session):
         "vinted.fr": [
             _item(19, brand_id=123),   # NEW, matches
             _item(20, brand_id=999),   # SEEN, WRONG BRAND -> Skipped, NOT boundary
-            _item(21, brand_id=None),  # SEEN, MISSING BRAND -> Lenient Match! -> BOUNDARY!
-            _item(22, brand_id=123),   # NEW, but after boundary -> NEVER REACHED
+            _item(21, brand_id=None),  # SEEN, MISSING BRAND -> Skipped, NOT boundary
+            _item(22, brand_id=123),   # NEW, matches
         ]
     })
     await _run_check(db_session, monitor, client)
 
     found = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id))).scalars().all()
-    # Should only find 19.
-    assert [item.vinted_item_id for item in found] == [19]
+    assert [item.vinted_item_id for item in found] == [19, 22]
 
 @pytest.mark.asyncio
 async def test_cold_start_multiple_domains_seeds_each_domain_without_found_items(db_session):

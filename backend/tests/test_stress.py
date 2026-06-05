@@ -67,20 +67,19 @@ async def test_concurrent_monitor_execution(db_session):
         tasks = [sem_check(mid) for mid in monitor_ids]
         await asyncio.gather(*tasks)
 
-    # Verify only ONE SeenItem exists for this user/item
+    # SeenItem is monitor-scoped so each monitor keeps its own boundary.
     result = await db_session.execute(
         select(func.count(SeenItem.id)).where(SeenItem.user_id == user.id, SeenItem.vinted_item_id == 999)
     )
-    assert result.scalar() == 1
+    assert result.scalar() == len(monitor_ids)
 
-    # Verify the item is recorded once as a user-visible finding.
+    # FoundItem is also monitor-scoped.
     result = await db_session.execute(
         select(func.count(FoundItem.id)).where(FoundItem.vinted_item_id == 999)
     )
-    assert result.scalar() == 1
+    assert result.scalar() == len(monitor_ids)
 
-    # Verify only one notification was queued.
     result = await db_session.execute(
         select(func.count(FoundItem.id)).where(FoundItem.vinted_item_id == 999, FoundItem.notified == False)
     )
-    assert result.scalar() == 1
+    assert result.scalar() == len(monitor_ids)

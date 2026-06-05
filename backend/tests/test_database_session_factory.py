@@ -152,6 +152,11 @@ def test_monitor_check_backpressure_defaults_are_conservative():
     assert settings.monitor_check_per_user_concurrency == 1
     assert settings.monitor_check_acquire_timeout_seconds == 2.0
     assert settings.monitor_check_max_pages_per_domain == 1
+    assert settings.monitor_candidate_detail_max_per_check == 10
+    assert settings.monitor_freshness_grace_seconds == 600
+    assert settings.monitor_detail_guard_enabled is True
+    assert settings.monitor_detail_category_guard_enabled is True
+    assert settings.monitor_detail_freshness_guard_enabled is True
 
 
 def test_monitor_check_backpressure_env_overrides(monkeypatch):
@@ -159,6 +164,11 @@ def test_monitor_check_backpressure_env_overrides(monkeypatch):
     monkeypatch.setenv("MONITOR_CHECK_PER_USER_CONCURRENCY", "2")
     monkeypatch.setenv("MONITOR_CHECK_ACQUIRE_TIMEOUT_SECONDS", "1.5")
     monkeypatch.setenv("MONITOR_CHECK_MAX_PAGES_PER_DOMAIN", "3")
+    monkeypatch.setenv("MONITOR_CANDIDATE_DETAIL_MAX_PER_CHECK", "7")
+    monkeypatch.setenv("MONITOR_FRESHNESS_GRACE_SECONDS", "120")
+    monkeypatch.setenv("MONITOR_DETAIL_GUARD_ENABLED", "false")
+    monkeypatch.setenv("MONITOR_DETAIL_CATEGORY_GUARD_ENABLED", "false")
+    monkeypatch.setenv("MONITOR_DETAIL_FRESHNESS_GUARD_ENABLED", "false")
 
     settings = app_config.Settings(_env_file=None)
 
@@ -166,6 +176,11 @@ def test_monitor_check_backpressure_env_overrides(monkeypatch):
     assert settings.monitor_check_per_user_concurrency == 2
     assert settings.monitor_check_acquire_timeout_seconds == 1.5
     assert settings.monitor_check_max_pages_per_domain == 3
+    assert settings.monitor_candidate_detail_max_per_check == 7
+    assert settings.monitor_freshness_grace_seconds == 120
+    assert settings.monitor_detail_guard_enabled is False
+    assert settings.monitor_detail_category_guard_enabled is False
+    assert settings.monitor_detail_freshness_guard_enabled is False
 
 
 @pytest.mark.parametrize("value", ["true", "1", "yes"])

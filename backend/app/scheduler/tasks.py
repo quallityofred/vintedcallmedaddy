@@ -48,9 +48,23 @@ _backpressure_stats = {
 AsyncSessionLocal = None
 
 
-def _new_session() -> AsyncSession:
+class _ReusedSessionContext:
+	def __init__(self, session: AsyncSession) -> None:
+		self.session = session
+
+	async def __aenter__(self) -> AsyncSession:
+		return self.session
+
+	async def __aexit__(self, exc_type, exc, tb) -> None:
+		return None
+
+
+def _new_session():
 	session_factory = AsyncSessionLocal or get_session_factory()
-	return session_factory()
+	session = session_factory()
+	if isinstance(session, AsyncSession):
+		return _ReusedSessionContext(session)
+	return session
 
 
 @dataclass
@@ -75,6 +89,7 @@ class MonitorCheckContext:
 	monitor_filters: object
 	hidden_seller_ids: set[int]
 	is_cold_start: bool
+	freshness_cutoff_at: datetime | None
 	original_interval: int
 	cf_worker_url: str
 	cf_worker_mode: str
@@ -97,6 +112,15 @@ class DomainDeltaResult:
 	error: str | None
 	new_items: list[VintedItem]
 	baseline_items: list[VintedItem]
+	seen_only_items: list[VintedItem]
+	detail_requests_count: int = 0
+	detail_success_count: int = 0
+	detail_failed_count: int = 0
+	detail_cap_exceeded_count: int = 0
+	stale_skipped_count: int = 0
+	wrong_category_skipped_count: int = 0
+	detail_missing_timestamp_count: int = 0
+	detail_missing_category_count: int = 0
 
 
 @dataclass
@@ -160,6 +184,10 @@ def get_backpressure_state() -> dict[str, int | float]:
 		"monitor_check_user_active": user_active,
 		"monitor_check_already_running_skips": _backpressure_stats["already_running_skips"],
 		"monitor_check_capacity_timeouts": _backpressure_stats["capacity_timeouts"],
+		"monitor_candidate_detail_max_per_check": settings.monitor_candidate_detail_max_per_check,
+		"monitor_detail_guard_enabled": int(settings.monitor_detail_guard_enabled),
+		"monitor_detail_category_guard_enabled": int(settings.monitor_detail_category_guard_enabled),
+		"monitor_detail_freshness_guard_enabled": int(settings.monitor_detail_freshness_guard_enabled),
 	}
 
 
@@ -404,11 +432,16 @@ async def _select_domain_delta_items(
 		accepted_items.append(item)
 		accepted_ids.add(item.id)
 
-	seen_ids = await _load_seen_item_ids(db, context.user_id, result.domain, accepted_ids)
+	seen_ids = await _load_seen_item_ids(db, context.monitor_id, result.domain, accepted_ids)
 	new_items: list[VintedItem] = []
 	baseline_items: list[VintedItem] = []
 	seen_boundary_hit = False
 	stopped_at_seen_item_id: int | None = None
+	defer_summary_seen_boundary = (
+		settings.monitor_detail_guard_enabled
+		and settings.monitor_detail_category_guard_enabled
+		and bool(context.monitor_filters.catalog_ids)
+	)
 
 	for item in accepted_items:
 		if context.is_cold_start:
@@ -416,6 +449,8 @@ async def _select_domain_delta_items(
 				baseline_items.append(item)
 			continue
 		if item.id in seen_ids:
+			if defer_summary_seen_boundary:
+				continue
 			seen_boundary_hit = True
 			stopped_at_seen_item_id = item.id
 			break
@@ -435,7 +470,128 @@ async def _select_domain_delta_items(
 		error=result.error,
 		new_items=new_items,
 		baseline_items=baseline_items,
+		seen_only_items=[],
 	)
+
+
+def _candidate_detail_needed(context: MonitorCheckContext) -> bool:
+	if not settings.monitor_detail_guard_enabled:
+		return False
+	if (
+		settings.monitor_detail_category_guard_enabled
+		and context.monitor_filters.catalog_ids
+	):
+		return True
+	if (
+		not context.is_cold_start
+		and settings.monitor_detail_freshness_guard_enabled
+	):
+		return True
+	return False
+
+
+def _detail_category_matches(context: MonitorCheckContext, detail) -> tuple[bool | None, str | None]:
+	if not (
+		settings.monitor_detail_category_guard_enabled
+		and context.monitor_filters.catalog_ids
+	):
+		return True, None
+
+	detail_ids = set(detail.catalog_ids) | set(detail.category_ids)
+	if not detail_ids:
+		return None, "detail_missing_category"
+	if detail_ids & set(context.monitor_filters.catalog_ids):
+		return True, None
+	return False, "wrong_category"
+
+
+def _detail_is_fresh(context: MonitorCheckContext, detail) -> tuple[bool | None, str | None]:
+	if context.is_cold_start or not settings.monitor_detail_freshness_guard_enabled:
+		return True, None
+	if context.freshness_cutoff_at is None:
+		return True, None
+	if detail.listed_at is None:
+		return None, "detail_missing_timestamp"
+	cutoff_source = context.freshness_cutoff_at
+	if cutoff_source.tzinfo is None:
+		cutoff_source = cutoff_source.replace(tzinfo=timezone.utc)
+	cutoff = cutoff_source.astimezone(timezone.utc) - timedelta(seconds=settings.monitor_freshness_grace_seconds)
+	listed_at = detail.listed_at
+	if listed_at.tzinfo is None:
+		listed_at = listed_at.replace(tzinfo=timezone.utc)
+	listed_at = listed_at.astimezone(timezone.utc)
+	if listed_at < cutoff:
+		return False, "stale_item"
+	return True, None
+
+
+async def _apply_candidate_detail_guard(
+	client: VintedClient,
+	*,
+	context: MonitorCheckContext,
+	domain_deltas: list[DomainDeltaResult],
+) -> None:
+	if not _candidate_detail_needed(context):
+		return
+
+	fetch_detail = getattr(client, "fetch_item_detail", None)
+	if fetch_detail is None or not inspect.iscoroutinefunction(fetch_detail):
+		logger.warning(
+			"Monitor detail guard skipped because scraper client has no async detail fetch: monitor_id=%s",
+			context.monitor_id,
+		)
+		return
+	detail_cap_remaining = max(0, settings.monitor_candidate_detail_max_per_check)
+
+	for delta in domain_deltas:
+		source_items = delta.baseline_items if context.is_cold_start else delta.new_items
+		allowed_items: list[VintedItem] = []
+		seen_only_items: list[VintedItem] = []
+
+		for item in source_items:
+			if detail_cap_remaining <= 0:
+				delta.detail_cap_exceeded_count += 1
+				continue
+
+			detail_cap_remaining -= 1
+			delta.detail_requests_count += 1
+			detail = await fetch_detail(item.domain, item.id)
+
+			if detail is None:
+				delta.detail_failed_count += 1
+				if context.monitor_filters.catalog_ids and settings.monitor_detail_category_guard_enabled:
+					continue
+				if not context.is_cold_start and settings.monitor_detail_freshness_guard_enabled:
+					seen_only_items.append(item)
+				continue
+
+			delta.detail_success_count += 1
+			category_match, category_reason = _detail_category_matches(context, detail)
+			if category_match is None:
+				delta.detail_missing_category_count += 1
+				continue
+			if category_match is False:
+				delta.wrong_category_skipped_count += 1
+				continue
+
+			fresh, fresh_reason = _detail_is_fresh(context, detail)
+			if fresh is None:
+				delta.detail_missing_timestamp_count += 1
+				seen_only_items.append(item)
+				continue
+			if fresh is False:
+				delta.stale_skipped_count += 1
+				seen_only_items.append(item)
+				continue
+
+			allowed_items.append(item)
+
+		if context.is_cold_start:
+			delta.baseline_items = allowed_items
+		else:
+			delta.new_items = allowed_items
+			delta.new_candidate_count = len(allowed_items)
+		delta.seen_only_items.extend(seen_only_items)
 
 
 async def _try_start_monitor_check(monitor_id: int) -> bool:
@@ -521,6 +677,7 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 			monitor_filters=monitor_filters,
 			hidden_seller_ids=hidden_seller_ids,
 			is_cold_start=monitor.last_check_at is None,
+			freshness_cutoff_at=monitor.last_check_at,
 			original_interval=params.get("_original_interval", monitor.interval_sec),
 			cf_worker_url=user.cf_worker_url,
 			cf_worker_mode=user.cf_worker_mode,
@@ -589,6 +746,29 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					domains=context.domains,
 					mode=context.cf_worker_mode,
 				)
+
+				raw_result_count = sum(len(result.items or []) for result in domain_results)
+				domain_deltas: list[DomainDeltaResult] = []
+				if domain_results and raw_result_count > 0:
+					async with _new_session() as db:
+						result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+						monitor = result.scalar_one_or_none()
+						if monitor is None or not monitor.is_active:
+							return
+						domain_deltas = [
+							await _select_domain_delta_items(
+								db,
+								context=context,
+								result=result,
+							)
+							for result in domain_results
+						]
+
+					await _apply_candidate_detail_guard(
+						client,
+						context=context,
+						domain_deltas=domain_deltas,
+					)
 			finally:
 				if owns_client:
 					await client.close()
@@ -599,32 +779,33 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 				if monitor is None or not monitor.is_active:
 					return
 
-				raw_result_count = sum(len(result.items or []) for result in domain_results)
 				if not domain_results or raw_result_count == 0:
 					await _update_monitor_interval(db, monitor, False, original_interval=context.original_interval)
 					monitor.last_check_status = "success_zero_items"
 				else:
-					domain_deltas = [
-						await _select_domain_delta_items(
-							db,
-							context=context,
-							result=result,
-						)
-						for result in domain_results
-					]
-
 					accepted_count = sum(delta.accepted_count for delta in domain_deltas)
 					skipped_by_filter_count = sum(delta.skipped_by_filter_count for delta in domain_deltas)
 					missing_brand_id_count = sum(delta.missing_brand_id_count for delta in domain_deltas)
 					seen_boundary_hits = sum(1 for delta in domain_deltas if delta.seen_boundary_hit)
 					request_count = sum(delta.request_count for delta in domain_deltas)
 					checked_domain_count = len(domain_deltas)
+					detail_requests_count = sum(delta.detail_requests_count for delta in domain_deltas)
+					detail_success_count = sum(delta.detail_success_count for delta in domain_deltas)
+					detail_failed_count = sum(delta.detail_failed_count for delta in domain_deltas)
+					detail_cap_exceeded_count = sum(delta.detail_cap_exceeded_count for delta in domain_deltas)
+					stale_skipped_count = sum(delta.stale_skipped_count for delta in domain_deltas)
+					wrong_category_skipped_count = sum(delta.wrong_category_skipped_count for delta in domain_deltas)
+					detail_missing_timestamp_count = sum(delta.detail_missing_timestamp_count for delta in domain_deltas)
+					detail_missing_category_count = sum(delta.detail_missing_category_count for delta in domain_deltas)
 
 					logger.info(
 						"Monitor delta check results: monitor_id=%s user_id=%s monitor_name=%s filter_keys=%s "
 						"selected_domain_count=%s checked_domain_count=%s request_count=%s raw_count=%s "
 						"accepted_count=%s new_count=%s seen_boundary_hits=%s skipped_by_filter_count=%s "
-						"missing_brand_id_count=%s cold_start=%s",
+						"missing_brand_id_count=%s detail_requests_count=%s detail_success_count=%s "
+						"detail_failed_count=%s detail_cap_exceeded_count=%s stale_skipped_count=%s "
+						"wrong_category_skipped_count=%s detail_missing_timestamp_count=%s "
+						"detail_missing_category_count=%s cold_start=%s",
 						monitor.id,
 						context.user_id,
 						monitor.name,
@@ -638,13 +819,24 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 						seen_boundary_hits,
 						skipped_by_filter_count,
 						missing_brand_id_count,
+						detail_requests_count,
+						detail_success_count,
+						detail_failed_count,
+						detail_cap_exceeded_count,
+						stale_skipped_count,
+						wrong_category_skipped_count,
+						detail_missing_timestamp_count,
+						detail_missing_category_count,
 						context.is_cold_start,
 					)
 					for delta in domain_deltas:
 						logger.info(
 							"Monitor domain delta: monitor_id=%s domain=%s raw_count=%s accepted_count=%s "
 							"new_candidate_count=%s seen_boundary_hit=%s stopped_at_seen_item_id=%s "
-							"skipped_by_filter_count=%s missing_brand_id_count=%s request_count=%s duration_ms=%s error=%s",
+							"skipped_by_filter_count=%s missing_brand_id_count=%s request_count=%s duration_ms=%s "
+							"detail_requests_count=%s detail_success_count=%s detail_failed_count=%s "
+							"detail_cap_exceeded_count=%s stale_skipped_count=%s wrong_category_skipped_count=%s "
+							"detail_missing_timestamp_count=%s detail_missing_category_count=%s error=%s",
 							monitor.id,
 							delta.domain,
 							delta.raw_count,
@@ -656,6 +848,14 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 							delta.missing_brand_id_count,
 							delta.request_count,
 							delta.duration_ms,
+							delta.detail_requests_count,
+							delta.detail_success_count,
+							delta.detail_failed_count,
+							delta.detail_cap_exceeded_count,
+							delta.stale_skipped_count,
+							delta.wrong_category_skipped_count,
+							delta.detail_missing_timestamp_count,
+							delta.detail_missing_category_count,
 							delta.error,
 						)
 
@@ -663,14 +863,19 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					found_items_to_insert = []
 					new_items_to_notify: list[VintedItem] = []
 
-					# Process results and deduplicate items across domains within this check cycle
+					# Process results and deduplicate items across domains within this check cycle.
 					found_vinted_ids: set[int] = set()
 
 					now = datetime.now(timezone.utc)
 					for delta in domain_deltas:
 						delta_items = delta.baseline_items if context.is_cold_start else delta.new_items
-						for item in delta_items:
-							# For SeenItem, we track per domain to maintain correct delta boundaries
+						seen_source_items = list(delta_items) + list(delta.seen_only_items)
+						seen_source_ids: set[int] = set()
+						for item in seen_source_items:
+							if item.id in seen_source_ids:
+								continue
+							seen_source_ids.add(item.id)
+							# For SeenItem, we track per domain to maintain correct delta boundaries.
 							seen_items_to_insert.append({
 								"monitor_id": monitor_id,
 								"user_id": context.user_id,
@@ -679,10 +884,11 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 								"seen_at": now,
 							})
 
-							if context.is_cold_start:
-								continue
+						if context.is_cold_start:
+							continue
 
-							# For FoundItem, deduplicate globally across all domains for this monitor
+						for item in delta.new_items:
+							# For FoundItem, deduplicate globally across all domains for this monitor.
 							if item.id in found_vinted_ids:
 								continue
 							found_vinted_ids.add(item.id)
