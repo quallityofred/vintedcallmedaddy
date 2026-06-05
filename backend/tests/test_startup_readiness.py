@@ -85,6 +85,10 @@ async def test_api_health_exposes_schema_and_code_marker():
     assert "startup_status" in payload
     assert "database_status" in payload
     assert "database_pool_mode" in payload
+    assert "database_pool_size" in payload
+    assert "database_max_overflow" in payload
+    assert "database_pool_timeout_seconds" in payload
+    assert "database_pool_recycle_seconds" in payload
     assert "scheduler_ready" in payload
     assert "startup_error" in payload
 

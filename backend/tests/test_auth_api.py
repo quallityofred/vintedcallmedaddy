@@ -124,10 +124,31 @@ def _production_like_disconnect_error(*, connection_invalidated: bool = False) -
     )
 
 
+def _supabase_pool_capacity_error() -> DBAPIError:
+    class InternalServerError(RuntimeError):
+        pass
+
+    orig = InternalServerError(
+        "(EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15"
+    )
+    return DBAPIError(
+        "SELECT users.id FROM users WHERE users.username = $1",
+        {},
+        orig,
+        connection_invalidated=False,
+    )
+
+
 def test_disconnect_detection_matches_production_wrapped_asyncpg_shape():
     exc = _production_like_disconnect_error(connection_invalidated=False)
 
     assert app_database.is_db_disconnect_error(exc) is True
+
+
+def test_capacity_detection_matches_supabase_session_pooler_error():
+    exc = _supabase_pool_capacity_error()
+
+    assert app_database.is_db_capacity_error(exc) is True
 
 
 @pytest.mark.asyncio
@@ -332,6 +353,20 @@ async def test_primary_get_current_user_returns_503_after_repeated_db_disconnect
 
 
 @pytest.mark.asyncio
+async def test_primary_get_current_user_returns_503_after_supabase_pool_capacity_error():
+    db = _FlakyAuthDb(_supabase_pool_capacity_error())
+    request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await web_auth.get_current_user(request, db)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Database temporarily unavailable"
+    assert db.execute_calls == 1
+    assert db.rollback_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_login_retries_once_after_db_disconnect_and_succeeds(monkeypatch):
     user = User(id=9, username="login_retry_user", telegram_bot_token="", telegram_chat_id="")
     user.set_password("password")
@@ -373,6 +408,22 @@ async def test_login_returns_503_after_repeated_db_disconnect(monkeypatch):
     assert retry_db.execute_calls == 1
     assert retry_db.rollback_calls == 1
     assert db.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_login_returns_503_after_supabase_pool_capacity_error():
+    db = _FlakyAuthDb(_supabase_pool_capacity_error())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_api_router.login(
+            auth_api_router.LoginRequest(username="login_retry_user", password="password"),
+            db,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Database temporarily unavailable"
+    assert db.execute_calls == 1
+    assert db.rollback_calls == 1
 
 
 @pytest.mark.asyncio

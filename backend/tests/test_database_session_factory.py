@@ -20,10 +20,10 @@ class FakeSqliteSettings:
 
 class FakePostgresSettings:
     database_url_validated = "postgresql+asyncpg://user:pass@example.test/db"
-    db_pool_size = 20
-    db_max_overflow = 10
-    db_pool_timeout = 30
-    db_pool_recycle_seconds = 300
+    db_pool_size = 3
+    db_max_overflow = 0
+    db_pool_timeout = 10
+    db_pool_recycle_seconds = 120
     db_connect_timeout_seconds = 10
     db_operation_timeout_seconds = 10
     db_use_null_pool = False
@@ -90,10 +90,11 @@ def test_postgres_engine_kwargs_enable_connection_resilience():
     kwargs = app_database.build_async_engine_kwargs(FakePostgresSettings())
 
     assert kwargs["pool_pre_ping"] is True
-    assert kwargs["pool_recycle"] == 300
-    assert kwargs["pool_size"] == 20
-    assert kwargs["max_overflow"] == 10
-    assert kwargs["pool_timeout"] == 30
+    assert kwargs["pool_recycle"] == 120
+    assert kwargs["pool_size"] == 3
+    assert kwargs["pool_size"] <= 5
+    assert kwargs["max_overflow"] == 0
+    assert kwargs["pool_timeout"] == 10
     assert kwargs["connect_args"] == {
         "statement_cache_size": 0,
         "timeout": 10,
@@ -118,7 +119,7 @@ def test_postgres_engine_kwargs_support_null_pool():
 
     assert kwargs["poolclass"].__name__ == "NullPool"
     assert kwargs["pool_pre_ping"] is True
-    assert kwargs["pool_recycle"] == 300
+    assert kwargs["pool_recycle"] == 120
     assert kwargs["connect_args"] == {
         "statement_cache_size": 0,
         "timeout": 10,
@@ -128,6 +129,20 @@ def test_postgres_engine_kwargs_support_null_pool():
     assert "pool_size" not in kwargs
     assert "max_overflow" not in kwargs
     assert "pool_timeout" not in kwargs
+
+
+def test_postgres_pool_env_overrides_still_work(monkeypatch):
+    monkeypatch.setenv("DB_POOL_SIZE", "5")
+    monkeypatch.setenv("DB_MAX_OVERFLOW", "1")
+    monkeypatch.setenv("DB_POOL_TIMEOUT", "9")
+    monkeypatch.setenv("DB_POOL_RECYCLE_SECONDS", "180")
+
+    settings = app_config.Settings(_env_file=None)
+
+    assert settings.db_pool_size == 5
+    assert settings.db_max_overflow == 1
+    assert settings.db_pool_timeout == 9
+    assert settings.db_pool_recycle_seconds == 180
 
 
 @pytest.mark.parametrize("value", ["true", "1", "yes"])

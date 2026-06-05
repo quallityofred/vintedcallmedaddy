@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
-from app.database import DatabaseTemporarilyUnavailable, init_db, is_db_disconnect_error
+from app.database import DatabaseTemporarilyUnavailable, init_db, is_db_capacity_error, is_db_disconnect_error
 from app.logger import log_manager
 from app.web.dependencies import RequireLoginException, restore_persisted_bot
 
@@ -58,6 +58,22 @@ def _database_pool_mode() -> str:
     if settings.is_sqlite():
         return "static"
     return "null" if settings.db_use_null_pool else "queue"
+
+
+def _database_pool_settings() -> dict[str, int | None]:
+    if settings.is_sqlite():
+        return {
+            "database_pool_size": None,
+            "database_max_overflow": None,
+            "database_pool_timeout_seconds": None,
+            "database_pool_recycle_seconds": None,
+        }
+    return {
+        "database_pool_size": None if settings.db_use_null_pool else settings.db_pool_size,
+        "database_max_overflow": None if settings.db_use_null_pool else settings.db_max_overflow,
+        "database_pool_timeout_seconds": settings.db_pool_timeout,
+        "database_pool_recycle_seconds": settings.db_pool_recycle_seconds,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +284,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(SQLAlchemyError)
     async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
+        if is_db_capacity_error(exc):
+            logger.warning("Known database capacity error during request: %s %s", request.method, request.url.path)
+            return JSONResponse({"detail": "Database temporarily unavailable"}, status_code=503)
         if is_db_disconnect_error(exc):
             logger.warning("Known database disconnect during request: %s %s", request.method, request.url.path)
             return JSONResponse({"detail": "Database temporarily unavailable"}, status_code=503)
@@ -280,6 +299,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(500)
     async def server_error_handler(request: Request, exc):
+        if is_db_capacity_error(exc):
+            logger.warning("Known database capacity error reached 500 handler: %s %s", request.method, request.url.path)
+            return JSONResponse({"detail": "Database temporarily unavailable"}, status_code=503)
         if is_db_disconnect_error(exc):
             logger.warning("Known database disconnect reached 500 handler: %s %s", request.method, request.url.path)
             return JSONResponse({"detail": "Database temporarily unavailable"}, status_code=503)
@@ -313,6 +335,7 @@ def create_app() -> FastAPI:
             "startup_status": getattr(request.app.state, "startup_status", "unknown"),
             "database_status": "ready" if getattr(request.app.state, "db_ready", False) else "not_ready",
             "database_pool_mode": _database_pool_mode(),
+            **_database_pool_settings(),
             "scheduler_ready": bool(getattr(request.app.state, "scheduler_ready", False)),
             "startup_error": getattr(request.app.state, "startup_error", None),
             "scheduler_jobs": job_count,

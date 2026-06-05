@@ -114,6 +114,21 @@ def is_db_disconnect_error(exc: BaseException) -> bool:
     return False
 
 
+def is_db_capacity_error(exc: BaseException) -> bool:
+    """Return True when the external DB/pooler is refusing more clients."""
+    for current in _iter_exception_chain(exc):
+        text = (
+            f"{current.__class__.__module__}.{current.__class__.__name__}: {current}"
+        ).lower()
+        if (
+            "emaxconnsession" in text
+            or "max clients reached in session mode" in text
+            or "max clients are limited to pool_size" in text
+        ):
+            return True
+    return False
+
+
 class DatabaseTemporarilyUnavailable(Exception):
     """Raised when a known database disconnect still fails after one retry."""
 
@@ -172,6 +187,10 @@ async def run_db_with_retry(
                     return await asyncio.wait_for(operation_result, timeout=operation_timeout)
                 return await operation_result
             except disconnect_types as exc:
+                if is_db_capacity_error(exc):
+                    await _rollback_after_disconnect(active_db, operation_name)
+                    logger.warning("db_capacity_error operation=%s", operation_name)
+                    raise DatabaseTemporarilyUnavailable("Database temporarily unavailable") from exc
                 if not is_db_disconnect_error(exc):
                     raise
                 await _rollback_after_disconnect(active_db, operation_name)

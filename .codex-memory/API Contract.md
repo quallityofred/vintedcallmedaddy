@@ -308,7 +308,7 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 
 ## [2026-06-05] Update: Backend health deploy markers
 
-- `GET /api/health` includes safe readiness/deploy fields: `health_schema_version`, `code_version`, optional short `commit`, `startup_status`, `database_status`, `database_pool_mode`, `scheduler_ready`, and `startup_error`.
+- `GET /api/health` includes safe readiness/deploy fields: `health_schema_version`, `code_version`, optional short `commit`, `startup_status`, `database_status`, `database_pool_mode`, `database_pool_size`, `database_max_overflow`, `database_pool_timeout_seconds`, `database_pool_recycle_seconds`, `scheduler_ready`, and `startup_error`.
 - Backend `/` service JSON also includes `health_schema_version` and `code_version` when it returns JSON instead of redirecting to `FRONTEND_URL`.
 - `GET /health` remains a minimal liveness probe with `status` and `service` only, so Railway can check liveness without waiting for optional background startup work.
 - If production `/api/health` returns only the old `status`, `scheduler_jobs`, and `bots_running` shape, the public backend is not serving the current readiness build.

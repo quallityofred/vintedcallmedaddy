@@ -15,10 +15,10 @@ class Settings(BaseSettings):
     secret_key: str = ""  # MUST be set in .env for production!
     session_cookie_secure: bool = False
     database_url: str = "sqlite+aiosqlite:///:memory:"
-    db_pool_size: int = 20
-    db_max_overflow: int = 10
-    db_pool_timeout: int = 30
-    db_pool_recycle_seconds: int = 300
+    db_pool_size: int = 3
+    db_max_overflow: int = 0
+    db_pool_timeout: int = 10
+    db_pool_recycle_seconds: int = 120
     db_connect_timeout_seconds: int = 10
     db_operation_timeout_seconds: int = 10
     db_use_null_pool: bool = False
