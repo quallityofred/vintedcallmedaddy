@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     monitor_check_per_user_concurrency: int = Field(default=1, ge=1)
     monitor_check_acquire_timeout_seconds: float = Field(default=2.0, ge=0)
     monitor_check_max_pages_per_domain: int = Field(default=1, ge=1)
+    scraper_global_http_concurrency: int = Field(default=8, ge=1)
+    scraper_domain_http_concurrency: int = Field(default=1, ge=1)
+    scraper_domain_cooldown_seconds: int = Field(default=300, ge=0)
 
     @property
     def database_url_validated(self) -> str:

@@ -3,6 +3,7 @@ import asyncio
 import logging
 import random
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -30,6 +31,67 @@ USER_AGENTS = [
 ]
 
 _domain_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOMAINS)
+
+class HttpBudgetLimiter:
+    def __init__(self) -> None:
+        self._global_semaphore = asyncio.Semaphore(settings.scraper_global_http_concurrency)
+        self._domain_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._domain_cooldown_until: dict[str, float] = {}
+        self._lock = asyncio.Lock()
+        self._active_requests = 0
+        self._active_requests_by_domain: dict[str, int] = {}
+        self._cooldown_counts = 0
+
+    async def _get_domain_semaphore(self, domain: str) -> asyncio.Semaphore:
+        async with self._lock:
+            if domain not in self._domain_semaphores:
+                self._domain_semaphores[domain] = asyncio.Semaphore(settings.scraper_domain_http_concurrency)
+            return self._domain_semaphores[domain]
+
+    def is_in_cooldown(self, domain: str) -> bool:
+        until = self._domain_cooldown_until.get(domain, 0.0)
+        if until > time.monotonic():
+            return True
+        return False
+
+    def report_block(self, domain: str) -> None:
+        cooldown = settings.scraper_domain_cooldown_seconds
+        if cooldown > 0:
+            logger.warning("Domain %s entered cooldown for %d seconds", domain, cooldown)
+            self._domain_cooldown_until[domain] = time.monotonic() + cooldown
+            self._cooldown_counts += 1
+
+    @asynccontextmanager
+    async def acquire(self, domain: str):
+        if self.is_in_cooldown(domain):
+            raise RuntimeError(f"Domain {domain} is in cooldown")
+
+        domain_sem = await self._get_domain_semaphore(domain)
+        async with self._global_semaphore:
+            async with domain_sem:
+                async with self._lock:
+                    self._active_requests += 1
+                    self._active_requests_by_domain[domain] = self._active_requests_by_domain.get(domain, 0) + 1
+                try:
+                    yield
+                finally:
+                    async with self._lock:
+                        self._active_requests -= 1
+                        self._active_requests_by_domain[domain] -= 1
+                        if self._active_requests_by_domain[domain] <= 0:
+                            self._active_requests_by_domain.pop(domain, None)
+
+    def get_stats(self) -> dict[str, object]:
+        active_cooldowns = [d for d, until in self._domain_cooldown_until.items() if until > time.monotonic()]
+        return {
+            "scraper_global_http_concurrency": settings.scraper_global_http_concurrency,
+            "scraper_domain_http_concurrency": settings.scraper_domain_http_concurrency,
+            "scraper_active_http_requests": self._active_requests,
+            "scraper_active_http_requests_by_domain": dict(self._active_requests_by_domain),
+            "scraper_domain_cooldowns_count": len(active_cooldowns),
+        }
+
+_http_budget = HttpBudgetLimiter()
 
 
 @dataclass
@@ -180,8 +242,9 @@ class VintedClient:
         worker_url = f"{self.cf_fallback.worker_url}?url={target_url}"
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as http_client:
-                response = await http_client.get(worker_url)
+            async with _http_budget.acquire(domain):
+                async with httpx.AsyncClient(timeout=30.0) as http_client:
+                    response = await http_client.get(worker_url)
 
             if response.status_code == 200:
                 data = response.json()
@@ -193,6 +256,8 @@ class VintedClient:
                 response.status_code,
                 domain,
             )
+            if response.status_code in (403, 429):
+                _http_budget.report_block(domain)
             return []
         except Exception:
             logger.exception("CF Worker request failed for domain=%s", domain)
@@ -220,12 +285,13 @@ class VintedClient:
         }
 
         try:
-            response = await session.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=30.0,
-            )
+            async with _http_budget.acquire(domain):
+                response = await session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=30.0,
+                )
 
             if response.status_code == 200:
                 self.rate_limiter.report_success(domain)
@@ -237,6 +303,7 @@ class VintedClient:
             if response.status_code in (429, 403):
                 logger.warning("Blocked on domain=%s status=%d", domain, response.status_code)
                 self.rate_limiter.report_error(domain)
+                _http_budget.report_block(domain)
                 if self.cf_fallback:
                     self.cf_fallback.report_block(domain)
                 
@@ -260,6 +327,7 @@ class VintedClient:
         except Exception:
             logger.exception("Request failed for domain=%s", domain)
             self.rate_limiter.report_error(domain)
+            _http_budget.report_block(domain)
             if self.cf_fallback:
                 self.cf_fallback.report_block(domain)
             return []
@@ -278,12 +346,15 @@ class VintedClient:
                     duration_ms=int((time.monotonic() - started) * 1000),
                 )
             except Exception as exc:
-                logger.warning("Domain search failed for %s", domain)
+                if "cooldown" in str(exc).lower():
+                    logger.info("Domain %s search skipped due to cooldown", domain)
+                else:
+                    logger.warning("Domain search failed for %s: %s", domain, exc)
                 return DomainSearchResult(
                     domain=domain,
                     items=[],
                     duration_ms=int((time.monotonic() - started) * 1000),
-                    error=type(exc).__name__,
+                    error=str(exc) if "cooldown" in str(exc).lower() else type(exc).__name__,
                 )
 
     async def search_domains(

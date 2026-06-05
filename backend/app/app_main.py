@@ -327,6 +327,7 @@ def create_app() -> FastAPI:
         job_count = len(getattr(scheduler, "job_ids", [])) if scheduler else 0
         from app.web.dependencies import count_running_bots
         from app.scheduler.tasks import get_backpressure_state
+        from app.scraper.client import _http_budget
         bots_running = count_running_bots()
         return {
             "status": "ok",
@@ -341,6 +342,7 @@ def create_app() -> FastAPI:
             "startup_error": getattr(request.app.state, "startup_error", None),
             "scheduler_jobs": job_count,
             **get_backpressure_state(),
+            **_http_budget.get_stats(),
             "bots_running": bots_running,
         }
 
