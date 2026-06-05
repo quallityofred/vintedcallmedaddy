@@ -2,6 +2,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +28,9 @@ class Settings(BaseSettings):
     startup_db_retry_interval_seconds: int = 10
     startup_optional_timeout_seconds: int = 20
     auth_db_operation_timeout_seconds: int = 25
+    monitor_check_global_concurrency: int = Field(default=2, ge=1)
+    monitor_check_per_user_concurrency: int = Field(default=1, ge=1)
+    monitor_check_acquire_timeout_seconds: float = Field(default=2.0, ge=0)
 
     @property
     def database_url_validated(self) -> str:

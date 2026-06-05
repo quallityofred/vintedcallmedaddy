@@ -495,11 +495,24 @@ async def check_monitor_now(
             status_code=400,
         )
 
+    from app.scheduler.tasks import is_monitor_check_capacity_saturated, is_monitor_check_running
+
     # Check for in-flight check
-    if monitor.last_check_status == "running":
+    if monitor.last_check_status == "running" or is_monitor_check_running(monitor_id):
         return JSONResponse(
             {"ok": False, "code": "already_running", "message": "Check already running."},
             status_code=409,
+        )
+
+    if is_monitor_check_capacity_saturated(user.id):
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "check_capacity_busy",
+                "message": "Monitor checks are busy. Try again shortly.",
+                "retry_after": 5,
+            },
+            status_code=429,
         )
 
     # Cooldown: 30 seconds

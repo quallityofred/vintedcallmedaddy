@@ -427,6 +427,42 @@ async def test_monitor_update_name_only_preserves_params_json(db_session):
 
 
 @pytest.mark.asyncio
+async def test_check_now_returns_busy_when_monitor_is_running(db_session):
+    from app.scheduler import tasks
+
+    user = await _create_user(db_session, "mon_check_busy")
+    _override_db(db_session)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Busy",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json=json.dumps(["vinted.fr"]),
+        is_active=True,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    tasks._running_checks.add(monitor.id)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            csrf_token = await _login_user(client, "mon_check_busy")
+            response = await client.post(
+                f"/api/v1/monitors/{monitor.id}/check-now",
+                headers={"X-CSRF-Token": csrf_token},
+            )
+    finally:
+        tasks._running_checks.discard(monitor.id)
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "already_running"
+
+
+@pytest.mark.asyncio
 async def test_delete_monitor_owner_only(db_session):
     user1 = await _create_user(db_session, "mon_mut_user6")
     user2 = await _create_user(db_session, "mon_mut_user7")

@@ -145,6 +145,26 @@ def test_postgres_pool_env_overrides_still_work(monkeypatch):
     assert settings.db_pool_recycle_seconds == 180
 
 
+def test_monitor_check_backpressure_defaults_are_conservative():
+    settings = app_config.Settings(_env_file=None)
+
+    assert settings.monitor_check_global_concurrency == 2
+    assert settings.monitor_check_per_user_concurrency == 1
+    assert settings.monitor_check_acquire_timeout_seconds == 2.0
+
+
+def test_monitor_check_backpressure_env_overrides(monkeypatch):
+    monkeypatch.setenv("MONITOR_CHECK_GLOBAL_CONCURRENCY", "4")
+    monkeypatch.setenv("MONITOR_CHECK_PER_USER_CONCURRENCY", "2")
+    monkeypatch.setenv("MONITOR_CHECK_ACQUIRE_TIMEOUT_SECONDS", "1.5")
+
+    settings = app_config.Settings(_env_file=None)
+
+    assert settings.monitor_check_global_concurrency == 4
+    assert settings.monitor_check_per_user_concurrency == 2
+    assert settings.monitor_check_acquire_timeout_seconds == 1.5
+
+
 @pytest.mark.parametrize("value", ["true", "1", "yes"])
 def test_db_use_null_pool_env_parses_truthy_values(monkeypatch, value):
     monkeypatch.setenv("DB_USE_NULL_POOL", value)

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -35,6 +36,13 @@ INTERVAL_STEP_DOWN_FAST = 0.7
 _telegram_bot: Bot | None = None
 _notification_lock = asyncio.Lock()
 _running_checks: set[int] = set()
+_running_checks_lock = asyncio.Lock()
+_global_check_semaphore = asyncio.Semaphore(settings.monitor_check_global_concurrency)
+_user_check_semaphores: dict[int, asyncio.Semaphore] = {}
+_backpressure_stats = {
+    "already_running_skips": 0,
+    "capacity_timeouts": 0,
+}
 AsyncSessionLocal = None
 
 
@@ -53,6 +61,86 @@ class TelegramDeliveryTarget:
 	message_thread_id: int | None = None
 	topic_id: int | None = None
 	used_fallback: bool = False
+
+
+@dataclass
+class MonitorCheckContext:
+	monitor_id: int
+	user_id: int
+	monitor_name: str
+	params: dict
+	domains: list[str]
+	monitor_filters: object
+	hidden_seller_ids: set[int]
+	is_cold_start: bool
+	original_interval: int
+	cf_worker_url: str
+	cf_worker_mode: str
+	cf_worker_block_threshold: int
+	cf_worker_recovery_minutes: int
+
+
+@dataclass
+class CheckCapacityLease:
+	user_id: int
+	global_acquired: bool = False
+	user_acquired: bool = False
+
+	def release(self) -> None:
+		if self.user_acquired:
+			_user_check_semaphore(self.user_id).release()
+			self.user_acquired = False
+		if self.global_acquired:
+			_global_check_semaphore.release()
+			self.global_acquired = False
+
+
+def _user_check_semaphore(user_id: int) -> asyncio.Semaphore:
+	limit = max(1, settings.monitor_check_per_user_concurrency)
+	semaphore = _user_check_semaphores.get(user_id)
+	if semaphore is None:
+		semaphore = asyncio.Semaphore(limit)
+		_user_check_semaphores[user_id] = semaphore
+	return semaphore
+
+
+def reset_backpressure_state_for_tests() -> None:
+	_running_checks.clear()
+	_user_check_semaphores.clear()
+	_backpressure_stats["already_running_skips"] = 0
+	_backpressure_stats["capacity_timeouts"] = 0
+	global _global_check_semaphore
+	_global_check_semaphore = asyncio.Semaphore(max(1, settings.monitor_check_global_concurrency))
+
+
+def is_monitor_check_running(monitor_id: int) -> bool:
+	return monitor_id in _running_checks
+
+
+def is_monitor_check_capacity_saturated(user_id: int) -> bool:
+	global_available = getattr(_global_check_semaphore, "_value", 1) > 0
+	user_semaphore = _user_check_semaphores.get(user_id)
+	user_available = user_semaphore is None or getattr(user_semaphore, "_value", 1) > 0
+	return not (global_available and user_available)
+
+
+def get_backpressure_state() -> dict[str, int | float]:
+	user_active = 0
+	for semaphore in _user_check_semaphores.values():
+		user_active += max(0, settings.monitor_check_per_user_concurrency - getattr(semaphore, "_value", 0))
+	return {
+		"monitor_check_global_concurrency": settings.monitor_check_global_concurrency,
+		"monitor_check_per_user_concurrency": settings.monitor_check_per_user_concurrency,
+		"monitor_check_acquire_timeout_seconds": settings.monitor_check_acquire_timeout_seconds,
+		"running_monitor_checks": len(_running_checks),
+		"monitor_check_global_active": max(
+			0,
+			settings.monitor_check_global_concurrency - getattr(_global_check_semaphore, "_value", 0),
+		),
+		"monitor_check_user_active": user_active,
+		"monitor_check_already_running_skips": _backpressure_stats["already_running_skips"],
+		"monitor_check_capacity_timeouts": _backpressure_stats["capacity_timeouts"],
+	}
 
 
 async def resolve_telegram_delivery_target(
@@ -211,186 +299,248 @@ async def _has_seen_item(db, user_id: int, item_id: int) -> bool:
 	return result.scalar_one_or_none() is not None
 
 
+async def _try_start_monitor_check(monitor_id: int) -> bool:
+	async with _running_checks_lock:
+		if monitor_id in _running_checks:
+			_backpressure_stats["already_running_skips"] += 1
+			logger.info("check_skipped_already_running monitor_id=%s", monitor_id)
+			return False
+		_running_checks.add(monitor_id)
+		return True
+
+
+async def _finish_monitor_check(monitor_id: int) -> None:
+	async with _running_checks_lock:
+		_running_checks.discard(monitor_id)
+
+
+async def _acquire_check_capacity(monitor_id: int, user_id: int) -> CheckCapacityLease | None:
+	timeout = settings.monitor_check_acquire_timeout_seconds
+	lease = CheckCapacityLease(user_id=user_id)
+	user_semaphore = _user_check_semaphore(user_id)
+	try:
+		logger.debug("check_waiting_for_capacity monitor_id=%s user_id=%s", monitor_id, user_id)
+		await asyncio.wait_for(user_semaphore.acquire(), timeout=timeout)
+		lease.user_acquired = True
+		await asyncio.wait_for(_global_check_semaphore.acquire(), timeout=timeout)
+		lease.global_acquired = True
+		return lease
+	except asyncio.TimeoutError:
+		lease.release()
+		_backpressure_stats["capacity_timeouts"] += 1
+		logger.info("check_skipped_capacity_timeout monitor_id=%s user_id=%s", monitor_id, user_id)
+		return None
+
+
+async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | None:
+	async with _new_session() as db:
+		result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+		monitor = result.scalar_one_or_none()
+		if monitor is None or not monitor.is_active:
+			return None
+		if monitor.user_id is None:
+			logger.warning("Skipping monitor with missing user_id", extra={"monitor_id": monitor.id})
+			return None
+
+		user = await db.get(User, monitor.user_id)
+		if user is None:
+			logger.warning("Skipping monitor with missing user", extra={"monitor_id": monitor.id})
+			return None
+
+		params = json.loads(monitor.params_json)
+		domains = json.loads(monitor.domains_json)
+		hidden_result = await db.execute(
+			select(HiddenSeller.seller_id).where(HiddenSeller.user_id == monitor.user_id)
+		)
+		hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
+
+		return MonitorCheckContext(
+			monitor_id=monitor.id,
+			user_id=monitor.user_id,
+			monitor_name=monitor.name,
+			params=params,
+			domains=domains,
+			monitor_filters=extract_monitor_filters(params),
+			hidden_seller_ids=hidden_seller_ids,
+			is_cold_start=monitor.last_check_at is None,
+			original_interval=params.get("_original_interval", monitor.interval_sec),
+			cf_worker_url=user.cf_worker_url,
+			cf_worker_mode=user.cf_worker_mode,
+			cf_worker_block_threshold=user.cf_worker_block_threshold,
+			cf_worker_recovery_minutes=user.cf_worker_recovery_minutes,
+		)
+
+
+async def _mark_monitor_check_running(monitor_id: int) -> None:
+	async with _new_session() as db:
+		result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+		monitor = result.scalar_one_or_none()
+		if monitor is None or not monitor.is_active:
+			return
+		monitor.last_check_started_at = datetime.now(timezone.utc)
+		monitor.last_check_status = "running"
+		monitor.last_error = None
+		await db.commit()
+
+
 async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = None) -> None:
     """Main task: check a single monitor for new Vinted listings."""
-    
-    if monitor_id in _running_checks:
-        logger.debug(f"Monitor {monitor_id} check already in progress, skipping.")
+    started = time.monotonic()
+    if not await _try_start_monitor_check(monitor_id):
         return
-    _running_checks.add(monitor_id)
-    
+
+    lease: CheckCapacityLease | None = None
     try:
-        async with _new_session() as db:
-            result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-            monitor = result.scalar_one_or_none()
-            if monitor is None or not monitor.is_active:
-                return
+        context = await _load_monitor_check_context(monitor_id)
+        if context is None:
+            return
 
-            monitor.last_check_started_at = datetime.now(timezone.utc)
-            monitor.last_check_status = "running"
-            monitor.last_error = None
-            await db.commit()
+        lease = await _acquire_check_capacity(monitor_id, context.user_id)
+        if lease is None:
+            return
 
+        await _mark_monitor_check_running(monitor_id)
+        logger.info("check_started monitor_id=%s user_id=%s", monitor_id, context.user_id)
         try:
+            owns_client = scraper_client is None
+            client = scraper_client
+
+            if client is None:
+                from app.scraper.client import VintedClient, CloudflareFallback
+                from app.scraper.rate_limiter import TokenBucketLimiter
+
+                cf_fallback = None
+                if context.cf_worker_url:
+                    cf_fallback = CloudflareFallback(
+                        worker_url=context.cf_worker_url,
+                        mode=context.cf_worker_mode,
+                        block_threshold=context.cf_worker_block_threshold,
+                        recovery_minutes=context.cf_worker_recovery_minutes,
+                    )
+
+                rate_limiter = TokenBucketLimiter(
+                    rate=float(settings.rate_limit_per_minute),
+                    per=60.0,
+                )
+                client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
+
+            try:
+                items = await client.search_all_domains(
+                    context.params,
+                    context.domains,
+                    mode=context.cf_worker_mode,
+                )
+            finally:
+                if owns_client:
+                    await client.close()
+
+            items = items or []
+            raw_result_count = len(items)
+
             async with _new_session() as db:
                 result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
                 monitor = result.scalar_one_or_none()
                 if monitor is None or not monitor.is_active:
                     return
 
-                if monitor.user_id is None:
-                    logger.warning("Skipping monitor with missing user_id", extra={"monitor_id": monitor.id})
-                    return
+                if not items:
+                    await _update_monitor_interval(db, monitor, False, original_interval=context.original_interval)
+                    monitor.last_check_status = "success_zero_items"
+                else:
+                    # Items are available here, now process them.
+                    # Keep the first copy of a Vinted item ID across selected domains.
+                    filtered_items: list[VintedItem] = []
+                    seen_item_ids: set[int] = set()
+                    skipped_by_filter_count = 0
+                    missing_brand_id_count = 0
+                    for item in items:
+                        if item.seller_id in context.hidden_seller_ids or item.id in seen_item_ids:
+                            continue
+                        matches_filters, skip_reason = item_matches_monitor_filters(item, context.monitor_filters)
+                        if not matches_filters:
+                            skipped_by_filter_count += 1
+                            if skip_reason == "missing_brand_id":
+                                missing_brand_id_count += 1
+                            continue
+                        seen_item_ids.add(item.id)
+                        filtered_items.append(item)
 
-                user = await db.get(User, monitor.user_id)
-                params = json.loads(monitor.params_json)
-                monitor_filters = extract_monitor_filters(params)
-                domains = json.loads(monitor.domains_json)
-                user_id = monitor.user_id
-                is_cold_start = monitor.last_check_at is None
-                original_interval = params.get("_original_interval", monitor.interval_sec)
-
-                hidden_result = await db.execute(
-                    select(HiddenSeller.seller_id).where(HiddenSeller.user_id == user_id)
-                )
-                hidden_seller_ids = {row[0] for row in hidden_result.fetchall()}
-
-                owns_client = scraper_client is None
-                client = scraper_client
-
-                if client is None:
-                    from app.scraper.client import VintedClient, CloudflareFallback
-                    from app.scraper.rate_limiter import TokenBucketLimiter
-
-                    cf_fallback = None
-                    if user and user.cf_worker_url:
-                        cf_fallback = CloudflareFallback(
-                            worker_url=user.cf_worker_url,
-                            mode=user.cf_worker_mode,
-                            block_threshold=user.cf_worker_block_threshold,
-                            recovery_minutes=user.cf_worker_recovery_minutes,
-                        )
-
-                    rate_limiter = TokenBucketLimiter(
-                        rate=float(settings.rate_limit_per_minute),
-                        per=60.0,
+                    logger.info(
+                        "Monitor check filtered results: monitor_id=%s monitor_name=%s filter_keys=%s "
+                        "raw_result_count=%s accepted_count=%s skipped_by_filter_count=%s "
+                        "missing_brand_id_count=%s cold_start=%s",
+                        monitor.id,
+                        monitor.name,
+                        context.monitor_filters.filter_keys,
+                        raw_result_count,
+                        len(filtered_items),
+                        skipped_by_filter_count,
+                        missing_brand_id_count,
+                        context.is_cold_start,
                     )
-                    client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
-                
-                mode = user.cf_worker_mode if user else "auto"
-                try:
-                    items = await client.search_all_domains(params, domains, mode=mode)
-                finally:
-                    if owns_client:
-                        await client.close()
 
-                items = items or []
-                raw_result_count = len(items)
+                    seen_items_to_insert = []
+                    found_items_to_insert = []
+                    new_items_to_notify: list[VintedItem] = []
 
-                async with _new_session() as db:
-                    result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-                    monitor = result.scalar_one_or_none()
-                    if monitor is None or not monitor.is_active:
-                        return
+                    now = datetime.now(timezone.utc)
+                    for item in filtered_items:
+                        already_seen = await _has_seen_item(db, context.user_id, item.id)
+                        if already_seen:
+                            continue
 
-                    if not items:
-                        await _update_monitor_interval(db, monitor, False, original_interval=original_interval)
-                        monitor.last_check_status = "success_zero_items"
-                    else:
-                        # Items are available here, now process them.
-                        # Keep the first copy of a Vinted item ID across selected domains.
-                        filtered_items: list[VintedItem] = []
-                        seen_item_ids: set[int] = set()
-                        skipped_by_filter_count = 0
-                        missing_brand_id_count = 0
-                        for item in items:
-                            if item.seller_id in hidden_seller_ids or item.id in seen_item_ids:
-                                continue
-                            matches_filters, skip_reason = item_matches_monitor_filters(item, monitor_filters)
-                            if not matches_filters:
-                                skipped_by_filter_count += 1
-                                if skip_reason == "missing_brand_id":
-                                    missing_brand_id_count += 1
-                                continue
-                            seen_item_ids.add(item.id)
-                            filtered_items.append(item)
+                        seen_items_to_insert.append({
+                            "user_id": context.user_id,
+                            "vinted_item_id": item.id,
+                            "domain": item.domain,
+                            "seen_at": now,
+                        })
 
-                        logger.info(
-                            "Monitor check filtered results: monitor_id=%s monitor_name=%s filter_keys=%s "
-                            "raw_result_count=%s accepted_count=%s skipped_by_filter_count=%s "
-                            "missing_brand_id_count=%s cold_start=%s",
-                            monitor.id,
-                            monitor.name,
-                            monitor_filters.filter_keys,
-                            raw_result_count,
-                            len(filtered_items),
-                            skipped_by_filter_count,
-                            missing_brand_id_count,
-                            is_cold_start,
-                        )
+                        if context.is_cold_start:
+                            continue
 
-                        seen_items_to_insert = []
-                        found_items_to_insert = []
-                        new_items_to_notify: list[VintedItem] = []
+                        found_items_to_insert.append({
+                            "monitor_id": monitor_id,
+                            "vinted_item_id": item.id,
+                            "domain": item.domain,
+                            "title": item.title,
+                            "price": item.price,
+                            "currency": item.currency,
+                            "brand": item.brand,
+                            "size": item.size,
+                            "condition": item.condition,
+                            "photo_url": item.photo_url,
+                            "item_url": item.item_url,
+                            "seller_id": item.seller_id,
+                            "found_at": now,
+                            "notified": False,
+                        })
+                        new_items_to_notify.append(item)
 
-                        now = datetime.now(timezone.utc)
-                        for item in filtered_items:
-                            already_seen = await _has_seen_item(db, user_id, item.id)
-                            if already_seen:
-                                continue
+                    if seen_items_to_insert:
+                        stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
+                        await db.execute(stmt)
 
-                            seen_items_to_insert.append({
-                                "user_id": user_id,
-                                "vinted_item_id": item.id,
-                                "domain": item.domain,
-                                "seen_at": now,
-                            })
+                    if found_items_to_insert:
+                        found_stmt = pg_insert(FoundItem).values(found_items_to_insert).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
+                        await db.execute(found_stmt)
 
-                            if is_cold_start:
-                                continue
+                    await _update_monitor_interval(
+                        db,
+                        monitor,
+                        len(new_items_to_notify) > 0 or not context.is_cold_start,
+                        count=len(new_items_to_notify),
+                        original_interval=context.original_interval,
+                    )
 
-                            found_items_to_insert.append({
-                                "monitor_id": monitor_id,
-                                "vinted_item_id": item.id,
-                                "domain": item.domain,
-                                "title": item.title,
-                                "price": item.price,
-                                "currency": item.currency,
-                                "brand": item.brand,
-                                "size": item.size,
-                                "condition": item.condition,
-                                "photo_url": item.photo_url,
-                                "item_url": item.item_url,
-                                "seller_id": item.seller_id,
-                                "found_at": now,
-                                "notified": False,
-                            })
-                            new_items_to_notify.append(item)
+                    if new_items_to_notify:
+                        asyncio.create_task(process_pending_notifications())
 
-                        if seen_items_to_insert:
-                            stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
-                            await db.execute(stmt)
+                    monitor.last_check_status = "baseline_created" if context.is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
 
-                        if found_items_to_insert:
-                            found_stmt = pg_insert(FoundItem).values(found_items_to_insert).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
-                            await db.execute(found_stmt)
-
-                        await _update_monitor_interval(
-                            db,
-                            monitor,
-                            len(new_items_to_notify) > 0 or not is_cold_start,
-                            count=len(new_items_to_notify),
-                            original_interval=original_interval,
-                        )
-
-                        if new_items_to_notify:
-                            asyncio.create_task(process_pending_notifications())
-
-                        monitor.last_check_status = "baseline_created" if is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
-
-                        monitor.last_check_at = datetime.now(timezone.utc)
-                    monitor.last_check_completed_at = datetime.now(timezone.utc)
-                    await db.commit()
+                    monitor.last_check_at = datetime.now(timezone.utc)
+                monitor.last_check_completed_at = datetime.now(timezone.utc)
+                await db.commit()
         except Exception as e:
             logger.error(f"Error in check_monitor {monitor_id}: {e}")
             async with _new_session() as db:
@@ -403,7 +553,11 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                     await db.commit()
             raise
     finally:
-        _running_checks.remove(monitor_id)
+        if lease is not None:
+            lease.release()
+        duration_ms = int((time.monotonic() - started) * 1000)
+        logger.info("check_finished monitor_id=%s duration_ms=%s", monitor_id, duration_ms)
+        await _finish_monitor_check(monitor_id)
 
 
 

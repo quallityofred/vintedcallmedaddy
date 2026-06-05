@@ -91,6 +91,12 @@ async def test_api_health_exposes_schema_and_code_marker():
     assert "database_pool_recycle_seconds" in payload
     assert "scheduler_ready" in payload
     assert "startup_error" in payload
+    assert payload["monitor_check_global_concurrency"] == app_main.settings.monitor_check_global_concurrency
+    assert payload["monitor_check_per_user_concurrency"] == app_main.settings.monitor_check_per_user_concurrency
+    assert "monitor_check_acquire_timeout_seconds" in payload
+    assert "running_monitor_checks" in payload
+    assert "monitor_check_global_active" in payload
+    assert "monitor_check_capacity_timeouts" in payload
 
 
 def test_lifespan_releases_liveness_before_slow_background_startup(monkeypatch):

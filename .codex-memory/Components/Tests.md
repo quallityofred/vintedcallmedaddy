@@ -248,6 +248,7 @@ tags:
 - 2026-06-05: Added `backend/tests/test_startup_readiness.py` for background startup ready/degraded states and expanded frontend E2E login coverage for backend `503` outage feedback.
 - 2026-06-05: Added monitor correctness coverage for brand URL params sync, multiple `brand_ids[]` preservation, `brand_id` parsing, post-fetch wrong/missing-brand filtering, first-run brand baseline seeding without `FoundItem`, and notification suppression for skipped items. Full tracked backend suite passed; the raw `pytest -q` run was blocked only by an untracked local reset-operation test artifact.
 - 2026-06-05: Added `backend/tests/test_currency_conversion.py` for static USD conversion, comma decimals, unknown/missing currencies, malformed amounts, and zero/negative fallbacks. Telegram runtime tests now assert non-USD messages include approximate USD and USD messages do not duplicate conversion text.
+- 2026-06-05: Added `backend/tests/test_scheduler_backpressure.py` for global/per-user monitor check limits, same-monitor overlap prevention, semaphore release on success/failure, and no DB session held during mocked scraper work. Added config env/default tests, `/api/health` backpressure field assertions, and manual Check Now busy-response coverage.
 
 ## Related Frontend Notes
 
