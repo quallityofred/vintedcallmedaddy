@@ -8,10 +8,10 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Monitor, MonitorTelegramTopic, User
+from app.models import Monitor, MonitorTelegramTopic, User, FoundItem
 from app.scraper.domains import (
     get_unique_vinted_marketplaces,
     validate_selected_domains,
@@ -88,7 +88,7 @@ def _monitor_domains(monitor: Monitor) -> List[str]:
     return [domain for domain in domains if isinstance(domain, str)]
 
 
-def _monitor_response(monitor: Monitor) -> dict[str, object]:
+def _monitor_response(monitor: Monitor, items_found_count: int | None = None) -> dict[str, object]:
     return {
         "id": monitor.id,
         "name": monitor.name,
@@ -98,7 +98,7 @@ def _monitor_response(monitor: Monitor) -> dict[str, object]:
         "last_check_at": monitor.last_check_at,
         "created_at": monitor.created_at,
         "updated_at": monitor.updated_at,
-        "items_found_count": monitor.items_found_count,
+        "items_found_count": items_found_count if items_found_count is not None else monitor.items_found_count,
         "domains": _monitor_domains(monitor),
     }
 
@@ -151,14 +151,29 @@ async def list_monitors(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
-    """List all monitors for the current user."""
+    """List all monitors for the current user with live found item counts."""
     result = await db.execute(
         select(Monitor)
         .where(Monitor.user_id == user.id)
         .order_by(Monitor.created_at.desc())
     )
     monitors = result.scalars().all()
-    return [_monitor_response(monitor) for monitor in monitors]
+    
+    if not monitors:
+        return []
+
+    monitor_ids = [m.id for m in monitors]
+    counts_result = await db.execute(
+        select(FoundItem.monitor_id, func.count(FoundItem.id))
+        .where(FoundItem.monitor_id.in_(monitor_ids))
+        .group_by(FoundItem.monitor_id)
+    )
+    counts = dict(counts_result.all())
+
+    return [
+        _monitor_response(monitor, items_found_count=counts.get(monitor.id, 0)) 
+        for monitor in monitors
+    ]
 
 
 @router.get("/domains")
@@ -208,14 +223,18 @@ async def get_monitor(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
-    """Get details of a specific monitor."""
+    """Get details of a specific monitor with live found item count."""
     result = await db.execute(
         select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
     )
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
-    return _monitor_response(monitor)
+        
+    count = await db.scalar(
+        select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
+    )
+    return _monitor_response(monitor, items_found_count=count or 0)
 
 
 @router.post("", response_model=MonitorResponse, dependencies=[Depends(require_csrf)])
@@ -254,7 +273,7 @@ async def create_monitor(
     if scheduler:
         scheduler.add_monitor(monitor.id, monitor.interval_sec)
 
-    return _monitor_response(monitor)
+    return _monitor_response(monitor, items_found_count=0)
 
 
 @router.patch("/{monitor_id}", response_model=MonitorResponse, dependencies=[Depends(require_csrf)])
@@ -310,7 +329,10 @@ async def update_monitor(
         else:
             scheduler.remove_monitor(monitor.id)
 
-    return _monitor_response(monitor)
+    count = await db.scalar(
+        select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
+    )
+    return _monitor_response(monitor, items_found_count=count or 0)
 
 
 @router.get("/{monitor_id}/telegram-topic")
@@ -444,7 +466,10 @@ async def pause_monitor(
     if scheduler:
         scheduler.remove_monitor(monitor_id)
 
-    return _monitor_response(monitor)
+    count = await db.scalar(
+        select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
+    )
+    return _monitor_response(monitor, items_found_count=count or 0)
 
 
 @router.post("/{monitor_id}/resume", response_model=MonitorResponse, dependencies=[Depends(require_csrf)])
@@ -470,7 +495,10 @@ async def resume_monitor(
     if scheduler:
         scheduler.add_monitor(monitor.id, monitor.interval_sec)
 
-    return _monitor_response(monitor)
+    count = await db.scalar(
+        select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
+    )
+    return _monitor_response(monitor, items_found_count=count or 0)
 
 
 
@@ -583,6 +611,10 @@ async def debug_monitor(
         "failed": f"Check failed: {monitor.last_error or 'Unknown error'}",
     }
 
+    live_found_count = await db.scalar(
+        select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
+    )
+
     return {
         "monitor_id": monitor.id,
         "name": monitor.name,
@@ -594,7 +626,7 @@ async def debug_monitor(
         "last_check_completed_at": monitor.last_check_completed_at,
         "last_check_status": monitor.last_check_status,
         "last_error": monitor.last_error,
-        "items_found_count": monitor.items_found_count,
+        "items_found_count": live_found_count or 0,
         "scheduler": job_info,
         "explanation": status_notes.get(monitor.last_check_status, "Status unknown."),
         "cf_worker": {

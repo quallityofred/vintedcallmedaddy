@@ -50,6 +50,8 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 
 ## Backend Settings
 
+- **Operational Consistency:** Monitor cards now show live FOUND counts from the database. If a monitor's cached items_found_count becomes stale (e.g. after manual cleanup), the UI will still reflect the truth from the found_items table.
+
 - 2026-06-03: Telegram credentials are per-user write-only/masked in the Jinja settings UI.
 - 2026-06-03: Cloudflare Worker and scraper defaults are admin/global DB settings.
 - Follow up after deployment: verify an admin can change CF Worker/scraper defaults in production without redeploying.
