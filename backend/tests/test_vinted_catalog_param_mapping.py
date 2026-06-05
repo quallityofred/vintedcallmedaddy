@@ -16,9 +16,9 @@ def test_runtime_params_catalog_mapping():
     assert runtime_params['order'] == 'newest_first'
     assert 'brand_ids[]' in runtime_params
     assert runtime_params['brand_ids[]'] == [53]
-    assert 'catalog_ids[]' in runtime_params
-    assert runtime_params['catalog_ids[]'] == [1231]
-    assert 'catalog[]' not in runtime_params
+    assert 'catalog[]' in runtime_params
+    assert runtime_params['catalog[]'] == [1231]
+    assert 'catalog_ids[]' not in runtime_params
     assert 'search_id' not in runtime_params
 
 def test_runtime_params_multiple_catalog_values():
@@ -27,11 +27,11 @@ def test_runtime_params_multiple_catalog_values():
     }
     
     runtime_params = _runtime_search_params(params)
-    assert 'catalog_ids[]' in runtime_params
-    assert runtime_params['catalog_ids[]'] == [1231, 1232]
+    assert 'catalog[]' in runtime_params
+    assert runtime_params['catalog[]'] == [1231, 1232]
 
 def test_runtime_params_no_catalog():
     params = {'brand_ids[]': [53]}
     runtime_params = _runtime_search_params(params)
-    assert 'catalog_ids[]' not in runtime_params
+    assert 'catalog[]' not in runtime_params
     assert 'brand_ids[]' in runtime_params

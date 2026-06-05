@@ -316,8 +316,8 @@ def _runtime_search_params(params: dict) -> dict:
 	search_params.pop("page", None)
 	search_params.pop("search_id", None)
 
-	# Map catalog aliases to Vinted API expected key: catalog_ids[]
-	catalog_aliases = ["catalog[]", "catalog", "catalog_ids"]
+	# Keep category/catalog aliases as catalog[]
+	catalog_aliases = ["catalog", "catalog_ids", "catalog_ids[]"]
 	found_catalogs = set()
 	for alias in catalog_aliases:
 		if alias in search_params:
@@ -328,7 +328,7 @@ def _runtime_search_params(params: dict) -> dict:
 				found_catalogs.add(values)
 	
 	if found_catalogs:
-		search_params["catalog_ids[]"] = sorted(list(found_catalogs))
+		search_params["catalog[]"] = sorted(list(found_catalogs))
 
 	return search_params
 
