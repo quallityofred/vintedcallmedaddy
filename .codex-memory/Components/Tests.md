@@ -199,11 +199,11 @@ tags:
   - `cd frontend && npm run test:e2e` -> 13 passed with known Node `DEP0205` warning.
 - Railway backend deployment readiness mismatch hotfix snapshot on `2026-06-05`:
   - `cd backend && poetry run pytest -q tests/test_startup_readiness.py` -> 4 passed.
-  - `cd backend && poetry run pytest -q tests/test_auth_api.py tests/test_database_session_factory.py` -> 22 passed.
+  - `cd backend && poetry run pytest -q tests/test_auth_api.py tests/test_database_session_factory.py` -> 24 passed.
   - `cd backend && poetry run pytest -q tests/test_telegram_topics.py` -> 28 passed.
   - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 18 passed.
   - `cd backend && poetry run pytest -q tests/test_settings_api.py` -> 18 passed.
-  - `cd backend && poetry run pytest -q` -> 142 passed.
+  - `cd backend && poetry run pytest -q` -> 144 passed.
   - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
   - `git diff --check` -> passed with line-ending warnings only.
 

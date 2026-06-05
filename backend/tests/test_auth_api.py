@@ -1,3 +1,6 @@
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
@@ -130,6 +133,53 @@ async def test_retry_helper_does_not_catch_unrelated_programming_errors():
 
     with pytest.raises(ValueError, match="programming mistake"):
         await app_database.run_db_with_retry(db, broken_operation, operation_name="broken operation")
+
+
+@pytest.mark.asyncio
+async def test_retry_helper_retries_once_after_database_operation_timeout(monkeypatch):
+    db = _FlakyAuthDb()
+    retry_db = _FlakyAuthDb()
+    monkeypatch.setattr(
+        app_database,
+        "get_settings",
+        lambda: SimpleNamespace(db_operation_timeout_seconds=0.01),
+    )
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
+    calls = 0
+
+    async def operation(active_db):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(10)
+        return "ok"
+
+    result = await app_database.run_db_with_retry(db, operation, operation_name="timeout operation")
+
+    assert result == "ok"
+    assert calls == 2
+    assert db.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_helper_returns_temporary_unavailable_after_repeated_timeout(monkeypatch):
+    db = _FlakyAuthDb()
+    retry_db = _FlakyAuthDb()
+    monkeypatch.setattr(
+        app_database,
+        "get_settings",
+        lambda: SimpleNamespace(db_operation_timeout_seconds=0.01),
+    )
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
+
+    async def operation(active_db):
+        await asyncio.sleep(10)
+
+    with pytest.raises(app_database.DatabaseTemporarilyUnavailable):
+        await app_database.run_db_with_retry(db, operation, operation_name="timeout operation")
+
+    assert db.rollback_calls == 1
+    assert retry_db.rollback_calls == 1
 
 
 @pytest.mark.asyncio

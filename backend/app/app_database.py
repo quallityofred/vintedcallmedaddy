@@ -152,6 +152,7 @@ async def run_db_with_retry(
     """Run a DB operation, retrying known disconnects with a fresh session by default."""
     attempts = retries + 1
     disconnect_types = _db_disconnect_exception_types()
+    operation_timeout = max(0, getattr(get_settings(), "db_operation_timeout_seconds", 0))
     for attempt in range(attempts):
         async with _session_for_retry_attempt(
             db,
@@ -159,7 +160,10 @@ async def run_db_with_retry(
             fresh_session_on_retry=fresh_session_on_retry,
         ) as active_db:
             try:
-                return await operation(active_db)
+                operation_result = operation(active_db)
+                if operation_timeout:
+                    return await asyncio.wait_for(operation_result, timeout=operation_timeout)
+                return await operation_result
             except disconnect_types as exc:
                 if not is_db_disconnect_error(exc):
                     raise
@@ -168,6 +172,13 @@ async def run_db_with_retry(
                     logger.warning("Retrying %s after database disconnect", operation_name)
                     continue
                 logger.warning("%s failed after database disconnect retry", operation_name)
+                raise DatabaseTemporarilyUnavailable("Database temporarily unavailable") from exc
+            except asyncio.TimeoutError as exc:
+                await _rollback_after_disconnect(active_db, operation_name)
+                if attempt < attempts - 1:
+                    logger.warning("Retrying %s after database operation timeout", operation_name)
+                    continue
+                logger.warning("%s failed after database operation timeout", operation_name)
                 raise DatabaseTemporarilyUnavailable("Database temporarily unavailable") from exc
     raise DatabaseTemporarilyUnavailable("Database temporarily unavailable")
 
