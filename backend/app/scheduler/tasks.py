@@ -42,8 +42,8 @@ _running_checks_lock = asyncio.Lock()
 _global_check_semaphore = asyncio.Semaphore(settings.monitor_check_global_concurrency)
 _user_check_semaphores: dict[int, asyncio.Semaphore] = {}
 _backpressure_stats = {
-    "already_running_skips": 0,
-    "capacity_timeouts": 0,
+	"already_running_skips": 0,
+	"capacity_timeouts": 0,
 }
 AsyncSessionLocal = None
 
@@ -317,13 +317,13 @@ def _runtime_search_params(params: dict) -> dict:
 	return search_params
 
 
-async def _load_seen_item_ids(db, user_id: int, domain: str, item_ids: set[int]) -> set[int]:
+async def _load_seen_item_ids(db, monitor_id: int, domain: str, item_ids: set[int]) -> set[int]:
 	if not item_ids:
 		return set()
 	result = await db.execute(
 		select(SeenItem.vinted_item_id)
 		.where(
-			SeenItem.user_id == user_id,
+			SeenItem.monitor_id == monitor_id,
 			SeenItem.domain == domain,
 			SeenItem.vinted_item_id.in_(item_ids),
 		)
@@ -526,200 +526,215 @@ async def _mark_monitor_check_running(monitor_id: int) -> None:
 
 
 async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = None) -> None:
-    """Main task: check a single monitor for new Vinted listings."""
-    started = time.monotonic()
-    if not await _try_start_monitor_check(monitor_id):
-        return
+	"""Main task: check a single monitor for new Vinted listings."""
+	started = time.monotonic()
+	if not await _try_start_monitor_check(monitor_id):
+		return
 
-    lease: CheckCapacityLease | None = None
-    try:
-        context = await _load_monitor_check_context(monitor_id)
-        if context is None:
-            return
+	lease: CheckCapacityLease | None = None
+	try:
+		context = await _load_monitor_check_context(monitor_id)
+		if context is None:
+			return
 
-        lease = await _acquire_check_capacity(monitor_id, context.user_id)
-        if lease is None:
-            return
+		lease = await _acquire_check_capacity(monitor_id, context.user_id)
+		if lease is None:
+			return
 
-        await _mark_monitor_check_running(monitor_id)
-        logger.info("check_started monitor_id=%s user_id=%s", monitor_id, context.user_id)
-        try:
-            owns_client = scraper_client is None
-            client = scraper_client
+		await _mark_monitor_check_running(monitor_id)
+		logger.info("check_started monitor_id=%s user_id=%s", monitor_id, context.user_id)
+		try:
+			owns_client = scraper_client is None
+			client = scraper_client
 
-            if client is None:
-                from app.scraper.client import VintedClient, CloudflareFallback
-                from app.scraper.rate_limiter import TokenBucketLimiter
+			if client is None:
+				from app.scraper.client import VintedClient, CloudflareFallback
+				from app.scraper.rate_limiter import TokenBucketLimiter
 
-                cf_fallback = None
-                if context.cf_worker_url:
-                    cf_fallback = CloudflareFallback(
-                        worker_url=context.cf_worker_url,
-                        mode=context.cf_worker_mode,
-                        block_threshold=context.cf_worker_block_threshold,
-                        recovery_minutes=context.cf_worker_recovery_minutes,
-                    )
+				cf_fallback = None
+				if context.cf_worker_url:
+					cf_fallback = CloudflareFallback(
+						worker_url=context.cf_worker_url,
+						mode=context.cf_worker_mode,
+						block_threshold=context.cf_worker_block_threshold,
+						recovery_minutes=context.cf_worker_recovery_minutes,
+					)
 
-                rate_limiter = TokenBucketLimiter(
-                    rate=float(settings.rate_limit_per_minute),
-                    per=60.0,
-                )
-                client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
+				rate_limiter = TokenBucketLimiter(
+					rate=float(settings.rate_limit_per_minute),
+					per=60.0,
+				)
+				client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
 
-            try:
-                domain_results = await _fetch_domain_results(
-                    client,
-                    params=context.params,
-                    domains=context.domains,
-                    mode=context.cf_worker_mode,
-                )
-            finally:
-                if owns_client:
-                    await client.close()
+			try:
+				domain_results = await _fetch_domain_results(
+					client,
+					params=context.params,
+					domains=context.domains,
+					mode=context.cf_worker_mode,
+				)
+			finally:
+				if owns_client:
+					await client.close()
 
-            async with _new_session() as db:
-                result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-                monitor = result.scalar_one_or_none()
-                if monitor is None or not monitor.is_active:
-                    return
+			async with _new_session() as db:
+				result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+				monitor = result.scalar_one_or_none()
+				if monitor is None or not monitor.is_active:
+					return
 
-                raw_result_count = sum(len(result.items or []) for result in domain_results)
-                if not domain_results or raw_result_count == 0:
-                    await _update_monitor_interval(db, monitor, False, original_interval=context.original_interval)
-                    monitor.last_check_status = "success_zero_items"
-                else:
-                    domain_deltas = [
-                        await _select_domain_delta_items(
-                            db,
-                            context=context,
-                            result=result,
-                        )
-                        for result in domain_results
-                    ]
+				raw_result_count = sum(len(result.items or []) for result in domain_results)
+				if not domain_results or raw_result_count == 0:
+					await _update_monitor_interval(db, monitor, False, original_interval=context.original_interval)
+					monitor.last_check_status = "success_zero_items"
+				else:
+					domain_deltas = [
+						await _select_domain_delta_items(
+							db,
+							context=context,
+							result=result,
+						)
+						for result in domain_results
+					]
 
-                    accepted_count = sum(delta.accepted_count for delta in domain_deltas)
-                    skipped_by_filter_count = sum(delta.skipped_by_filter_count for delta in domain_deltas)
-                    missing_brand_id_count = sum(delta.missing_brand_id_count for delta in domain_deltas)
-                    seen_boundary_hits = sum(1 for delta in domain_deltas if delta.seen_boundary_hit)
-                    request_count = sum(delta.request_count for delta in domain_deltas)
-                    checked_domain_count = len(domain_deltas)
+					accepted_count = sum(delta.accepted_count for delta in domain_deltas)
+					skipped_by_filter_count = sum(delta.skipped_by_filter_count for delta in domain_deltas)
+					missing_brand_id_count = sum(delta.missing_brand_id_count for delta in domain_deltas)
+					seen_boundary_hits = sum(1 for delta in domain_deltas if delta.seen_boundary_hit)
+					request_count = sum(delta.request_count for delta in domain_deltas)
+					checked_domain_count = len(domain_deltas)
 
-                    logger.info(
-                        "Monitor delta check results: monitor_id=%s user_id=%s monitor_name=%s filter_keys=%s "
-                        "selected_domain_count=%s checked_domain_count=%s request_count=%s raw_count=%s "
-                        "accepted_count=%s new_count=%s seen_boundary_hits=%s skipped_by_filter_count=%s "
-                        "missing_brand_id_count=%s cold_start=%s",
-                        monitor.id,
-                        context.user_id,
-                        monitor.name,
-                        context.monitor_filters.filter_keys,
-                        len(context.domains),
-                        checked_domain_count,
-                        request_count,
-                        raw_result_count,
-                        accepted_count,
-                        sum(delta.new_candidate_count for delta in domain_deltas),
-                        seen_boundary_hits,
-                        skipped_by_filter_count,
-                        missing_brand_id_count,
-                        context.is_cold_start,
-                    )
-                    for delta in domain_deltas:
-                        logger.info(
-                            "Monitor domain delta: monitor_id=%s domain=%s raw_count=%s accepted_count=%s "
-                            "new_candidate_count=%s seen_boundary_hit=%s stopped_at_seen_item_id=%s "
-                            "skipped_by_filter_count=%s missing_brand_id_count=%s request_count=%s duration_ms=%s error=%s",
-                            monitor.id,
-                            delta.domain,
-                            delta.raw_count,
-                            delta.accepted_count,
-                            delta.new_candidate_count,
-                            delta.seen_boundary_hit,
-                            delta.stopped_at_seen_item_id,
-                            delta.skipped_by_filter_count,
-                            delta.missing_brand_id_count,
-                            delta.request_count,
-                            delta.duration_ms,
-                            delta.error,
-                        )
+					logger.info(
+						"Monitor delta check results: monitor_id=%s user_id=%s monitor_name=%s filter_keys=%s "
+						"selected_domain_count=%s checked_domain_count=%s request_count=%s raw_count=%s "
+						"accepted_count=%s new_count=%s seen_boundary_hits=%s skipped_by_filter_count=%s "
+						"missing_brand_id_count=%s cold_start=%s",
+						monitor.id,
+						context.user_id,
+						monitor.name,
+						context.monitor_filters.filter_keys,
+						len(context.domains),
+						checked_domain_count,
+						request_count,
+						raw_result_count,
+						accepted_count,
+						sum(delta.new_candidate_count for delta in domain_deltas),
+						seen_boundary_hits,
+						skipped_by_filter_count,
+						missing_brand_id_count,
+						context.is_cold_start,
+					)
+					for delta in domain_deltas:
+						logger.info(
+							"Monitor domain delta: monitor_id=%s domain=%s raw_count=%s accepted_count=%s "
+							"new_candidate_count=%s seen_boundary_hit=%s stopped_at_seen_item_id=%s "
+							"skipped_by_filter_count=%s missing_brand_id_count=%s request_count=%s duration_ms=%s error=%s",
+							monitor.id,
+							delta.domain,
+							delta.raw_count,
+							delta.accepted_count,
+							delta.new_candidate_count,
+							delta.seen_boundary_hit,
+							delta.stopped_at_seen_item_id,
+							delta.skipped_by_filter_count,
+							delta.missing_brand_id_count,
+							delta.request_count,
+							delta.duration_ms,
+							delta.error,
+						)
 
-                    seen_items_to_insert = []
-                    found_items_to_insert = []
-                    new_items_to_notify: list[VintedItem] = []
+					seen_items_to_insert = []
+					found_items_to_insert = []
+					new_items_to_notify: list[VintedItem] = []
 
-                    now = datetime.now(timezone.utc)
-                    for delta in domain_deltas:
-                        delta_items = delta.baseline_items if context.is_cold_start else delta.new_items
-                        for item in delta_items:
-                            seen_items_to_insert.append({
-                                "user_id": context.user_id,
-                                "vinted_item_id": item.id,
-                                "domain": item.domain,
-                                "seen_at": now,
-                            })
+					# Process results and deduplicate items across domains within this check cycle
+					found_vinted_ids: set[int] = set()
 
-                            if context.is_cold_start:
-                                continue
+					now = datetime.now(timezone.utc)
+					for delta in domain_deltas:
+						delta_items = delta.baseline_items if context.is_cold_start else delta.new_items
+						for item in delta_items:
+							# For SeenItem, we track per domain to maintain correct delta boundaries
+							seen_items_to_insert.append({
+								"monitor_id": monitor_id,
+								"user_id": context.user_id,
+								"vinted_item_id": item.id,
+								"domain": item.domain,
+								"seen_at": now,
+							})
 
-                            found_items_to_insert.append({
-                                "monitor_id": monitor_id,
-                                "vinted_item_id": item.id,
-                                "domain": item.domain,
-                                "title": item.title,
-                                "price": item.price,
-                                "currency": item.currency,
-                                "brand": item.brand,
-                                "size": item.size,
-                                "condition": item.condition,
-                                "photo_url": item.photo_url,
-                                "item_url": item.item_url,
-                                "seller_id": item.seller_id,
-                                "found_at": now,
-                                "notified": False,
-                            })
-                            new_items_to_notify.append(item)
+							if context.is_cold_start:
+								continue
 
-                    if seen_items_to_insert:
-                        stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(index_elements=["user_id", "vinted_item_id", "domain"])
-                        await db.execute(stmt)
+							# For FoundItem, deduplicate globally across all domains for this monitor
+							if item.id in found_vinted_ids:
+								continue
+							found_vinted_ids.add(item.id)
 
-                    if found_items_to_insert:
-                        found_stmt = pg_insert(FoundItem).values(found_items_to_insert).on_conflict_do_nothing(index_elements=["monitor_id", "vinted_item_id", "domain"])
-                        await db.execute(found_stmt)
+							found_items_to_insert.append({
+								"monitor_id": monitor_id,
+								"vinted_item_id": item.id,
+								"domain": item.domain,
+								"title": item.title,
+								"price": item.price,
+								"currency": item.currency,
+								"brand": item.brand,
+								"brand_id": item.brand_id,
+								"size": item.size,
+								"condition": item.condition,
+								"photo_url": item.photo_url,
+								"item_url": item.item_url,
+								"seller_id": item.seller_id,
+								"found_at": now,
+								"notified": False,
+							})
+							new_items_to_notify.append(item)
 
-                    await _update_monitor_interval(
-                        db,
-                        monitor,
-                        len(new_items_to_notify) > 0 or not context.is_cold_start,
-                        count=len(new_items_to_notify),
-                        original_interval=context.original_interval,
-                    )
+					if seen_items_to_insert:
+						stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(
+							index_elements=["monitor_id", "vinted_item_id", "domain"]
+						)
+						await db.execute(stmt)
 
-                    if new_items_to_notify:
-                        asyncio.create_task(process_pending_notifications())
+					if found_items_to_insert:
+						found_stmt = pg_insert(FoundItem).values(found_items_to_insert).on_conflict_do_nothing(
+							index_elements=["monitor_id", "vinted_item_id"]
+						)
+						await db.execute(found_stmt)
 
-                    monitor.last_check_status = "baseline_created" if context.is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
+					await _update_monitor_interval(
+						db,
+						monitor,
+						len(new_items_to_notify) > 0 or not context.is_cold_start,
+						count=len(new_items_to_notify),
+						original_interval=context.original_interval,
+					)
 
-                    monitor.last_check_at = datetime.now(timezone.utc)
-                monitor.last_check_completed_at = datetime.now(timezone.utc)
-                await db.commit()
-        except Exception as e:
-            logger.error(f"Error in check_monitor {monitor_id}: {e}")
-            async with _new_session() as db:
-                result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-                monitor = result.scalar_one_or_none()
-                if monitor:
-                    monitor.last_check_status = "failed"
-                    monitor.last_error = str(e)[:255]
-                    monitor.last_check_completed_at = datetime.now(timezone.utc)
-                    await db.commit()
-            raise
-    finally:
-        if lease is not None:
-            lease.release()
-        duration_ms = int((time.monotonic() - started) * 1000)
-        logger.info("check_finished monitor_id=%s duration_ms=%s", monitor_id, duration_ms)
-        await _finish_monitor_check(monitor_id)
+					if new_items_to_notify:
+						asyncio.create_task(process_pending_notifications())
+
+					monitor.last_check_status = "baseline_created" if context.is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
+
+					monitor.last_check_at = datetime.now(timezone.utc)
+				monitor.last_check_completed_at = datetime.now(timezone.utc)
+				await db.commit()
+		except Exception as e:
+			logger.error(f"Error in check_monitor {monitor_id}: {e}")
+			async with _new_session() as db:
+				result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+				monitor = result.scalar_one_or_none()
+				if monitor:
+					monitor.last_check_status = "failed"
+					monitor.last_error = str(e)[:255]
+					monitor.last_check_completed_at = datetime.now(timezone.utc)
+					await db.commit()
+			raise
+	finally:
+		if lease is not None:
+			lease.release()
+		duration_ms = int((time.monotonic() - started) * 1000)
+		logger.info("check_finished monitor_id=%s duration_ms=%s", monitor_id, duration_ms)
+		await _finish_monitor_check(monitor_id)
 
 
 

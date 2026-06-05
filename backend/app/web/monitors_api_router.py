@@ -528,7 +528,12 @@ async def check_monitor_now(
     # Check for in-flight check
     if monitor.last_check_status == "running" or is_monitor_check_running(monitor_id):
         return JSONResponse(
-            {"ok": False, "code": "already_running", "message": "Check already running."},
+            {
+                "ok": False, 
+                "code": "already_running", 
+                "message": "Check is already running for this monitor. Please wait for it to complete.",
+                "retry_after": 10,
+            },
             status_code=409,
         )
 
@@ -537,7 +542,7 @@ async def check_monitor_now(
             {
                 "ok": False,
                 "code": "check_capacity_busy",
-                "message": "Monitor checks are busy. Try again shortly.",
+                "message": "System check capacity is currently full. Please try again in a few seconds.",
                 "retry_after": 5,
             },
             status_code=429,

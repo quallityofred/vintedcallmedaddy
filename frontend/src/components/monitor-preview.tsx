@@ -255,13 +255,17 @@ export function MonitorPreview() {
         method: isDelete ? "DELETE" : "POST",
         credentials: "same-origin",
         headers: {
-          "X-CSRF-Token": csrfToken,
+          "X-CSRF-Token": csrf_token,
         },
       });
 
-      if (!response.ok) throw new Error("Action failed");
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.message || "Action failed");
+      }
 
       const message = action === "check-now" ? "Monitor check queued" : `Monitor ${isDelete ? "deleted" : "updated"}`;
+
       toast.success(message);
       if (isDelete) {
         removeMonitors([id]);
@@ -273,8 +277,9 @@ export function MonitorPreview() {
         return;
       }
       void fetchMonitors();
-    }).catch(() => {
-      toast.error("Monitor action failed");
+    }).catch(async (err) => {
+      const message = err instanceof Error ? err.message : "Monitor action failed";
+      toast.error(message);
     });
   };
 

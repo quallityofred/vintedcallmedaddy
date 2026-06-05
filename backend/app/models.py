@@ -145,7 +145,7 @@ class MonitorTelegramTopic(Base):
 class FoundItem(Base):
     __tablename__ = "found_items"
     __table_args__ = (
-        UniqueConstraint("monitor_id", "vinted_item_id", "domain", name="uq_found_items_monitor_item_domain"),
+        UniqueConstraint("monitor_id", "vinted_item_id", name="uq_found_items_monitor_item"),
         Index("ix_found_items_vinted_item_id", "vinted_item_id"),
         Index("ix_found_items_monitor_id", "monitor_id"),
         Index("ix_found_items_domain", "domain"),
@@ -154,13 +154,14 @@ class FoundItem(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     monitor_id: Mapped[int] = mapped_column(ForeignKey("monitors.id", ondelete="CASCADE"), nullable=False)
-    monitor = relationship("Monitor", back_populates="found_items")
+    monitor: Mapped["Monitor"] = relationship("Monitor", back_populates="found_items")
     vinted_item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     domain: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
     currency: Mapped[str] = mapped_column(String, nullable=False)
     brand: Mapped[str] = mapped_column(String, nullable=False)
+    brand_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     size: Mapped[str] = mapped_column(String, nullable=False)
     condition: Mapped[str] = mapped_column(String, nullable=False)
     photo_url: Mapped[str] = mapped_column(String, nullable=False)
@@ -212,12 +213,14 @@ class AppSettings(Base):
 class SeenItem(Base):
     __tablename__ = "seen_items"
     __table_args__ = (
-        UniqueConstraint("user_id", "vinted_item_id", "domain", name="uq_seen_items_user_item_domain"),
+        UniqueConstraint("monitor_id", "vinted_item_id", "domain", name="uq_seen_items_monitor_item_domain"),
         Index("ix_seen_items_vinted_item_id", "vinted_item_id"),
+        Index("ix_seen_items_monitor_id", "monitor_id"),
         Index("ix_seen_items_user_id", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    monitor_id: Mapped[int | None] = mapped_column(ForeignKey("monitors.id", ondelete="CASCADE"), nullable=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     vinted_item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     domain: Mapped[str] = mapped_column(String, nullable=False)
