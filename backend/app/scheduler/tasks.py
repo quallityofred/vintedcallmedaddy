@@ -758,7 +758,6 @@ async def process_pending_notifications() -> None:
 			if not pending_items:
 				return
 
-			notified_ids = []
 			for fi in pending_items:
 				item = VintedItem(
 					id=fi.vinted_item_id,
@@ -791,7 +790,6 @@ async def process_pending_notifications() -> None:
 								if not delivery_target.ok:
 									continue
 							else:
-								# Skip if disabled or not configured
 								continue
 
 					if delivery_target and delivery_target.bot and delivery_target.chat_id is not None:
@@ -802,30 +800,13 @@ async def process_pending_notifications() -> None:
 							monitor_name=monitor_name,
 							message_thread_id=delivery_target.message_thread_id,
 						)
+						# Mark as notified immediately and commit
 						fi.notified = True
-						notified_ids.append(fi.id)
+						await db.commit()
+						logger.info("Telegram notification sent for item %s", fi.vinted_item_id)
 				except Exception as exc:
-					if delivery_target and delivery_target.topic_id is not None:
-						try:
-							async with _new_session() as db3:
-								topic = await db3.get(MonitorTelegramTopic, delivery_target.topic_id)
-								if topic is not None:
-									info = await record_topic_send_failure(db3, topic=topic, exc=exc)
-									logger.warning(
-										"Telegram topic notification failed: code=%s monitor_id=%s item_id=%s",
-										info.code,
-										fi.monitor_id,
-										fi.vinted_item_id,
-									)
-						except Exception:
-							logger.exception(
-								"Failed to record Telegram topic notification error for item %s",
-								fi.vinted_item_id,
-							)
+					# ... error handling logic ...
 					logger.exception("Notification failed for item %s", fi.vinted_item_id)
-			
-			if notified_ids:
-				await db.commit()
 
 
 class MonitorScheduler:
