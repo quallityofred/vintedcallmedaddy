@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User, UserSession
 from app.config import get_settings
-from app.database import DatabaseTemporarilyUnavailable, execute_with_db_retry
+from app.database import DatabaseTemporarilyUnavailable, run_db_with_retry
 from app.web.dependencies import get_db
 
 SESSION_COOKIE = "session_token"
@@ -22,9 +22,22 @@ def generate_session_token() -> str:
     return secrets.token_hex(32)
 
 
-async def _execute_auth_query(db: AsyncSession, statement):
+async def _load_current_user(db: AsyncSession, token: str) -> User | None:
+    result = await db.execute(select(UserSession).where(UserSession.token == token))
+    session = result.scalar_one_or_none()
+    if session is None:
+        return None
+    user_result = await db.execute(select(User).where(User.id == session.user_id))
+    return user_result.scalar_one_or_none()
+
+
+async def _run_auth_lookup(db: AsyncSession, token: str) -> User | None:
     try:
-        return await execute_with_db_retry(db, statement, operation_name="auth query")
+        return await run_db_with_retry(
+            db,
+            lambda active_db: _load_current_user(active_db, token),
+            operation_name="auth current user lookup",
+        )
     except DatabaseTemporarilyUnavailable as exc:
         raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
 
@@ -35,18 +48,7 @@ async def get_current_user(
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return None
-    result = await _execute_auth_query(
-        db,
-        select(UserSession).where(UserSession.token == token)
-    )
-    session = result.scalar_one_or_none()
-    if session is None:
-        return None
-    user_result = await _execute_auth_query(
-        db,
-        select(User).where(User.id == session.user_id)
-    )
-    return user_result.scalar_one_or_none()
+    return await _run_auth_lookup(db, token)
 
 
 async def require_user(

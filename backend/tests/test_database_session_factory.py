@@ -23,6 +23,7 @@ class FakePostgresSettings:
     db_max_overflow = 10
     db_pool_timeout = 30
     db_pool_recycle_seconds = 300
+    db_use_null_pool = False
 
     def is_sqlite(self) -> bool:
         return False
@@ -99,3 +100,18 @@ def test_sqlite_engine_kwargs_keep_static_pool():
     assert kwargs["connect_args"] == {"check_same_thread": False}
     assert "pool_pre_ping" not in kwargs
     assert "pool_recycle" not in kwargs
+
+
+def test_postgres_engine_kwargs_support_null_pool():
+    class NullPoolSettings(FakePostgresSettings):
+        db_use_null_pool = True
+
+    kwargs = app_database.build_async_engine_kwargs(NullPoolSettings())
+
+    assert kwargs["poolclass"].__name__ == "NullPool"
+    assert kwargs["pool_pre_ping"] is True
+    assert kwargs["pool_recycle"] == 300
+    assert kwargs["connect_args"] == {"statement_cache_size": 0}
+    assert "pool_size" not in kwargs
+    assert "max_overflow" not in kwargs
+    assert "pool_timeout" not in kwargs

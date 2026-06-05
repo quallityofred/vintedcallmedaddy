@@ -13,9 +13,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
-from app.database import init_db
+from app.database import DatabaseTemporarilyUnavailable, init_db, is_db_disconnect_error
 from app.logger import log_manager
 from app.web.dependencies import RequireLoginException, restore_persisted_bot
 
@@ -175,12 +176,28 @@ def create_app() -> FastAPI:
     async def require_login_handler(request: Request, exc: RequireLoginException):
         return RedirectResponse(url="/login", status_code=303)
 
+    @app.exception_handler(DatabaseTemporarilyUnavailable)
+    async def database_temporarily_unavailable_handler(request: Request, exc: DatabaseTemporarilyUnavailable):
+        logger.warning("Database temporarily unavailable during request: %s %s", request.method, request.url.path)
+        return JSONResponse({"detail": "Database temporarily unavailable"}, status_code=503)
+
+    @app.exception_handler(SQLAlchemyError)
+    async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
+        if is_db_disconnect_error(exc):
+            logger.warning("Known database disconnect during request: %s %s", request.method, request.url.path)
+            return JSONResponse({"detail": "Database temporarily unavailable"}, status_code=503)
+        logger.exception("Unhandled SQLAlchemy error for %s", request.url)
+        return JSONResponse({"detail": "Internal server error"}, status_code=500)
+
     @app.exception_handler(404)
     async def not_found_handler(request: Request, exc):
         return JSONResponse({"detail": "Not found"}, status_code=404)
 
     @app.exception_handler(500)
     async def server_error_handler(request: Request, exc):
+        if is_db_disconnect_error(exc):
+            logger.warning("Known database disconnect reached 500 handler: %s %s", request.method, request.url.path)
+            return JSONResponse({"detail": "Database temporarily unavailable"}, status_code=503)
         logger.exception("Unhandled server error for %s", request.url)
         return JSONResponse({"detail": "Internal server error"}, status_code=500)
 

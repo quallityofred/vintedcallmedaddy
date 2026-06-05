@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import DatabaseTemporarilyUnavailable, execute_with_db_retry
+from app.database import DatabaseTemporarilyUnavailable, run_db_with_retry
 from app.models import User, UserSession
 from app.web.auth import clear_session_cookie, generate_session_token, get_current_user, set_session_cookie
 from app.web.csrf import API_CSRF_COOKIE, api_csrf_token_for_request, csrf_token_for_session, require_api_csrf
@@ -50,11 +50,29 @@ def _session_response(user: User, session_token: str, status_code: int = 200) ->
     return response
 
 
-async def _execute_auth_api_query(db: AsyncSession, statement, *, operation_name: str):
+async def _run_auth_api_operation(db: AsyncSession, operation, *, operation_name: str):
     try:
-        return await execute_with_db_retry(db, statement, operation_name=operation_name)
+        return await run_db_with_retry(db, operation, operation_name=operation_name)
     except DatabaseTemporarilyUnavailable as exc:
         raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+
+
+async def _create_login_session(
+    db: AsyncSession,
+    *,
+    username: str,
+    password: str,
+) -> tuple[User, str]:
+    result = await db.execute(select(User).where(User.username == username))
+    user = result.scalar_one_or_none()
+
+    if user is None or not user.check_password(password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    session_token = generate_session_token()
+    db.add(UserSession(user_id=user.id, token=session_token))
+    await db.commit()
+    return user, session_token
 
 
 @router.get("/csrf")
@@ -79,19 +97,15 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     username = request.username.strip()
-    result = await _execute_auth_api_query(
+    user, session_token = await _run_auth_api_operation(
         db,
-        select(User).where(User.username == username),
-        operation_name="login user lookup",
+        lambda active_db: _create_login_session(
+            active_db,
+            username=username,
+            password=request.password,
+        ),
+        operation_name="login",
     )
-    user = result.scalar_one_or_none()
-
-    if user is None or not user.check_password(request.password):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    session_token = generate_session_token()
-    db.add(UserSession(user_id=user.id, token=session_token))
-    await db.commit()
 
     return _session_response(user, session_token)
 
@@ -107,37 +121,41 @@ async def register(
     if request.password != request.password_confirm:
         raise HTTPException(status_code=400, detail="Passwords do not match")
 
-    existing = await _execute_auth_api_query(
+    async def create_registered_user(active_db: AsyncSession) -> tuple[User, str]:
+        existing = await active_db.execute(select(User).where(User.username == username))
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=409, detail="Username is not available")
+
+        code_obj = await consume_invite_code(active_db, request.invite_code)
+        if code_obj is None:
+            raise HTTPException(status_code=400, detail="Invalid or used invite code")
+
+        user = User(
+            username=username,
+            password_hash="",
+            password_salt="",
+            invite_code_id=code_obj.id,
+        )
+        user.set_password(request.password)
+        active_db.add(user)
+
+        try:
+            await active_db.flush()
+            session_token = generate_session_token()
+            active_db.add(UserSession(user_id=user.id, token=session_token))
+            await active_db.commit()
+        except IntegrityError:
+            await active_db.rollback()
+            raise HTTPException(status_code=409, detail="Username is not available") from None
+
+        await active_db.refresh(user)
+        return user, session_token
+
+    user, session_token = await _run_auth_api_operation(
         db,
-        select(User).where(User.username == username),
-        operation_name="register user lookup",
+        create_registered_user,
+        operation_name="register",
     )
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Username is not available")
-
-    code_obj = await consume_invite_code(db, request.invite_code)
-    if code_obj is None:
-        raise HTTPException(status_code=400, detail="Invalid or used invite code")
-
-    user = User(
-        username=username,
-        password_hash="",
-        password_salt="",
-        invite_code_id=code_obj.id,
-    )
-    user.set_password(request.password)
-    db.add(user)
-
-    try:
-        await db.flush()
-        session_token = generate_session_token()
-        db.add(UserSession(user_id=user.id, token=session_token))
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail="Username is not available") from None
-
-    await db.refresh(user)
     return _session_response(user, session_token, status_code=201)
 
 
@@ -150,17 +168,16 @@ async def logout(
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    result = await _execute_auth_api_query(
-        db,
-        select(UserSession).where(UserSession.token == session_token),
-        operation_name="logout session lookup",
-    )
-    session = result.scalar_one_or_none()
-    if session is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    async def delete_session(active_db: AsyncSession) -> None:
+        result = await active_db.execute(select(UserSession).where(UserSession.token == session_token))
+        session = result.scalar_one_or_none()
+        if session is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
 
-    await db.delete(session)
-    await db.commit()
+        await active_db.delete(session)
+        await active_db.commit()
+
+    await _run_auth_api_operation(db, delete_session, operation_name="logout")
 
     response = JSONResponse({"status": "ok"})
     clear_session_cookie(response)

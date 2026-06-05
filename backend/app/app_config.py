@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_timeout: int = 30
     db_pool_recycle_seconds: int = 300
+    db_use_null_pool: bool = False
 
     @property
     def database_url_validated(self) -> str:

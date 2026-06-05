@@ -1,17 +1,24 @@
 # app/database.py
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import inspect, text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, SQLAlchemyError
 
 from app.config import get_settings
 from app.models import Base
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+try:
+    from asyncpg.exceptions import ConnectionDoesNotExistError as AsyncpgConnectionDoesNotExistError
+except Exception:  # pragma: no cover - asyncpg is optional in some local tooling
+    AsyncpgConnectionDoesNotExistError = None
 
 # Lazily-created engine and sessionmaker. Creating the async engine at import
 # time can trigger attempts to connect to Postgres (asyncpg) which is
@@ -33,33 +40,136 @@ def build_async_engine_kwargs(settings) -> dict[str, Any]:
             "poolclass": StaticPool,
         }
 
-    return {
+    kwargs: dict[str, Any] = {
         "echo": False,
         "future": True,
-        "pool_size": settings.db_pool_size,
-        "max_overflow": settings.db_max_overflow,
-        "pool_timeout": settings.db_pool_timeout,
         "pool_pre_ping": True,
         "pool_recycle": settings.db_pool_recycle_seconds,
         "connect_args": {"statement_cache_size": 0},
     }
+    if getattr(settings, "db_use_null_pool", False):
+        from sqlalchemy.pool import NullPool
+
+        kwargs["poolclass"] = NullPool
+        return kwargs
+
+    kwargs.update(
+        {
+            "pool_size": settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+            "pool_timeout": settings.db_pool_timeout,
+        }
+    )
+    return kwargs
+
+
+def _iter_exception_chain(exc: BaseException):
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        orig = getattr(current, "orig", None)
+        if isinstance(orig, BaseException):
+            stack.append(orig)
+        cause = getattr(current, "__cause__", None)
+        if isinstance(cause, BaseException):
+            stack.append(cause)
+        context = getattr(current, "__context__", None)
+        if isinstance(context, BaseException):
+            stack.append(context)
 
 
 def is_db_disconnect_error(exc: BaseException) -> bool:
     """Return True for SQLAlchemy/asyncpg disconnects that are safe to retry."""
-    if isinstance(exc, DBAPIError) and getattr(exc, "connection_invalidated", False):
-        return True
-    text = f"{exc.__class__.__name__}: {exc}".lower()
-    return (
-        "connectiondoesnotexisterror" in text
-        or "connection was closed in the middle of operation" in text
-        or "connection is closed" in text
-        or "server closed the connection" in text
-    )
+    for current in _iter_exception_chain(exc):
+        if isinstance(current, DBAPIError) and getattr(current, "connection_invalidated", False):
+            return True
+        if AsyncpgConnectionDoesNotExistError is not None and isinstance(
+            current,
+            AsyncpgConnectionDoesNotExistError,
+        ):
+            return True
+        text = (
+            f"{current.__class__.__module__}.{current.__class__.__name__}: {current}"
+        ).lower()
+        if (
+            "connectiondoesnotexisterror" in text
+            or "connection was closed in the middle of operation" in text
+            or "connection is closed" in text
+            or "server closed the connection" in text
+            or "connection lost" in text
+        ):
+            return True
+    return False
 
 
 class DatabaseTemporarilyUnavailable(Exception):
     """Raised when a known database disconnect still fails after one retry."""
+
+
+def _db_disconnect_exception_types() -> tuple[type[BaseException], ...]:
+    types: tuple[type[BaseException], ...] = (SQLAlchemyError,)
+    if AsyncpgConnectionDoesNotExistError is not None:
+        types = types + (AsyncpgConnectionDoesNotExistError,)
+    return types
+
+
+@asynccontextmanager
+async def _session_for_retry_attempt(
+    db: AsyncSession,
+    *,
+    attempt: int,
+    fresh_session_on_retry: bool,
+):
+    if attempt == 0 or not fresh_session_on_retry:
+        yield db
+        return
+
+    session_factory = get_session_factory()
+    async with session_factory() as fresh_db:
+        yield fresh_db
+
+
+async def _rollback_after_disconnect(db: AsyncSession, operation_name: str) -> None:
+    try:
+        await db.rollback()
+    except Exception:
+        logger.debug("Rollback after DB disconnect failed for %s", operation_name, exc_info=True)
+
+
+async def run_db_with_retry(
+    db: AsyncSession,
+    operation: Callable[[AsyncSession], Awaitable[T]],
+    *,
+    operation_name: str = "database operation",
+    retries: int = 1,
+    fresh_session_on_retry: bool = True,
+) -> T:
+    """Run a DB operation, retrying known disconnects with a fresh session by default."""
+    attempts = retries + 1
+    disconnect_types = _db_disconnect_exception_types()
+    for attempt in range(attempts):
+        async with _session_for_retry_attempt(
+            db,
+            attempt=attempt,
+            fresh_session_on_retry=fresh_session_on_retry,
+        ) as active_db:
+            try:
+                return await operation(active_db)
+            except disconnect_types as exc:
+                if not is_db_disconnect_error(exc):
+                    raise
+                await _rollback_after_disconnect(active_db, operation_name)
+                if attempt < attempts - 1:
+                    logger.warning("Retrying %s after database disconnect", operation_name)
+                    continue
+                logger.warning("%s failed after database disconnect retry", operation_name)
+                raise DatabaseTemporarilyUnavailable("Database temporarily unavailable") from exc
+    raise DatabaseTemporarilyUnavailable("Database temporarily unavailable")
 
 
 async def execute_with_db_retry(
@@ -70,22 +180,12 @@ async def execute_with_db_retry(
     retries: int = 1,
 ):
     """Execute one SQLAlchemy statement, retrying only known disconnects."""
-    attempts = retries + 1
-    for attempt in range(attempts):
-        try:
-            return await db.execute(statement)
-        except DBAPIError as exc:
-            if not is_db_disconnect_error(exc):
-                raise
-            try:
-                await db.rollback()
-            except Exception:
-                logger.debug("Rollback after DB disconnect failed for %s", operation_name, exc_info=True)
-            if attempt < attempts - 1:
-                logger.warning("Retrying %s after database disconnect", operation_name)
-                continue
-            logger.warning("%s failed after database disconnect retry", operation_name)
-            raise DatabaseTemporarilyUnavailable("Database temporarily unavailable") from exc
+    return await run_db_with_retry(
+        db,
+        lambda active_db: active_db.execute(statement),
+        operation_name=operation_name,
+        retries=retries,
+    )
 
 
 def _ensure_engine_initialized() -> None:

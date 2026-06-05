@@ -180,6 +180,13 @@ tags:
   - `cd frontend && npm run lint` -> passed.
   - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
   - `cd frontend && npm run test:e2e` -> 12 passed with known Node `DEP0205` warning.
+- Login DB disconnect hotfix snapshot on `2026-06-05`:
+  - `cd backend && poetry run pytest -q tests/test_auth_api.py tests/test_database_session_factory.py` -> 19 passed.
+  - `cd backend && poetry run pytest -q tests/test_telegram_topics.py` -> 28 passed.
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q tests/test_settings_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q` -> 135 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
 
 ## Coverage Gaps
 
@@ -216,6 +223,7 @@ tags:
 - 2026-06-05: Expanded `backend/tests/test_telegram_topics.py` for monitor-name-only topic names, no domain/id suffixes, whitespace/control cleanup, generic fallback, safe truncation, create-topic name payload, active-topic rename sync, preserved thread IDs, and rename-failure notification continuity.
 - 2026-06-05: Added backend tests for Postgres async engine resilience options and auth-session DB disconnect retry/safe-503 behavior.
 - 2026-06-05: Added backend tests for login DB disconnect retry/safe `503` and read-only batch Telegram topic status scoping/masking. Added Playwright coverage that `/monitors` with 20 monitors uses one batch topic-status call and no per-monitor topic GET burst.
+- 2026-06-05: Expanded auth DB disconnect tests to match the production SQLAlchemy DBAPIError -> asyncpg ConnectionDoesNotExistError shape with `connection_invalidated=False`, fresh-session retry, login commit disconnect retry, repeated-disconnect safe `503`, NullPool engine option, and non-disconnect programming-error passthrough.
 
 ## Related Frontend Notes
 

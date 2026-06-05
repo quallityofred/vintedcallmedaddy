@@ -83,6 +83,7 @@ tags:
 - 2026-06-05: Auth session lookup catches SQLAlchemy/asyncpg disconnects matching closed-connection failures, rolls back, retries once, and returns a safe `503` if the retry fails. This is intended to reduce frontend proxy socket resets caused by uncaught backend DB disconnects during authenticated API requests.
 - 2026-06-05: The same narrow DB disconnect retry helper now covers login, register username lookup, logout session lookup, and both auth dependency implementations. FastAPI returns a controlled `503` only after a known disconnect fails its retry; invalid credentials and non-disconnect DB errors keep their existing behavior.
 - 2026-06-05: Backend startup logs now include safe duration timings for database init, runtime settings load, scheduler start, Telegram bot restore, and total application startup. Use these timings in Railway logs to identify the slow startup phase before changing startup sequencing.
+- 2026-06-05: Auth DB resilience was tightened again after production login still returned 500. Known disconnect detection now walks SQLAlchemy `orig`, `__cause__`, and `__context__` chains for asyncpg `ConnectionDoesNotExistError` shapes even when `connection_invalidated` is false. Auth login/register/logout and current-user lookups retry the full operation with a fresh session, including login session insert/commit. `DB_USE_NULL_POOL=true` is available as an explicit Railway/Supabase pooler mitigation if queue pooling continues to hand out unstable connections.
 
 ## Related Plans
 

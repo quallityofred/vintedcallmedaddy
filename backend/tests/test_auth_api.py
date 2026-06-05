@@ -4,6 +4,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
 
+import app.app_database as app_database
 from app.main import app
 from app.models import InviteCode, User, UserSession
 from app.web import auth_api_router
@@ -42,8 +43,9 @@ class _ScalarResult:
 
 
 class _FlakyAuthDb:
-    def __init__(self, *results):
+    def __init__(self, *results, commit_results=()):
         self.results = list(results)
+        self.commit_results = list(commit_results)
         self.execute_calls = 0
         self.rollback_calls = 0
         self.commit_calls = 0
@@ -64,6 +66,31 @@ class _FlakyAuthDb:
 
     async def commit(self):
         self.commit_calls += 1
+        if self.commit_results:
+            result = self.commit_results.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+
+
+class _FakeSessionContext:
+    def __init__(self, db):
+        self.db = db
+
+    async def __aenter__(self):
+        return self.db
+
+    async def __aexit__(self, exc_type, exc, tb):
+        close = getattr(self.db, "close", None)
+        if close is not None:
+            await close()
+
+
+class _FakeSessionFactory:
+    def __init__(self, *sessions):
+        self.sessions = list(sessions)
+
+    def __call__(self):
+        return _FakeSessionContext(self.sessions.pop(0))
 
 
 def _disconnect_error() -> DBAPIError:
@@ -73,6 +100,36 @@ def _disconnect_error() -> DBAPIError:
         RuntimeError("connection was closed in the middle of operation"),
         connection_invalidated=True,
     )
+
+
+def _production_like_disconnect_error(*, connection_invalidated: bool = False) -> DBAPIError:
+    class ConnectionDoesNotExistError(RuntimeError):
+        pass
+
+    orig = ConnectionDoesNotExistError("connection was closed in the middle of operation")
+    return DBAPIError(
+        "SELECT users.id FROM users WHERE users.username = $1",
+        {},
+        orig,
+        connection_invalidated=connection_invalidated,
+    )
+
+
+def test_disconnect_detection_matches_production_wrapped_asyncpg_shape():
+    exc = _production_like_disconnect_error(connection_invalidated=False)
+
+    assert app_database.is_db_disconnect_error(exc) is True
+
+
+@pytest.mark.asyncio
+async def test_retry_helper_does_not_catch_unrelated_programming_errors():
+    db = _FlakyAuthDb()
+
+    async def broken_operation(active_db):
+        raise ValueError("programming mistake")
+
+    with pytest.raises(ValueError, match="programming mistake"):
+        await app_database.run_db_with_retry(db, broken_operation, operation_name="broken operation")
 
 
 @pytest.mark.asyncio
@@ -147,38 +204,46 @@ async def test_auth_api_me_requires_session(db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_current_user_retries_once_after_db_disconnect():
+async def test_get_current_user_retries_once_after_db_disconnect(monkeypatch):
     user = User(id=7, username="retry_user", telegram_bot_token="", telegram_chat_id="")
     user.set_password("password")
     session = UserSession(id=1, user_id=user.id, token="session-token")
-    db = _FlakyAuthDb(_disconnect_error(), session, user)
+    db = _FlakyAuthDb(_production_like_disconnect_error())
+    retry_db = _FlakyAuthDb(session, user)
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
     request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
 
     result = await app_web_dependencies.get_current_user(request, db)
 
     assert result is user
-    assert db.execute_calls == 3
+    assert db.execute_calls == 1
     assert db.rollback_calls == 1
+    assert retry_db.execute_calls == 2
 
 
 @pytest.mark.asyncio
-async def test_primary_get_current_user_retries_once_after_db_disconnect():
+async def test_primary_get_current_user_retries_once_after_db_disconnect(monkeypatch):
     user = User(id=8, username="primary_retry_user", telegram_bot_token="", telegram_chat_id="")
     user.set_password("password")
     session = UserSession(id=2, user_id=user.id, token="session-token")
-    db = _FlakyAuthDb(_disconnect_error(), session, user)
+    db = _FlakyAuthDb(_production_like_disconnect_error())
+    retry_db = _FlakyAuthDb(session, user)
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
     request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
 
     result = await web_auth.get_current_user(request, db)
 
     assert result is user
-    assert db.execute_calls == 3
+    assert db.execute_calls == 1
     assert db.rollback_calls == 1
+    assert retry_db.execute_calls == 2
 
 
 @pytest.mark.asyncio
-async def test_get_current_user_returns_503_after_repeated_db_disconnect():
-    db = _FlakyAuthDb(_disconnect_error(), _disconnect_error())
+async def test_get_current_user_returns_503_after_repeated_db_disconnect(monkeypatch):
+    db = _FlakyAuthDb(_production_like_disconnect_error())
+    retry_db = _FlakyAuthDb(_production_like_disconnect_error())
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
     request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
 
     with pytest.raises(HTTPException) as exc_info:
@@ -186,13 +251,17 @@ async def test_get_current_user_returns_503_after_repeated_db_disconnect():
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == "Database temporarily unavailable"
-    assert db.execute_calls == 2
-    assert db.rollback_calls == 2
+    assert db.execute_calls == 1
+    assert db.rollback_calls == 1
+    assert retry_db.execute_calls == 1
+    assert retry_db.rollback_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_primary_get_current_user_returns_503_after_repeated_db_disconnect():
-    db = _FlakyAuthDb(_disconnect_error(), _disconnect_error())
+async def test_primary_get_current_user_returns_503_after_repeated_db_disconnect(monkeypatch):
+    db = _FlakyAuthDb(_production_like_disconnect_error())
+    retry_db = _FlakyAuthDb(_production_like_disconnect_error())
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
     request = type("Request", (), {"cookies": {"session_token": "session-token"}})()
 
     with pytest.raises(HTTPException) as exc_info:
@@ -200,15 +269,19 @@ async def test_primary_get_current_user_returns_503_after_repeated_db_disconnect
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == "Database temporarily unavailable"
-    assert db.execute_calls == 2
-    assert db.rollback_calls == 2
+    assert db.execute_calls == 1
+    assert db.rollback_calls == 1
+    assert retry_db.execute_calls == 1
+    assert retry_db.rollback_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_login_retries_once_after_db_disconnect_and_succeeds():
+async def test_login_retries_once_after_db_disconnect_and_succeeds(monkeypatch):
     user = User(id=9, username="login_retry_user", telegram_bot_token="", telegram_chat_id="")
     user.set_password("password")
-    db = _FlakyAuthDb(_disconnect_error(), user)
+    db = _FlakyAuthDb(_production_like_disconnect_error())
+    retry_db = _FlakyAuthDb(user)
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
 
     response = await auth_api_router.login(
         auth_api_router.LoginRequest(username="login_retry_user", password="password"),
@@ -216,16 +289,20 @@ async def test_login_retries_once_after_db_disconnect_and_succeeds():
     )
 
     assert response.status_code == 200
-    assert db.execute_calls == 2
+    assert db.execute_calls == 1
     assert db.rollback_calls == 1
-    assert db.commit_calls == 1
-    assert len(db.added) == 1
-    assert isinstance(db.added[0], UserSession)
+    assert db.commit_calls == 0
+    assert retry_db.execute_calls == 1
+    assert retry_db.commit_calls == 1
+    assert len(retry_db.added) == 1
+    assert isinstance(retry_db.added[0], UserSession)
 
 
 @pytest.mark.asyncio
-async def test_login_returns_503_after_repeated_db_disconnect():
-    db = _FlakyAuthDb(_disconnect_error(), _disconnect_error())
+async def test_login_returns_503_after_repeated_db_disconnect(monkeypatch):
+    db = _FlakyAuthDb(_production_like_disconnect_error())
+    retry_db = _FlakyAuthDb(_production_like_disconnect_error())
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
 
     with pytest.raises(HTTPException) as exc_info:
         await auth_api_router.login(
@@ -235,9 +312,33 @@ async def test_login_returns_503_after_repeated_db_disconnect():
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == "Database temporarily unavailable"
-    assert db.execute_calls == 2
-    assert db.rollback_calls == 2
+    assert db.execute_calls == 1
+    assert db.rollback_calls == 1
+    assert retry_db.execute_calls == 1
+    assert retry_db.rollback_calls == 1
     assert db.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_login_commit_disconnect_retries_whole_operation_with_fresh_session(monkeypatch):
+    user = User(id=10, username="login_commit_retry_user", telegram_bot_token="", telegram_chat_id="")
+    user.set_password("password")
+    db = _FlakyAuthDb(user, commit_results=[_production_like_disconnect_error()])
+    retry_db = _FlakyAuthDb(user)
+    monkeypatch.setattr(app_database, "get_session_factory", lambda: _FakeSessionFactory(retry_db))
+
+    response = await auth_api_router.login(
+        auth_api_router.LoginRequest(username="login_commit_retry_user", password="password"),
+        db,
+    )
+
+    assert response.status_code == 200
+    assert db.execute_calls == 1
+    assert db.commit_calls == 1
+    assert db.rollback_calls == 1
+    assert retry_db.execute_calls == 1
+    assert retry_db.commit_calls == 1
+    assert len(retry_db.added) == 1
 
 
 @pytest.mark.asyncio
