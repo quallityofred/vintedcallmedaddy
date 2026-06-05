@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.database import get_session_factory
 from app.models import FoundItem, HiddenSeller, Monitor, MonitorTelegramTopic, SeenItem, User
 from app.scraper.client import VintedClient
+from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 from app.scraper.parser import VintedItem
 from app.telegram.notifications import send_item_notification
 from app.telegram.topic_service import ensure_monitor_topic, record_topic_send_failure
@@ -243,6 +244,7 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 
                 user = await db.get(User, monitor.user_id)
                 params = json.loads(monitor.params_json)
+                monitor_filters = extract_monitor_filters(params)
                 domains = json.loads(monitor.domains_json)
                 user_id = monitor.user_id
                 is_cold_start = monitor.last_check_at is None
@@ -283,6 +285,7 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                         await client.close()
 
                 items = items or []
+                raw_result_count = len(items)
 
                 async with _new_session() as db:
                     result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
@@ -298,13 +301,33 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
                         # Keep the first copy of a Vinted item ID across selected domains.
                         filtered_items: list[VintedItem] = []
                         seen_item_ids: set[int] = set()
+                        skipped_by_filter_count = 0
+                        missing_brand_id_count = 0
                         for item in items:
                             if item.seller_id in hidden_seller_ids or item.id in seen_item_ids:
+                                continue
+                            matches_filters, skip_reason = item_matches_monitor_filters(item, monitor_filters)
+                            if not matches_filters:
+                                skipped_by_filter_count += 1
+                                if skip_reason == "missing_brand_id":
+                                    missing_brand_id_count += 1
                                 continue
                             seen_item_ids.add(item.id)
                             filtered_items.append(item)
 
-                        logger.debug(f"Filtered {len(items)} items down to {len(filtered_items)} based on hidden sellers")
+                        logger.info(
+                            "Monitor check filtered results: monitor_id=%s monitor_name=%s filter_keys=%s "
+                            "raw_result_count=%s accepted_count=%s skipped_by_filter_count=%s "
+                            "missing_brand_id_count=%s cold_start=%s",
+                            monitor.id,
+                            monitor.name,
+                            monitor_filters.filter_keys,
+                            raw_result_count,
+                            len(filtered_items),
+                            skipped_by_filter_count,
+                            missing_brand_id_count,
+                            is_cold_start,
+                        )
 
                         seen_items_to_insert = []
                         found_items_to_insert = []

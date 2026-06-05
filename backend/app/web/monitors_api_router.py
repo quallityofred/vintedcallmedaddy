@@ -103,6 +103,17 @@ def _monitor_response(monitor: Monitor) -> dict[str, object]:
     }
 
 
+def _build_monitor_params(url: str, interval_sec: int) -> dict[str, object]:
+    try:
+        params = parse_vinted_url(url)
+    except Exception as exc:
+        logger.warning("URL parse error: %s", exc)
+        raise HTTPException(status_code=400, detail="Could not parse monitor URL") from exc
+
+    params["_original_interval"] = interval_sec
+    return params
+
+
 async def _get_owned_monitor(db: AsyncSession, user: User, monitor_id: int) -> Monitor:
     result = await db.execute(
         select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
@@ -224,13 +235,7 @@ async def create_monitor(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    try:
-        params = parse_vinted_url(normalized_url)
-    except Exception as exc:
-        logger.warning("URL parse error: %s", exc)
-        params = {}
-
-    params["_original_interval"] = data.interval_sec
+    params = _build_monitor_params(normalized_url, data.interval_sec)
 
     monitor = Monitor(
         user_id=user.id,
@@ -274,12 +279,8 @@ async def update_monitor(
     if data.url is not None:
         normalized_url = normalize_vinted_monitor_url(data.url)
         monitor.original_url = normalized_url
-        try:
-            params = parse_vinted_url(normalized_url)
-            params["_original_interval"] = data.interval_sec or monitor.interval_sec
-            monitor.params_json = json.dumps(params)
-        except Exception:
-            pass
+        params = _build_monitor_params(normalized_url, data.interval_sec or monitor.interval_sec)
+        monitor.params_json = json.dumps(params)
     
     if data.interval_sec is not None:
         monitor.interval_sec = data.interval_sec

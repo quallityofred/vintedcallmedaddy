@@ -141,6 +141,35 @@ async def test_create_monitor_success(db_session):
 
 
 @pytest.mark.asyncio
+async def test_monitor_create_preserves_brand_ids_params_json(db_session):
+    await _create_user(db_session, "mon_brand_create")
+    _override_db(db_session)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "mon_brand_create")
+        response = await client.post(
+            "/api/v1/monitors",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "name": "Brand Monitor",
+                "url": "https://www.vinted.fr/catalog?brand_ids[]=50&page=1&time=123&order=relevance",
+                "interval_sec": 300,
+                "domains": ["vinted.fr"],
+            },
+        )
+
+    assert response.status_code == 200
+    monitor = await db_session.get(Monitor, response.json()["id"])
+    assert monitor is not None
+    assert monitor.original_url == "https://www.vinted.fr/catalog?order=newest_first&brand_ids[]=50"
+    params = json.loads(monitor.params_json)
+    assert params["brand_ids[]"] == [50]
+    assert params["_original_interval"] == 300
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_create_monitor_rejects_empty_domains(db_session):
     await _create_user(db_session, "mon_empty_domains")
     _override_db(db_session)
@@ -320,6 +349,80 @@ async def test_update_monitor_owner_only(db_session):
             assert response.json()["is_active"] is False
             assert response.json()["domains"] == []
 
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_monitor_update_resyncs_params_json_when_url_changes(db_session):
+    user = await _create_user(db_session, "mon_brand_update")
+    _override_db(db_session)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Brand Update",
+        original_url="https://www.vinted.fr/catalog?brand_ids[]=10",
+        params_json=json.dumps({"brand_ids[]": [10], "order": "newest_first", "_original_interval": 120}),
+        domains_json=json.dumps(["vinted.fr"]),
+        interval_sec=120,
+        is_active=True,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "mon_brand_update")
+        response = await client.patch(
+            f"/api/v1/monitors/{monitor.id}",
+            headers={"X-CSRF-Token": csrf_token},
+            json={
+                "url": "https://www.vinted.fr/catalog?brand_ids[]=99&page=2&time=456",
+                "interval_sec": 600,
+            },
+        )
+
+    assert response.status_code == 200
+    await db_session.refresh(monitor)
+    assert monitor.original_url == "https://www.vinted.fr/catalog?order=newest_first&brand_ids[]=99"
+    params = json.loads(monitor.params_json)
+    assert params["brand_ids[]"] == [99]
+    assert params["_original_interval"] == 600
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_monitor_update_name_only_preserves_params_json(db_session):
+    user = await _create_user(db_session, "mon_brand_name_only")
+    _override_db(db_session)
+
+    stored_params = {"brand_ids[]": [44], "order": "newest_first", "_original_interval": 120}
+    monitor = Monitor(
+        user_id=user.id,
+        name="Old",
+        original_url="https://www.vinted.fr/catalog?brand_ids[]=44",
+        params_json=json.dumps(stored_params),
+        domains_json=json.dumps(["vinted.fr"]),
+        interval_sec=120,
+        is_active=True,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, "mon_brand_name_only")
+        response = await client.patch(
+            f"/api/v1/monitors/{monitor.id}",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"name": "New"},
+        )
+
+    assert response.status_code == 200
+    await db_session.refresh(monitor)
+    assert monitor.name == "New"
+    assert json.loads(monitor.params_json) == stored_params
     app.dependency_overrides.clear()
 
 

@@ -20,6 +20,7 @@ class VintedItem:
     item_url: str
     domain: str
     seller_id: int
+    brand_id: int | None = None
 
 
 def _is_promoted_item(item: dict) -> bool:
@@ -62,6 +63,20 @@ def _extract_price(item: dict) -> tuple[float, str]:
     return 0.0, "EUR"
 
 
+def _extract_brand_id(item: dict) -> int | None:
+    candidates = [
+        item.get("brand_id"),
+        item.get("brand", {}).get("id") if isinstance(item.get("brand"), dict) else None,
+    ]
+    for candidate in candidates:
+        try:
+            if candidate is not None and str(candidate).strip():
+                return int(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def parse_response(data: dict, domain: str) -> list[VintedItem]:
     items: list[VintedItem] = []
     raw_items = data.get("items", [])
@@ -80,6 +95,7 @@ def parse_response(data: dict, domain: str) -> list[VintedItem]:
             title = str(item.get("title", ""))
             price, currency = _extract_price(item)
             brand = str(item.get("brand_title", item.get("brand", "")))
+            brand_id = _extract_brand_id(item)
             size = str(item.get("size_title", item.get("size", "")))
             condition = str(item.get("status_title", item.get("status", "")))
             photo_url = _extract_photo(item)
@@ -99,6 +115,7 @@ def parse_response(data: dict, domain: str) -> list[VintedItem]:
                     item_url=item_url,
                     domain=domain,
                     seller_id=seller_id,
+                    brand_id=brand_id,
                 )
             )
         except Exception:

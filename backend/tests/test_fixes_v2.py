@@ -1,6 +1,7 @@
 # tests/test_fixes_v2.py
 import pytest
 import asyncio
+import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from sqlalchemy import select, func, update
 from datetime import datetime, timezone
@@ -277,6 +278,187 @@ async def test_cold_start_repeat_then_new_item_sends_only_new_notification(db_se
     assert [item.vinted_item_id for item in found_items] == [4]
     assert found_items[0].notified is False
     notify_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_post_filter_skips_wrong_brand_item_without_found_item_or_notification(db_session):
+    user = User(username="brand_filter_user", telegram_bot_token="t", telegram_chat_id="c")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Brand Filter",
+        original_url="https://www.vinted.fr/catalog?brand_ids[]=123",
+        params_json=json.dumps({"brand_ids[]": [123], "order": "newest_first"}),
+        domains_json='["vinted.fr"]',
+        last_check_at=datetime.now(timezone.utc),
+        items_found_count=0,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    wrong_brand = VintedItem(
+        id=8101,
+        title="Wrong Brand",
+        price=10.0,
+        currency="EUR",
+        brand="Other",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/8101",
+        domain="vinted.fr",
+        seller_id=1,
+        brand_id=999,
+    )
+    matching_brand = VintedItem(
+        id=8102,
+        title="Matching Brand",
+        price=12.0,
+        currency="EUR",
+        brand="Target",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/8102",
+        domain="vinted.fr",
+        seller_id=2,
+        brand_id=123,
+    )
+
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(return_value=[wrong_brand, matching_brand])
+    mock_client.close = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()) as notify_mock:
+        await check_monitor(monitor.id, scraper_client=mock_client)
+
+    found_items = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id))).scalars().all()
+    assert [item.vinted_item_id for item in found_items] == [8102]
+    seen_items = (await db_session.execute(select(SeenItem).where(SeenItem.user_id == user.id))).scalars().all()
+    assert [item.vinted_item_id for item in seen_items] == [8102]
+    notify_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_missing_brand_id_does_not_create_found_item_for_brand_monitor(db_session):
+    user = User(username="missing_brand_user", telegram_bot_token="t", telegram_chat_id="c")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Missing Brand",
+        original_url="https://www.vinted.fr/catalog?brand_ids[]=123",
+        params_json=json.dumps({"brand_ids[]": [123], "order": "newest_first"}),
+        domains_json='["vinted.fr"]',
+        last_check_at=datetime.now(timezone.utc),
+        items_found_count=0,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    item = VintedItem(
+        id=8201,
+        title="Missing Brand ID",
+        price=10.0,
+        currency="EUR",
+        brand="",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/8201",
+        domain="vinted.fr",
+        seller_id=1,
+        brand_id=None,
+    )
+
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(return_value=[item])
+    mock_client.close = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()) as notify_mock:
+        await check_monitor(monitor.id, scraper_client=mock_client)
+
+    found_count = (await db_session.execute(select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id))).scalar_one()
+    seen_count = (await db_session.execute(select(func.count(SeenItem.id)).where(SeenItem.user_id == user.id))).scalar_one()
+    assert found_count == 0
+    assert seen_count == 0
+    notify_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cold_start_brand_monitor_seeds_matching_seen_only(db_session):
+    user = User(username="cold_brand_user", telegram_bot_token="t", telegram_chat_id="c")
+    user.set_password("p")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    monitor = Monitor(
+        user_id=user.id,
+        name="Cold Brand",
+        original_url="https://www.vinted.fr/catalog?brand_ids[]=123",
+        params_json=json.dumps({"brand_ids[]": [123], "order": "newest_first"}),
+        domains_json='["vinted.fr"]',
+        last_check_at=None,
+        items_found_count=0,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    matching = VintedItem(
+        id=8301,
+        title="Baseline Match",
+        price=10.0,
+        currency="EUR",
+        brand="Target",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/8301",
+        domain="vinted.fr",
+        seller_id=1,
+        brand_id=123,
+    )
+    wrong = VintedItem(
+        id=8302,
+        title="Baseline Wrong",
+        price=10.0,
+        currency="EUR",
+        brand="Other",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/8302",
+        domain="vinted.fr",
+        seller_id=2,
+        brand_id=999,
+    )
+
+    mock_client = MagicMock()
+    mock_client.search_all_domains = AsyncMock(return_value=[matching, wrong])
+    mock_client.close = AsyncMock()
+
+    with patch("app.scheduler.tasks.AsyncSessionLocal", return_value=db_session), \
+         patch("app.scheduler.tasks.process_pending_notifications", AsyncMock()) as notify_mock:
+        await check_monitor(monitor.id, scraper_client=mock_client)
+
+    seen_items = (await db_session.execute(select(SeenItem).where(SeenItem.user_id == user.id))).scalars().all()
+    assert [item.vinted_item_id for item in seen_items] == [8301]
+    found_count = (await db_session.execute(select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id))).scalar_one()
+    assert found_count == 0
+    notify_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

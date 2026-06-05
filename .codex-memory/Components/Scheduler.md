@@ -43,3 +43,4 @@ tags:
 
 - 2026-06-02: Notification worker now guards bot acquisition and chat-id parsing; `app.scheduler.tasks` is canonical and `app_scheduler_tasks.py` re-exports it.
 - 2026-06-04: Runtime verification tightened cold-start and cross-domain dedup behavior. Telegram send failures no longer mark items notified; pending items remain retryable.
+- 2026-06-05: Scheduler checks now apply a post-fetch monitor-filter guard before writing `SeenItem` or `FoundItem`. For brand-filtered monitors, items with non-matching `brand_id` or missing `brand_id` are skipped to prevent unrelated-brand notifications. Check logs include safe raw/accepted/skipped counts and cold-start state.
