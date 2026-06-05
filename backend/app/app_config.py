@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     startup_db_max_attempts: int = 3
     startup_db_retry_interval_seconds: int = 10
     startup_optional_timeout_seconds: int = 20
+    auth_db_operation_timeout_seconds: int = 12
 
     @property
     def database_url_validated(self) -> str:

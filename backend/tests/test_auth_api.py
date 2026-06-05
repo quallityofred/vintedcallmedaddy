@@ -370,6 +370,30 @@ async def test_login_returns_503_after_repeated_db_disconnect(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_login_returns_503_when_auth_operation_exceeds_deadline(monkeypatch):
+    db = _FlakyAuthDb()
+    monkeypatch.setattr(
+        auth_api_router,
+        "get_settings",
+        lambda: SimpleNamespace(auth_db_operation_timeout_seconds=0.01),
+    )
+
+    async def stuck_operation(active_db, *, username: str, password: str):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(auth_api_router, "_create_login_session", stuck_operation)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_api_router.login(
+            auth_api_router.LoginRequest(username="slow_user", password="password"),
+            db,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Database temporarily unavailable"
+
+
+@pytest.mark.asyncio
 async def test_login_commit_disconnect_retries_whole_operation_with_fresh_session(monkeypatch):
     user = User(id=10, username="login_commit_retry_user", telegram_bot_token="", telegram_chat_id="")
     user.set_password("password")

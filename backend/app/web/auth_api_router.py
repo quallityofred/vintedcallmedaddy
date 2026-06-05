@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -8,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import DatabaseTemporarilyUnavailable, run_db_with_retry
+from app.config import get_settings
 from app.models import User, UserSession
 from app.web.auth import clear_session_cookie, generate_session_token, get_current_user, set_session_cookie
 from app.web.csrf import API_CSRF_COOKIE, api_csrf_token_for_request, csrf_token_for_session, require_api_csrf
@@ -52,7 +55,13 @@ def _session_response(user: User, session_token: str, status_code: int = 200) ->
 
 async def _run_auth_api_operation(db: AsyncSession, operation, *, operation_name: str):
     try:
-        return await run_db_with_retry(db, operation, operation_name=operation_name)
+        timeout = max(1, getattr(get_settings(), "auth_db_operation_timeout_seconds", 12))
+        return await asyncio.wait_for(
+            run_db_with_retry(db, operation, operation_name=operation_name),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
     except DatabaseTemporarilyUnavailable as exc:
         raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
 
