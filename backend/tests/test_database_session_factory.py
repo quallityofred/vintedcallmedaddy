@@ -24,6 +24,8 @@ class FakePostgresSettings:
     db_max_overflow = 10
     db_pool_timeout = 30
     db_pool_recycle_seconds = 300
+    db_connect_timeout_seconds = 10
+    db_operation_timeout_seconds = 10
     db_use_null_pool = False
 
     def is_sqlite(self) -> bool:
@@ -92,7 +94,12 @@ def test_postgres_engine_kwargs_enable_connection_resilience():
     assert kwargs["pool_size"] == 20
     assert kwargs["max_overflow"] == 10
     assert kwargs["pool_timeout"] == 30
-    assert kwargs["connect_args"] == {"statement_cache_size": 0}
+    assert kwargs["connect_args"] == {
+        "statement_cache_size": 0,
+        "timeout": 10,
+        "command_timeout": 10,
+        "server_settings": {"statement_timeout": "10000"},
+    }
 
 
 def test_sqlite_engine_kwargs_keep_static_pool():
@@ -112,7 +119,12 @@ def test_postgres_engine_kwargs_support_null_pool():
     assert kwargs["poolclass"].__name__ == "NullPool"
     assert kwargs["pool_pre_ping"] is True
     assert kwargs["pool_recycle"] == 300
-    assert kwargs["connect_args"] == {"statement_cache_size": 0}
+    assert kwargs["connect_args"] == {
+        "statement_cache_size": 0,
+        "timeout": 10,
+        "command_timeout": 10,
+        "server_settings": {"statement_timeout": "10000"},
+    }
     assert "pool_size" not in kwargs
     assert "max_overflow" not in kwargs
     assert "pool_timeout" not in kwargs

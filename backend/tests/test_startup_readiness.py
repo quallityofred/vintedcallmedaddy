@@ -84,6 +84,7 @@ async def test_api_health_exposes_schema_and_code_marker():
     assert payload["code_version"] == app_main.CODE_VERSION
     assert "startup_status" in payload
     assert "database_status" in payload
+    assert "database_pool_mode" in payload
     assert "scheduler_ready" in payload
     assert "startup_error" in payload
 

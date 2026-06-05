@@ -54,6 +54,12 @@ def _safe_commit_marker() -> str | None:
     return None
 
 
+def _database_pool_mode() -> str:
+    if settings.is_sqlite():
+        return "static"
+    return "null" if settings.db_use_null_pool else "queue"
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -306,6 +312,7 @@ def create_app() -> FastAPI:
             "commit": _safe_commit_marker(),
             "startup_status": getattr(request.app.state, "startup_status", "unknown"),
             "database_status": "ready" if getattr(request.app.state, "db_ready", False) else "not_ready",
+            "database_pool_mode": _database_pool_mode(),
             "scheduler_ready": bool(getattr(request.app.state, "scheduler_ready", False)),
             "startup_error": getattr(request.app.state, "startup_error", None),
             "scheduler_jobs": job_count,

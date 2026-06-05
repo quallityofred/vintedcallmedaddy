@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_timeout: int = 30
     db_pool_recycle_seconds: int = 300
+    db_connect_timeout_seconds: int = 10
     db_operation_timeout_seconds: int = 10
     db_use_null_pool: bool = False
     startup_db_timeout_seconds: int = 45

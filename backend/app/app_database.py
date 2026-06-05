@@ -45,7 +45,14 @@ def build_async_engine_kwargs(settings) -> dict[str, Any]:
         "future": True,
         "pool_pre_ping": True,
         "pool_recycle": settings.db_pool_recycle_seconds,
-        "connect_args": {"statement_cache_size": 0},
+        "connect_args": {
+            "statement_cache_size": 0,
+            "timeout": settings.db_connect_timeout_seconds,
+            "command_timeout": settings.db_operation_timeout_seconds,
+            "server_settings": {
+                "statement_timeout": str(settings.db_operation_timeout_seconds * 1000),
+            },
+        },
     }
     if getattr(settings, "db_use_null_pool", False):
         from sqlalchemy.pool import NullPool
