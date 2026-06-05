@@ -69,6 +69,7 @@ tags:
 - 2026-06-04: Settings page now shows masked Telegram credential status cards, disabled-action help, safe classified test errors, and clearer save/test/start/stop loading states. Checkbox polish keeps domain selection card-like and monitor selection compact.
 - 2026-06-04: Settings CF Worker routing-mode save now shows backend validation details instead of a generic Failed message. Direct/Auto saves persist through PATCH/GET in tests; Worker-only mode requires a configured Worker URL and keeps the selected value visible on validation failure.
 - 2026-06-04: Monitor debug trigger no longer nests a button inside a dialog trigger, preventing Next dev overlay/runtime markup issues. Debug output still handles missing `cf_worker` and shows only masked Worker URL.
+- 2026-06-05: `/monitors` no longer refreshes stable Telegram topic settings every monitor poll or mounts one topic-status GET per monitor card. It uses one read-only batch topic-status request, keeps individual POST actions for Ensure/Test, and polls the monitor list less aggressively while the tab is visible.
 
 ## Related Plans
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bell,
   Clock3,
@@ -35,6 +35,7 @@ import { Label } from "@/components/ui/label";
 import { DomainSelection } from "@/components/domain-selection";
 import { MonitorDebugPanel } from "@/components/monitor-debug-panel";
 import { MonitorTelegramTopicPanel } from "@/components/monitor-telegram-topic-panel";
+import { getMonitorTopicBatch, getTelegramTopicSettings, MonitorTopicStatus } from "@/lib/telegram-topics";
 import { cn } from "@/lib/utils";
 
 interface Monitor {
@@ -68,6 +69,8 @@ const emptyDraft: MonitorDraft = {
   domains: [],
 };
 
+const MONITOR_POLL_INTERVAL_MS = 30_000;
+
 function createDraftFromMonitor(monitor: Monitor): MonitorDraft {
   return {
     name: monitor.name,
@@ -84,56 +87,106 @@ export function MonitorPreview() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [topicsEnabled, setTopicsEnabled] = useState(false);
+  const [topicStatuses, setTopicStatuses] = useState<Record<number, MonitorTopicStatus>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [editingMonitor, setEditingMonitor] = useState<Monitor | null>(null);
   const [draft, setDraft] = useState<MonitorDraft>(emptyDraft);
+  const monitorRequestId = useRef(0);
 
-  const fetchMonitors = useCallback(async () => {
+  const fetchMonitors = useCallback(async (signal?: AbortSignal) => {
+    const requestId = ++monitorRequestId.current;
     setError(false);
     try {
       const response = await fetch("/api/v1/monitors", {
         cache: "no-store",
         credentials: "same-origin",
+        signal,
       });
       if (!response.ok) {
         throw new Error("Unable to load monitors");
       }
       const data = (await response.json()) as Monitor[];
+      if (signal?.aborted || requestId !== monitorRequestId.current) return;
       setMonitors(data);
-
-      const settingsResponse = await fetch("/api/v1/settings/telegram/topics");
-      if (settingsResponse.ok) {
-          const settings = await settingsResponse.json();
-          setTopicsEnabled(settings.telegram_topics_enabled);
-      }
-      
       setSelectedIds((current) => current.filter((id) => data.some((monitor) => monitor.id === id)));
-    } catch {
+      setTopicStatuses((current) => {
+        const validIds = new Set(data.map((monitor) => monitor.id));
+        return Object.fromEntries(Object.entries(current).filter(([id]) => validIds.has(Number(id))));
+      });
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
       setError(true);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted && requestId === monitorRequestId.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  const fetchTopicSettings = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const settings = await getTelegramTopicSettings(signal);
+      if (!signal?.aborted) {
+        setTopicsEnabled(Boolean(settings.enabled ?? settings.telegram_topics_enabled));
+      }
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+    }
+  }, []);
+
+  const fetchTopicStatuses = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const data = await getMonitorTopicBatch(signal);
+      if (signal?.aborted) return;
+      setTopicsEnabled(Boolean(data.topics_enabled));
+      setTopicStatuses(
+        Object.fromEntries(
+          Object.entries(data.topics).map(([monitorId, status]) => [Number(monitorId), status])
+        )
+      );
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
     }
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => fetchMonitors());
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      void fetchMonitors(controller.signal);
+      void fetchTopicSettings(controller.signal);
+      void fetchTopicStatuses(controller.signal);
+    });
 
     const handleVisibilityChange = () => {
-        if (document.visibilityState === 'visible') fetchMonitors();
+        if (document.visibilityState === "visible") {
+          void fetchMonitors();
+        }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     const interval = setInterval(() => {
-        if (document.visibilityState === 'visible') fetchMonitors();
-    }, 5000);
+        if (document.visibilityState === "visible") void fetchMonitors();
+    }, MONITOR_POLL_INTERVAL_MS);
 
     return () => {
+        controller.abort();
         clearInterval(interval);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [fetchMonitors]);
+  }, [fetchMonitors, fetchTopicSettings, fetchTopicStatuses]);
+
+  const updateTopicStatus = useCallback((monitorId: number, status: MonitorTopicStatus | null) => {
+    setTopicStatuses((current) => {
+      if (!status) {
+        const next = { ...current };
+        delete next[monitorId];
+        return next;
+      }
+      return { ...current, [monitorId]: status };
+    });
+  }, []);
 
 
   const getCsrfToken = async () => {
@@ -579,7 +632,12 @@ export function MonitorPreview() {
                               Check
                             </Button>
                             <MonitorDebugPanel monitorId={monitor.id} name={monitor.name} />
-                            <MonitorTelegramTopicPanel monitorId={monitor.id} topicsEnabled={topicsEnabled} />
+                            <MonitorTelegramTopicPanel
+                              monitorId={monitor.id}
+                              topicsEnabled={topicsEnabled}
+                              status={topicStatuses[monitor.id] ?? null}
+                              onStatusChange={updateTopicStatus}
+                            />
                             <Button
                               aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
                               disabled={actionKey === pauseKey || actionKey === resumeKey}

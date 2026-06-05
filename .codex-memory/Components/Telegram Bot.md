@@ -38,6 +38,7 @@ tags:
 - When an active mapping has an old verbose stored name, ensure/sending attempts to rename the Telegram topic with `editForumTopic` while preserving the same `message_thread_id`. Rename failures store a safe error but do not block notification delivery to the existing thread.
 - Automatic notification routing now resolves a target in `process_pending_notifications()`: disabled users are skipped; topic-disabled users use the existing main chat with no topic lookup; topic-enabled users ensure/reuse a monitor topic and send with `message_thread_id`; main-chat fallback is used only when `telegram_topics_fallback_to_main_chat` is true.
 - Topic send failures are classified back onto the topic row and leave `FoundItem.notified=False` for retry.
+- `GET /api/v1/monitors/telegram-topics` is a read-only batch status endpoint for the monitors page. It returns stored current-user topic mappings with masked thread IDs, does not call Telegram, and does not ensure/create topics.
 - Telegram long-polling runtime is tracked by live asyncio tasks keyed by bot token. Stop waits for task termination before clearing runtime state; timeout/incomplete stops remain reported as running.
 - `backend/scripts/cleanup_telegram_bot_connections.py` can clear Telegram webhook/pending-update state using `TELEGRAM_BOT_TOKEN` from the process environment only. It must not print token/chat values.
 
@@ -60,3 +61,4 @@ tags:
 - 2026-06-04: Added Telegram forum topic backend foundation: topic settings APIs, forum group verification, monitor topic ensure/test APIs, `message_thread_id` support in low-level sends, and safe classification for missing threads, closed topics, permissions, unreachable chats, and rate limits.
 - 2026-06-04: Wired automatic `FoundItem` notification delivery into topic routing behind `telegram_topics_enabled`, with lazy topic creation/reuse, explicit fallback behavior, safe diagnostics, and retry-preserving failures.
 - 2026-06-05: Topic name normalization now uses only monitor name text and syncs old active verbose topic names without recreating topics.
+- 2026-06-05: Added batch monitor topic status loading for the frontend so `/monitors` no longer issues one topic GET per monitor card.

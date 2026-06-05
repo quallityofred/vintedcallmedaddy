@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -46,15 +47,18 @@ def _backend_root_payload() -> dict[str, object]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle."""
+    startup_started = time.monotonic()
     logger.info("Starting Vinted Monitor...")
 
     # 1. Database
     try:
+        phase_started = time.monotonic()
         await init_db()
-        logger.info("Database ready")
+        logger.info("Database ready in %.2fs", time.monotonic() - phase_started)
         from app.runtime_settings import apply_db_runtime_settings
+        phase_started = time.monotonic()
         await apply_db_runtime_settings()
-        logger.info("Runtime settings loaded")
+        logger.info("Runtime settings loaded in %.2fs", time.monotonic() - phase_started)
     except Exception:
         logger.exception("Database init failed")
         raise
@@ -68,16 +72,21 @@ async def lifespan(app: FastAPI):
     scheduler = MonitorScheduler()
     app.state.scheduler = scheduler
     try:
+        phase_started = time.monotonic()
         await scheduler.start()
-        logger.info("Scheduler started")
+        logger.info("Scheduler started in %.2fs", time.monotonic() - phase_started)
     except Exception:
         logger.exception("Scheduler start failed")
 
     # 4. Restore Telegram bots for all users
     try:
+        phase_started = time.monotonic()
         await restore_persisted_bot(app.state)
+        logger.info("Telegram bot restore completed in %.2fs", time.monotonic() - phase_started)
     except Exception:
         logger.exception("Bot restore failed")
+
+    logger.info("Application startup completed in %.2fs", time.monotonic() - startup_started)
 
     yield
 

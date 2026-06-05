@@ -142,6 +142,10 @@ updated: 2026-06-04
   - `npm run lint` -> passed.
   - `npm run build` -> passed with known Node `DEP0205` warning.
   - `npm run test:e2e` -> 9 passed with known Node `DEP0205` warning.
+- 2026-06-05 monitor polling/load hotfix:
+  - `npm run lint` -> passed.
+  - `npm run build` -> passed with known Node `DEP0205` warning.
+  - `npm run test:e2e` -> 12 passed with known Node `DEP0205` warning.
 
 ## UI Polish
 
@@ -158,6 +162,7 @@ updated: 2026-06-04
 - 2026-06-04: `/monitors` was visually reworked from a table into responsive monitor cards/list rows. Each card shows a clear square selection checkbox, monitor name, source URL link, active/paused status, marketplace, interval, found count, last check, and labeled Edit/Check/Pause/Resume/Delete buttons. The list toolbar owns select-all and bulk delete.
 - 2026-06-04: `/monitors` follow-up refinement added intentional spacing before informational cards and simplified `DomainSelection` to compact rows: checkbox, country code badge, and marketplace name. Hosts/aliases stay out of the main visual and are available only as option title metadata.
 - 2026-06-04: `/monitors` edit/create forms now use isolated controlled draft state. Edit initializes from persisted monitor name, URL, interval, and selected `domains`; closing via Escape/outside/close discards drafts without submitting. Monitor cards display selected domains under `Domains` with truncate/title behavior.
+- 2026-06-05: `/monitors` request load was reduced for users with many monitors. The page fetches Telegram topic settings once on mount, loads stored monitor topic statuses through one batch `/api/v1/monitors/telegram-topics` request, stops per-card topic status GETs on mount, polls the monitor list every 30 seconds only while the tab is visible, and aborts/ignores stale monitor refreshes.
 
 ## Settings Feedback
 

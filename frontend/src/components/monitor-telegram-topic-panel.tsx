@@ -1,37 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2, RefreshCcw, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { getMonitorTopicStatus, ensureMonitorTopic, testMonitorTopic, MonitorTopicStatus } from "@/lib/telegram-topics";
+import { ensureMonitorTopic, testMonitorTopic, MonitorTopicStatus } from "@/lib/telegram-topics";
 
 interface Props {
   monitorId: number;
   topicsEnabled: boolean;
+  status: MonitorTopicStatus | null;
+  onStatusChange: (monitorId: number, status: MonitorTopicStatus | null) => void;
 }
 
-export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled }: Props) {
-  const [status, setStatus] = useState<MonitorTopicStatus | null>(null);
-  const [loading, setLoading] = useState(false);
+export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled, status, onStatusChange }: Props) {
   const [actionLoading, setActionLoading] = useState<"ensure" | "test" | null>(null);
-
-  const fetchStatus = useCallback(async () => {
-    if (!topicsEnabled) return;
-    setLoading(true);
-    try {
-      const data = await getMonitorTopicStatus(monitorId);
-      setStatus(data);
-    } catch {
-      toast.error("Failed to load topic status");
-    } finally {
-      setLoading(false);
-    }
-  }, [monitorId, topicsEnabled]);
-
-  useEffect(() => {
-    queueMicrotask(() => {
-        void fetchStatus();
-    });
-  }, [fetchStatus]);
 
   if (!topicsEnabled) return null;
 
@@ -47,10 +28,13 @@ export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled }: Props) {
       const csrfToken = await getCsrfToken();
       if (action === "ensure") {
         const data = await ensureMonitorTopic(monitorId, csrfToken);
-        setStatus(data);
+        onStatusChange(monitorId, data);
         toast.success("Topic ensured");
       } else {
-        const { message } = await testMonitorTopic(monitorId, csrfToken);
+        const { message, topic } = await testMonitorTopic(monitorId, csrfToken);
+        if (topic) {
+          onStatusChange(monitorId, { ...topic, monitor_id: monitorId });
+        }
         toast.success(message);
       }
     } catch (err) {
@@ -62,7 +46,7 @@ export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled }: Props) {
 
   return (
     <div className="mt-2 rounded-xl border border-white/10 bg-black/20 p-3 text-xs">
-        {loading ? <Loader2 className="size-4 animate-spin" /> : status ? (
+        {status ? (
             <div className="space-y-2">
                 <p>Status: <span className="font-medium">{status.status}</span></p>
                 {status.topic_name && <p>Topic: {status.topic_name}</p>}
@@ -80,7 +64,15 @@ export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled }: Props) {
                 </div>
             </div>
         ) : (
-            <p>Could not load topic status</p>
+            <div className="space-y-2">
+                <p>Status: <span className="font-medium">not_created</span></p>
+                <div className="flex gap-2">
+                    <Button size="sm" variant="outline" disabled={actionLoading !== null} onClick={() => handleAction("ensure")}>
+                        {actionLoading === "ensure" ? <Loader2 className="size-3 animate-spin"/> : <RefreshCcw className="size-3"/>}
+                        Ensure
+                    </Button>
+                </div>
+            </div>
         )}
     </div>
   );

@@ -58,6 +58,36 @@ def is_db_disconnect_error(exc: BaseException) -> bool:
     )
 
 
+class DatabaseTemporarilyUnavailable(Exception):
+    """Raised when a known database disconnect still fails after one retry."""
+
+
+async def execute_with_db_retry(
+    db: AsyncSession,
+    statement,
+    *,
+    operation_name: str = "database query",
+    retries: int = 1,
+):
+    """Execute one SQLAlchemy statement, retrying only known disconnects."""
+    attempts = retries + 1
+    for attempt in range(attempts):
+        try:
+            return await db.execute(statement)
+        except DBAPIError as exc:
+            if not is_db_disconnect_error(exc):
+                raise
+            try:
+                await db.rollback()
+            except Exception:
+                logger.debug("Rollback after DB disconnect failed for %s", operation_name, exc_info=True)
+            if attempt < attempts - 1:
+                logger.warning("Retrying %s after database disconnect", operation_name)
+                continue
+            logger.warning("%s failed after database disconnect retry", operation_name)
+            raise DatabaseTemporarilyUnavailable("Database temporarily unavailable") from exc
+
+
 def _ensure_engine_initialized() -> None:
     """Create the async engine and sessionmaker if not already initialized."""
     global engine, AsyncSessionLocal

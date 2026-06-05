@@ -1,6 +1,7 @@
 
 export interface TelegramTopicSettings {
   enabled: boolean;
+  telegram_topics_enabled?: boolean;
   chat_id?: string;
   auto_create: boolean;
   recreate_deleted: boolean;
@@ -8,15 +9,32 @@ export interface TelegramTopicSettings {
 }
 
 export interface MonitorTopicStatus {
-  exists: boolean;
-  message_thread_id?: string;
+  monitor_id?: number;
+  message_thread_id_masked?: string | null;
   topic_name?: string;
-  status: "active" | "deleted" | "error" | "not_created" | "creating";
-  last_error?: string;
+  status: string;
+  last_error?: string | null;
+  last_error_code?: string | null;
+  last_verified_at?: string | null;
+  updated_at?: string | null;
 }
 
-export const getTelegramTopicSettings = async (): Promise<TelegramTopicSettings> => {
-  const response = await fetch("/api/v1/settings/telegram/topics", { cache: "no-store" });
+export interface MonitorTopicBatchResponse {
+  topics_enabled: boolean;
+  topics: Record<string, MonitorTopicStatus>;
+}
+
+interface TopicEnvelope {
+  ok?: boolean;
+  code?: string;
+  message?: string;
+  monitor_id?: number;
+  enabled?: boolean;
+  topic?: MonitorTopicStatus | null;
+}
+
+export const getTelegramTopicSettings = async (signal?: AbortSignal): Promise<TelegramTopicSettings> => {
+  const response = await fetch("/api/v1/settings/telegram/topics", { cache: "no-store", signal });
   if (!response.ok) throw new Error("Failed to fetch Telegram topic settings");
   return response.json();
 };
@@ -44,26 +62,35 @@ export const verifyTelegramTopicGroup = async (chatId: string, csrfToken: string
   return response.json();
 };
 
-export const getMonitorTopicStatus = async (monitorId: number): Promise<MonitorTopicStatus> => {
-    const response = await fetch(`/api/v1/monitors/${monitorId}/telegram-topic`, { cache: "no-store" });
-    if (!response.ok) throw new Error("Failed to fetch monitor topic status");
+export const getMonitorTopicBatch = async (signal?: AbortSignal): Promise<MonitorTopicBatchResponse> => {
+    const response = await fetch("/api/v1/monitors/telegram-topics", { cache: "no-store", signal });
+    if (!response.ok) throw new Error("Failed to fetch monitor topic statuses");
     return response.json();
 };
 
-export const ensureMonitorTopic = async (monitorId: number, csrfToken: string): Promise<MonitorTopicStatus> => {
+export const getMonitorTopicStatus = async (monitorId: number, signal?: AbortSignal): Promise<MonitorTopicStatus | null> => {
+    const response = await fetch(`/api/v1/monitors/${monitorId}/telegram-topic`, { cache: "no-store", signal });
+    if (!response.ok) throw new Error("Failed to fetch monitor topic status");
+    const data = (await response.json()) as TopicEnvelope;
+    return data.topic ? { ...data.topic, monitor_id: data.monitor_id } : null;
+};
+
+export const ensureMonitorTopic = async (monitorId: number, csrfToken: string): Promise<MonitorTopicStatus | null> => {
     const response = await fetch(`/api/v1/monitors/${monitorId}/telegram-topic/ensure`, {
         method: "POST",
         headers: { "X-CSRF-Token": csrfToken },
     });
-    if (!response.ok) throw new Error("Failed to ensure monitor topic");
-    return response.json();
+    const data = (await response.json()) as TopicEnvelope;
+    if (!response.ok) throw new Error(data.message || "Failed to ensure monitor topic");
+    return data.topic ? { ...data.topic, monitor_id: monitorId } : null;
 };
 
-export const testMonitorTopic = async (monitorId: number, csrfToken: string): Promise<{ success: boolean; message: string }> => {
+export const testMonitorTopic = async (monitorId: number, csrfToken: string): Promise<TopicEnvelope> => {
     const response = await fetch(`/api/v1/monitors/${monitorId}/telegram-topic/test`, {
         method: "POST",
         headers: { "X-CSRF-Token": csrfToken },
     });
-    if (!response.ok) throw new Error("Failed to test monitor topic");
-    return response.json();
+    const data = (await response.json()) as TopicEnvelope;
+    if (!response.ok) throw new Error(data.message || "Failed to test monitor topic");
+    return data;
 };

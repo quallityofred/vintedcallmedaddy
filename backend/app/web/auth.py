@@ -6,12 +6,11 @@ import logging
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import Response
 from sqlalchemy import select
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User, UserSession
 from app.config import get_settings
-from app.database import is_db_disconnect_error
+from app.database import DatabaseTemporarilyUnavailable, execute_with_db_retry
 from app.web.dependencies import get_db
 
 SESSION_COOKIE = "session_token"
@@ -24,21 +23,10 @@ def generate_session_token() -> str:
 
 
 async def _execute_auth_query(db: AsyncSession, statement):
-    for attempt in range(2):
-        try:
-            return await db.execute(statement)
-        except DBAPIError as exc:
-            if not is_db_disconnect_error(exc):
-                raise
-            try:
-                await db.rollback()
-            except Exception:
-                logger.debug("Auth DB rollback after disconnect failed", exc_info=True)
-            if attempt == 0:
-                logger.warning("Retrying auth query after database disconnect")
-                continue
-            logger.warning("Auth query failed after database disconnect retry")
-            raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
+    try:
+        return await execute_with_db_retry(db, statement, operation_name="auth query")
+    except DatabaseTemporarilyUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
 
 
 async def get_current_user(

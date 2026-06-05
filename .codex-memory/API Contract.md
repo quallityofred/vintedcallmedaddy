@@ -92,6 +92,7 @@ Source verified against `Projects/vintedbot` on 2026-06-03. This note inventorie
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/monitors/domains` | JSON | public | Returns unique user-selectable Vinted marketplace representatives plus alias metadata. Aliases are not selectable monitor targets. |
 | `GET` | `/api/v1/monitors` | JSON | session | User-scoped monitor list. Returns selected representative `domains` for each monitor. |
+| `GET` | `/api/v1/monitors/telegram-topics` | JSON | session | Returns stored Telegram forum topic mappings for all current-user monitors in one read-only response. Does not call Telegram, create topics, or expose raw chat/thread identifiers. |
 | `POST` | `/api/v1/monitors` | JSON | session + CSRF | Creates user-scoped monitor and schedules job. |
 | `GET` | `/api/v1/monitors/{monitor_id}` | JSON | session | User-scoped monitor detail. Returns selected representative `domains`. |
 | `PATCH` | `/api/v1/monitors/{monitor_id}` | JSON | session + CSRF | Updates user-scoped monitor, selected representative `domains`, and scheduler job. |

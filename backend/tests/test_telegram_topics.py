@@ -510,6 +510,79 @@ async def test_monitor_topic_endpoints_are_authenticated_and_user_scoped(db_sess
 
 
 @pytest.mark.asyncio
+async def test_monitor_topic_batch_endpoint_is_safe_user_scoped_and_side_effect_free(db_session, monkeypatch):
+    owner = await _create_user(
+        db_session,
+        "topic_batch_owner",
+        telegram_bot_token="owner-secret-token",
+        telegram_topics_enabled=True,
+        telegram_topics_chat_id="987654321",
+    )
+    other = await _create_user(
+        db_session,
+        "topic_batch_other",
+        telegram_bot_token="other-secret-token",
+        telegram_topics_enabled=True,
+        telegram_topics_chat_id="555555555",
+    )
+    owner_monitor = await _create_monitor(db_session, owner, name="Owner Topic")
+    owner_without_topic = await _create_monitor(db_session, owner, name="No Topic Yet")
+    other_monitor = await _create_monitor(db_session, other, name="Other Topic")
+    db_session.add(
+        MonitorTelegramTopic(
+            user_id=owner.id,
+            monitor_id=owner_monitor.id,
+            chat_id="987654321",
+            message_thread_id=123456789,
+            topic_name="Owner Topic",
+            status="active",
+        )
+    )
+    db_session.add(
+        MonitorTelegramTopic(
+            user_id=other.id,
+            monitor_id=other_monitor.id,
+            chat_id="555555555",
+            message_thread_id=444444444,
+            topic_name="Other Topic",
+            status="active",
+        )
+    )
+    await db_session.commit()
+    _override_db(db_session)
+    get_bot = MagicMock()
+    monkeypatch.setattr("app.telegram.bot.get_or_create_bot", get_bot)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as unauthenticated:
+        unauth_response = await unauthenticated.get("/api/v1/monitors/telegram-topics")
+        assert unauth_response.status_code == 401
+
+    client, _ = await _authenticated_client(owner, db_session, "topic-batch-session")
+    async with client:
+        response = await client.get("/api/v1/monitors/telegram-topics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["topics_enabled"] is True
+    assert str(owner_monitor.id) in payload["topics"]
+    assert str(owner_without_topic.id) not in payload["topics"]
+    assert str(other_monitor.id) not in payload["topics"]
+    topic = payload["topics"][str(owner_monitor.id)]
+    assert topic["monitor_id"] == owner_monitor.id
+    assert topic["status"] == "active"
+    assert topic["topic_name"] == "Owner Topic"
+    assert topic["message_thread_id_masked"].endswith("6789")
+    assert "owner-secret-token" not in response.text
+    assert "987654321" not in response.text
+    assert "123456789" not in response.text
+    assert "555555555" not in response.text
+    assert "444444444" not in response.text
+    get_bot.assert_not_called()
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_topic_test_endpoint_sends_to_thread(db_session, monkeypatch):
     user = await _create_user(
         db_session,

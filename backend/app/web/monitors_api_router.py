@@ -156,6 +156,41 @@ async def list_supported_domains():
     return get_unique_vinted_marketplaces()
 
 
+@router.get("/telegram-topics")
+async def list_monitor_telegram_topics(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Return stored topic mappings for all current-user monitors without Telegram side effects."""
+    monitor_ids_result = await db.execute(select(Monitor.id).where(Monitor.user_id == user.id))
+    monitor_ids = [row[0] for row in monitor_ids_result.all()]
+    if not monitor_ids:
+        return {"topics_enabled": user.telegram_topics_enabled, "topics": {}}
+
+    topics_result = await db.execute(
+        select(MonitorTelegramTopic)
+        .where(
+            MonitorTelegramTopic.user_id == user.id,
+            MonitorTelegramTopic.monitor_id.in_(monitor_ids),
+        )
+        .order_by(MonitorTelegramTopic.updated_at.desc())
+    )
+    topics: dict[str, dict[str, object]] = {}
+    for topic in topics_result.scalars().all():
+        key = str(topic.monitor_id)
+        if key in topics:
+            continue
+        payload = topic_payload(topic) or {}
+        payload["monitor_id"] = topic.monitor_id
+        payload["updated_at"] = topic.updated_at.isoformat() if topic.updated_at else None
+        topics[key] = payload
+
+    return {
+        "topics_enabled": user.telegram_topics_enabled,
+        "topics": topics,
+    }
+
+
 @router.get("/{monitor_id}", response_model=MonitorResponse)
 async def get_monitor(
     monitor_id: int,

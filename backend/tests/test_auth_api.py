@@ -6,6 +6,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.main import app
 from app.models import InviteCode, User, UserSession
+from app.web import auth_api_router
 from app.web import auth as web_auth
 from app.web import app_web_dependencies
 from app.web.dependencies import get_db
@@ -45,6 +46,8 @@ class _FlakyAuthDb:
         self.results = list(results)
         self.execute_calls = 0
         self.rollback_calls = 0
+        self.commit_calls = 0
+        self.added = []
 
     async def execute(self, statement):
         self.execute_calls += 1
@@ -55,6 +58,12 @@ class _FlakyAuthDb:
 
     async def rollback(self):
         self.rollback_calls += 1
+
+    def add(self, item):
+        self.added.append(item)
+
+    async def commit(self):
+        self.commit_calls += 1
 
 
 def _disconnect_error() -> DBAPIError:
@@ -193,6 +202,42 @@ async def test_primary_get_current_user_returns_503_after_repeated_db_disconnect
     assert exc_info.value.detail == "Database temporarily unavailable"
     assert db.execute_calls == 2
     assert db.rollback_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_login_retries_once_after_db_disconnect_and_succeeds():
+    user = User(id=9, username="login_retry_user", telegram_bot_token="", telegram_chat_id="")
+    user.set_password("password")
+    db = _FlakyAuthDb(_disconnect_error(), user)
+
+    response = await auth_api_router.login(
+        auth_api_router.LoginRequest(username="login_retry_user", password="password"),
+        db,
+    )
+
+    assert response.status_code == 200
+    assert db.execute_calls == 2
+    assert db.rollback_calls == 1
+    assert db.commit_calls == 1
+    assert len(db.added) == 1
+    assert isinstance(db.added[0], UserSession)
+
+
+@pytest.mark.asyncio
+async def test_login_returns_503_after_repeated_db_disconnect():
+    db = _FlakyAuthDb(_disconnect_error(), _disconnect_error())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_api_router.login(
+            auth_api_router.LoginRequest(username="login_retry_user", password="password"),
+            db,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Database temporarily unavailable"
+    assert db.execute_calls == 2
+    assert db.rollback_calls == 2
+    assert db.commit_calls == 0
 
 
 @pytest.mark.asyncio

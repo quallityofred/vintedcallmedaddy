@@ -81,6 +81,8 @@ tags:
 - 2026-06-03: Frontend lint needed generated Playwright output ignored in `frontend/eslint.config.mjs` so missing/ignored `test-results/` does not break validation.
 - 2026-06-05: Backend Postgres async engine options are configurable through `db_pool_size`, `db_max_overflow`, `db_pool_timeout`, and `db_pool_recycle_seconds`. Defaults keep pre-ping enabled, recycle pooled connections after 300 seconds, and keep asyncpg statement cache disabled for pooler compatibility.
 - 2026-06-05: Auth session lookup catches SQLAlchemy/asyncpg disconnects matching closed-connection failures, rolls back, retries once, and returns a safe `503` if the retry fails. This is intended to reduce frontend proxy socket resets caused by uncaught backend DB disconnects during authenticated API requests.
+- 2026-06-05: The same narrow DB disconnect retry helper now covers login, register username lookup, logout session lookup, and both auth dependency implementations. FastAPI returns a controlled `503` only after a known disconnect fails its retry; invalid credentials and non-disconnect DB errors keep their existing behavior.
+- 2026-06-05: Backend startup logs now include safe duration timings for database init, runtime settings load, scheduler start, Telegram bot restore, and total application startup. Use these timings in Railway logs to identify the slow startup phase before changing startup sequencing.
 
 ## Related Plans
 

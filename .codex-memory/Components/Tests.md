@@ -171,6 +171,15 @@ tags:
   - `cd backend && poetry run pytest -q` -> 128 passed.
   - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
   - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+- Monitor load and DB route retry hotfix snapshot on `2026-06-05`:
+  - `cd backend && poetry run pytest -q tests/test_auth_api.py tests/test_database_session_factory.py` -> 15 passed.
+  - `cd backend && poetry run pytest -q tests/test_telegram_topics.py` -> 28 passed.
+  - `cd backend && poetry run pytest -q tests/test_monitors_api.py` -> 18 passed.
+  - `cd backend && poetry run pytest -q` -> 131 passed.
+  - `cd backend && poetry run python -c "from app.main import app; print('backend import ok')"` -> passed.
+  - `cd frontend && npm run lint` -> passed.
+  - `cd frontend && npm run build` -> passed with known Node `DEP0205` warning.
+  - `cd frontend && npm run test:e2e` -> 12 passed with known Node `DEP0205` warning.
 
 ## Coverage Gaps
 
@@ -206,6 +215,7 @@ tags:
 - 2026-06-04: Expanded `backend/tests/test_telegram_topics.py` for automatic notification routing: topics-disabled main-chat behavior, lazy topic creation, active topic reuse, permission failure, deleted-topic recreation, creating-state retry, topic send/rate-limit failures, explicit main-chat fallback, disabled user guard, and missing topic chat guard.
 - 2026-06-05: Expanded `backend/tests/test_telegram_topics.py` for monitor-name-only topic names, no domain/id suffixes, whitespace/control cleanup, generic fallback, safe truncation, create-topic name payload, active-topic rename sync, preserved thread IDs, and rename-failure notification continuity.
 - 2026-06-05: Added backend tests for Postgres async engine resilience options and auth-session DB disconnect retry/safe-503 behavior.
+- 2026-06-05: Added backend tests for login DB disconnect retry/safe `503` and read-only batch Telegram topic status scoping/masking. Added Playwright coverage that `/monitors` with 20 monitors uses one batch topic-status call and no per-monitor topic GET burst.
 
 ## Related Frontend Notes
 
