@@ -76,6 +76,8 @@ export function LoginForm({ nextPath }: LoginFormProps) {
       if (!response.ok) {
         if (response.status === 401) {
           setError("Invalid username or password.");
+        } else if (response.status === 503) {
+          setError("Backend is temporarily unavailable. Try again shortly.");
         } else if (response.status === 422) {
             setError("Invalid request. Please check your credentials.");
         } else {

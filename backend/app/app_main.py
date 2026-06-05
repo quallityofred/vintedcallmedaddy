@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -45,54 +46,119 @@ def _backend_root_payload() -> dict[str, object]:
 # Lifespan
 # ---------------------------------------------------------------------------
 
+async def _run_startup_services(app: FastAPI) -> None:
+    """Run DB repair and optional runtime services without blocking liveness."""
+    startup_started = time.monotonic()
+    app.state.startup_status = "starting"
+    app.state.db_ready = False
+    app.state.startup_error = None
+
+    db_ready = False
+    for attempt in range(1, settings.startup_db_max_attempts + 1):
+        try:
+            phase_started = time.monotonic()
+            logger.info(
+                "Database startup phase starting: attempt=%s/%s timeout=%ss",
+                attempt,
+                settings.startup_db_max_attempts,
+                settings.startup_db_timeout_seconds,
+            )
+            await asyncio.wait_for(init_db(), timeout=settings.startup_db_timeout_seconds)
+            logger.info("Database ready in %.2fs", time.monotonic() - phase_started)
+            db_ready = True
+            app.state.db_ready = True
+            break
+        except asyncio.TimeoutError:
+            app.state.startup_error = "database_startup_timeout"
+            logger.exception("Database startup timed out after %ss", settings.startup_db_timeout_seconds)
+        except Exception:
+            app.state.startup_error = "database_startup_failed"
+            logger.exception("Database startup failed")
+
+        if attempt < settings.startup_db_max_attempts:
+            await asyncio.sleep(settings.startup_db_retry_interval_seconds)
+
+    if not db_ready:
+        app.state.startup_status = "degraded"
+        logger.error(
+            "Application started degraded: database startup did not complete after %s attempts",
+            settings.startup_db_max_attempts,
+        )
+        return
+
+    try:
+        from app.runtime_settings import apply_db_runtime_settings
+
+        phase_started = time.monotonic()
+        await asyncio.wait_for(
+            apply_db_runtime_settings(),
+            timeout=settings.startup_optional_timeout_seconds,
+        )
+        logger.info("Runtime settings loaded in %.2fs", time.monotonic() - phase_started)
+    except asyncio.TimeoutError:
+        logger.exception("Runtime settings load timed out after %ss", settings.startup_optional_timeout_seconds)
+    except Exception:
+        logger.exception("Runtime settings load failed")
+
+    logger.info("Scraper client ready (per-user)")
+
+    from app.scheduler.tasks import MonitorScheduler
+
+    scheduler = MonitorScheduler()
+    app.state.scheduler = scheduler
+    try:
+        phase_started = time.monotonic()
+        await asyncio.wait_for(scheduler.start(), timeout=settings.startup_optional_timeout_seconds)
+        app.state.scheduler_ready = True
+        logger.info("Scheduler started in %.2fs", time.monotonic() - phase_started)
+    except asyncio.TimeoutError:
+        app.state.scheduler_ready = False
+        logger.exception("Scheduler start timed out after %ss", settings.startup_optional_timeout_seconds)
+    except Exception:
+        app.state.scheduler_ready = False
+        logger.exception("Scheduler start failed")
+
+    try:
+        phase_started = time.monotonic()
+        await asyncio.wait_for(
+            restore_persisted_bot(app.state),
+            timeout=settings.startup_optional_timeout_seconds,
+        )
+        logger.info("Telegram bot restore completed in %.2fs", time.monotonic() - phase_started)
+    except asyncio.TimeoutError:
+        logger.exception("Telegram bot restore timed out after %ss", settings.startup_optional_timeout_seconds)
+    except Exception:
+        logger.exception("Bot restore failed")
+
+    app.state.startup_status = "ready"
+    logger.info("Application background startup completed in %.2fs", time.monotonic() - startup_started)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle."""
     startup_started = time.monotonic()
     logger.info("Starting Vinted Monitor...")
-
-    # 1. Database
-    try:
-        phase_started = time.monotonic()
-        await init_db()
-        logger.info("Database ready in %.2fs", time.monotonic() - phase_started)
-        from app.runtime_settings import apply_db_runtime_settings
-        phase_started = time.monotonic()
-        await apply_db_runtime_settings()
-        logger.info("Runtime settings loaded in %.2fs", time.monotonic() - phase_started)
-    except Exception:
-        logger.exception("Database init failed")
-        raise
-
-    # 2. VintedClient
-    # Note: Scraper client is now created per-user inside check_monitor
-    logger.info("Scraper client ready (per-user)")
-
-    # 3. Scheduler
-    from app.scheduler.tasks import MonitorScheduler
-    scheduler = MonitorScheduler()
-    app.state.scheduler = scheduler
-    try:
-        phase_started = time.monotonic()
-        await scheduler.start()
-        logger.info("Scheduler started in %.2fs", time.monotonic() - phase_started)
-    except Exception:
-        logger.exception("Scheduler start failed")
-
-    # 4. Restore Telegram bots for all users
-    try:
-        phase_started = time.monotonic()
-        await restore_persisted_bot(app.state)
-        logger.info("Telegram bot restore completed in %.2fs", time.monotonic() - phase_started)
-    except Exception:
-        logger.exception("Bot restore failed")
-
-    logger.info("Application startup completed in %.2fs", time.monotonic() - startup_started)
+    app.state.db_ready = False
+    app.state.scheduler_ready = False
+    app.state.startup_status = "starting"
+    app.state.startup_error = None
+    app.state.scheduler = None
+    app.state.startup_task = asyncio.create_task(_run_startup_services(app))
+    logger.info("HTTP liveness released in %.2fs; background startup continues", time.monotonic() - startup_started)
 
     yield
 
     # в”Ђв”Ђ Shutdown в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     logger.info("Shutting down Vinted Monitor...")
+
+    startup_task = getattr(app.state, "startup_task", None)
+    if startup_task and not startup_task.done():
+        startup_task.cancel()
+        try:
+            await startup_task
+        except asyncio.CancelledError:
+            pass
 
     # Stop all bots
     try:
@@ -115,9 +181,11 @@ async def lifespan(app: FastAPI):
         logger.exception("Bot shutdown error")
 
     # Stop scheduler
+    scheduler = getattr(app.state, "scheduler", None)
     try:
-        await scheduler.stop()
-        logger.info("Scheduler stopped")
+        if scheduler:
+            await scheduler.stop()
+            logger.info("Scheduler stopped")
     except Exception:
         logger.exception("Scheduler stop error")
 
@@ -222,6 +290,10 @@ def create_app() -> FastAPI:
         bots_running = count_running_bots()
         return {
             "status": "ok",
+            "startup_status": getattr(request.app.state, "startup_status", "unknown"),
+            "database_status": "ready" if getattr(request.app.state, "db_ready", False) else "not_ready",
+            "scheduler_ready": bool(getattr(request.app.state, "scheduler_ready", False)),
+            "startup_error": getattr(request.app.state, "startup_error", None),
             "scheduler_jobs": job_count,
             "bots_running": bots_running,
         }

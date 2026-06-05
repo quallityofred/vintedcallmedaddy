@@ -146,6 +146,10 @@ updated: 2026-06-04
   - `npm run lint` -> passed.
   - `npm run build` -> passed with known Node `DEP0205` warning.
   - `npm run test:e2e` -> 12 passed with known Node `DEP0205` warning.
+- 2026-06-05 backend readiness/login feedback hotfix:
+  - `npm run lint` -> passed.
+  - `npm run build` -> passed with known Node `DEP0205` warning.
+  - `npm run test:e2e` -> 13 passed with known Node `DEP0205` warning.
 
 ## UI Polish
 
@@ -163,6 +167,7 @@ updated: 2026-06-04
 - 2026-06-04: `/monitors` follow-up refinement added intentional spacing before informational cards and simplified `DomainSelection` to compact rows: checkbox, country code badge, and marketplace name. Hosts/aliases stay out of the main visual and are available only as option title metadata.
 - 2026-06-04: `/monitors` edit/create forms now use isolated controlled draft state. Edit initializes from persisted monitor name, URL, interval, and selected `domains`; closing via Escape/outside/close discards drafts without submitting. Monitor cards display selected domains under `Domains` with truncate/title behavior.
 - 2026-06-05: `/monitors` request load was reduced for users with many monitors. The page fetches Telegram topic settings once on mount, loads stored monitor topic statuses through one batch `/api/v1/monitors/telegram-topics` request, stops per-card topic status GETs on mount, polls the monitor list every 30 seconds only while the tab is visible, and aborts/ignores stale monitor refreshes.
+- 2026-06-05: The frontend "proxy" seen in Railway logs is the intended Next.js rewrite from `/api/:path*` to `BACKEND_URL`. Login now distinguishes backend temporary unavailability (`503`) from wrong credentials and shows a retry-later message instead of a generic login failure.
 
 ## Settings Feedback
 

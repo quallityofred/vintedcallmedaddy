@@ -451,6 +451,32 @@ test("login page posts credentials and shows safe API errors", async ({ page }) 
   await expect(page.getByRole("alert").filter({ hasText: "Invalid username or password." })).toBeVisible();
 });
 
+test("login page shows temporary backend outage for auth 503", async ({ page }) => {
+  await page.route("**/api/v1/auth/csrf", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ csrf_token: "test-csrf-token" }),
+    });
+  });
+
+  await page.route("**/api/v1/auth/login", async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Database temporarily unavailable" }),
+    });
+  });
+
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("user");
+  await page.getByLabel("Password").fill("password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Backend is temporarily unavailable. Try again shortly." })
+  ).toBeVisible();
+});
+
 test("login and register respect next redirect", async ({ page }) => {
   await page.route("**/api/v1/auth/csrf", async (route) => {
     await route.fulfill({

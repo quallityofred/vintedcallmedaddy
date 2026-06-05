@@ -2,6 +2,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+import app.app_config as app_config
 import app.app_database as app_database
 import app.database as database_wrapper
 import app.web.app_web_dependencies as web_dependencies
@@ -115,3 +116,12 @@ def test_postgres_engine_kwargs_support_null_pool():
     assert "pool_size" not in kwargs
     assert "max_overflow" not in kwargs
     assert "pool_timeout" not in kwargs
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes"])
+def test_db_use_null_pool_env_parses_truthy_values(monkeypatch, value):
+    monkeypatch.setenv("DB_USE_NULL_POOL", value)
+
+    settings = app_config.Settings(_env_file=None)
+
+    assert settings.db_use_null_pool is True

@@ -203,6 +203,15 @@ def _ensure_engine_initialized() -> None:
         **build_async_engine_kwargs(settings),
     )
     AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    if settings.is_sqlite():
+        logger.info("Database engine configured: dialect=sqlite pool_mode=static")
+    else:
+        logger.info(
+            "Database engine configured: dialect=postgresql pool_mode=%s pool_pre_ping=true "
+            "pool_recycle_seconds=%s statement_cache=disabled",
+            "null" if settings.db_use_null_pool else "queue",
+            settings.db_pool_recycle_seconds,
+        )
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
