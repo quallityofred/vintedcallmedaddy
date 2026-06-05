@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -8,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.database import DatabaseTemporarilyUnavailable, run_db_with_retry
 from app.config import get_settings
@@ -18,6 +21,7 @@ from app.web.dependencies import get_db
 from app.web.invite_codes import consume_invite_code
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 class LoginRequest(BaseModel):
@@ -61,26 +65,81 @@ async def _run_auth_api_operation(db: AsyncSession, operation, *, operation_name
             timeout=timeout,
         )
     except asyncio.TimeoutError as exc:
+        logger.warning("auth_login_db_timeout operation=%s", operation_name)
         raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
     except DatabaseTemporarilyUnavailable as exc:
+        logger.warning("auth_login_db_unavailable operation=%s", operation_name)
         raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
 
 
-async def _create_login_session(
+def _duration_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+async def _lookup_login_user(db: AsyncSession, *, username: str) -> User | None:
+    result = await db.execute(
+        select(User)
+        .options(
+            load_only(
+                User.id,
+                User.username,
+                User.password_hash,
+                User.password_salt,
+                User.is_admin,
+            )
+        )
+        .where(User.username == username)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _create_session_token(db: AsyncSession, *, user_id: int) -> str:
+    session_token = generate_session_token()
+    db.add(UserSession(user_id=user_id, token=session_token))
+    await db.commit()
+    return session_token
+
+
+async def _authenticate_login(
     db: AsyncSession,
     *,
     username: str,
     password: str,
 ) -> tuple[User, str]:
-    result = await db.execute(select(User).where(User.username == username))
-    user = result.scalar_one_or_none()
+    total_started = time.monotonic()
+    logger.info("auth_login_start")
 
-    if user is None or not user.check_password(password):
+    step_started = time.monotonic()
+    logger.info("auth_login_user_lookup_start")
+    user = await _run_auth_api_operation(
+        db,
+        lambda active_db: _lookup_login_user(active_db, username=username),
+        operation_name="auth_login_user_lookup",
+    )
+    logger.info("auth_login_user_lookup_done duration_ms=%s", _duration_ms(step_started))
+
+    if user is None:
+        logger.info("auth_login_total_done duration_ms=%s", _duration_ms(total_started))
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    session_token = generate_session_token()
-    db.add(UserSession(user_id=user.id, token=session_token))
-    await db.commit()
+    step_started = time.monotonic()
+    logger.info("auth_login_password_verify_start")
+    password_ok = user.check_password(password)
+    logger.info("auth_login_password_verify_done duration_ms=%s", _duration_ms(step_started))
+    if not password_ok:
+        logger.info("auth_login_total_done duration_ms=%s", _duration_ms(total_started))
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    step_started = time.monotonic()
+    logger.info("auth_login_session_create_start")
+    logger.info("auth_login_session_commit_start")
+    session_token = await _run_auth_api_operation(
+        db,
+        lambda active_db: _create_session_token(active_db, user_id=user.id),
+        operation_name="auth_login_session_commit",
+    )
+    logger.info("auth_login_session_commit_done duration_ms=%s", _duration_ms(step_started))
+    logger.info("auth_login_total_done duration_ms=%s", _duration_ms(total_started))
     return user, session_token
 
 
@@ -106,14 +165,10 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     username = request.username.strip()
-    user, session_token = await _run_auth_api_operation(
+    user, session_token = await _authenticate_login(
         db,
-        lambda active_db: _create_login_session(
-            active_db,
-            username=username,
-            password=request.password,
-        ),
-        operation_name="login",
+        username=username,
+        password=request.password,
     )
 
     return _session_response(user, session_token)

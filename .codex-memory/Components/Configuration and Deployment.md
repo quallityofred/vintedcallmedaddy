@@ -89,6 +89,7 @@ tags:
 - 2026-06-05: DB request resilience now includes `db_operation_timeout_seconds` (default `10`) around the shared retry helper. A timed-out DB operation is rolled back, retried once with a fresh session, and then returned through the existing controlled `503` path if it still cannot complete. This protects login/auth requests from hanging until Railway/Next reports `ECONNRESET`.
 - 2026-06-05: Postgres/asyncpg engine config now also sets `db_connect_timeout_seconds` (default `10`), asyncpg `command_timeout`, and PostgreSQL `statement_timeout` via safe server settings. `/api/health` includes `database_pool_mode` (`queue`, `null`, or `static`) so production can confirm whether `DB_USE_NULL_POOL=true` was applied without printing the database URL.
 - 2026-06-05: Auth API operations have a separate `auth_db_operation_timeout_seconds` deadline (default `12`) around the whole retry flow. This is the final request boundary for login/register/logout if the DB driver stalls without raising a retryable SQLAlchemy/asyncpg error.
+- 2026-06-05: Login DB diagnostics were refined after production returned controlled `503` while health was ready. Login now logs safe step timings (`auth_login_user_lookup`, password verification, session commit, total) without username/password/token values. Startup repair ensures `ix_users_username` and `ix_user_sessions_token` exist for existing DBs. `backend/scripts/db_health_check.py` prints safe pool mode and auth-table read latencies without printing the DB URL or secrets.
 
 ## Related Plans
 

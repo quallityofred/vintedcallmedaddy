@@ -323,6 +323,11 @@ async def validate_and_migrate_db(conn) -> None:
 
     if columns_users:
         try:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users (username)"))
+        except Exception as e:
+            logger.warning("Note: Could not ensure users username index: %s", e)
+
+        try:
             await conn.execute(
                 text(
                     "UPDATE users SET cf_worker_mode = 'auto' "
@@ -355,6 +360,11 @@ async def validate_and_migrate_db(conn) -> None:
             )
         except Exception as e:
             logger.warning("Note: Could not normalize users settings columns: %s", e)
+
+    try:
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_sessions_token ON user_sessions (token)"))
+    except Exception as e:
+        logger.warning("Note: Could not ensure auth lookup indexes: %s", e)
 
     columns_seen = await conn.run_sync(get_columns, "seen_items")
 

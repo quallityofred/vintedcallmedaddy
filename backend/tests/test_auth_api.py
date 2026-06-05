@@ -75,6 +75,12 @@ class _FlakyAuthDb:
                 raise result
 
 
+class _SlowCommitAuthDb(_FlakyAuthDb):
+    async def commit(self):
+        self.commit_calls += 1
+        await asyncio.sleep(10)
+
+
 class _FakeSessionContext:
     def __init__(self, db):
         self.db = db
@@ -341,11 +347,11 @@ async def test_login_retries_once_after_db_disconnect_and_succeeds(monkeypatch):
     assert response.status_code == 200
     assert db.execute_calls == 1
     assert db.rollback_calls == 1
-    assert db.commit_calls == 0
+    assert db.commit_calls == 1
     assert retry_db.execute_calls == 1
-    assert retry_db.commit_calls == 1
-    assert len(retry_db.added) == 1
-    assert isinstance(retry_db.added[0], UserSession)
+    assert retry_db.commit_calls == 0
+    assert len(db.added) == 1
+    assert isinstance(db.added[0], UserSession)
 
 
 @pytest.mark.asyncio
@@ -378,10 +384,10 @@ async def test_login_returns_503_when_auth_operation_exceeds_deadline(monkeypatc
         lambda: SimpleNamespace(auth_db_operation_timeout_seconds=0.01),
     )
 
-    async def stuck_operation(active_db, *, username: str, password: str):
+    async def stuck_lookup(active_db, *, username: str):
         await asyncio.sleep(10)
 
-    monkeypatch.setattr(auth_api_router, "_create_login_session", stuck_operation)
+    monkeypatch.setattr(auth_api_router, "_lookup_login_user", stuck_lookup)
 
     with pytest.raises(HTTPException) as exc_info:
         await auth_api_router.login(
@@ -391,6 +397,46 @@ async def test_login_returns_503_when_auth_operation_exceeds_deadline(monkeypatc
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == "Database temporarily unavailable"
+
+
+@pytest.mark.asyncio
+async def test_login_commit_timeout_returns_503(monkeypatch):
+    user = User(id=11, username="login_commit_timeout_user", telegram_bot_token="", telegram_chat_id="")
+    user.set_password("password")
+    db = _SlowCommitAuthDb(user)
+    monkeypatch.setattr(
+        auth_api_router,
+        "get_settings",
+        lambda: SimpleNamespace(auth_db_operation_timeout_seconds=0.01),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_api_router.login(
+            auth_api_router.LoginRequest(username="login_commit_timeout_user", password="password"),
+            db,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Database temporarily unavailable"
+
+
+@pytest.mark.asyncio
+async def test_auth_login_timing_logs_do_not_include_credentials(caplog):
+    db = _FlakyAuthDb(None)
+    secret_username = "secret_user_name_for_logs"
+    secret_password = "secret-password-for-logs"
+
+    with caplog.at_level("INFO", logger="app.web.auth_api_router"):
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_api_router.login(
+                auth_api_router.LoginRequest(username=secret_username, password=secret_password),
+                db,
+            )
+
+    assert exc_info.value.status_code == 401
+    assert secret_username not in caplog.text
+    assert secret_password not in caplog.text
+    assert "auth_login_user_lookup_start" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -410,7 +456,7 @@ async def test_login_commit_disconnect_retries_whole_operation_with_fresh_sessio
     assert db.execute_calls == 1
     assert db.commit_calls == 1
     assert db.rollback_calls == 1
-    assert retry_db.execute_calls == 1
+    assert retry_db.execute_calls == 0
     assert retry_db.commit_calls == 1
     assert len(retry_db.added) == 1
 
