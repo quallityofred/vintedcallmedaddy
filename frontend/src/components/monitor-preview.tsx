@@ -255,7 +255,7 @@ export function MonitorPreview() {
         method: isDelete ? "DELETE" : "POST",
         credentials: "same-origin",
         headers: {
-          "X-CSRF-Token": csrf_token,
+          "X-CSRF-Token": csrfToken,
         },
       });
 
