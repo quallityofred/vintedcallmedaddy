@@ -6,6 +6,7 @@ from typing import NoReturn
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.pricing.currency import format_price_with_usd
 from app.scraper.parser import VintedItem
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,14 @@ def _escape(value: object, *, limit: int = 180) -> str:
 
 
 def _format_price(item: VintedItem) -> str:
-    if item.price <= 0:
+    try:
+        return format_price_with_usd(item.price, item.currency)
+    except Exception:
+        logger.exception("Failed to format price for item_id=%d", item.id)
+    try:
+        if item.price <= 0:
+            return "Not listed"
+    except Exception:
         return "Not listed"
     return f"{item.price:g} {_escape(item.currency)}".strip()
 

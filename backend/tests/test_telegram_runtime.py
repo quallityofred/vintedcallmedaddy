@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.scraper.parser import VintedItem
 from app.telegram import bot as bot_module
+from app.telegram import notifications
 from app.web.app_web_dependencies import is_bot_running, start_bot, stop_bot
 
 
@@ -200,3 +203,55 @@ async def test_cleanup_script_does_not_print_token(monkeypatch, capsys):
     assert exit_code == 0
     assert "Webhook present: yes" in output
     assert secret_token not in output
+
+
+@pytest.mark.asyncio
+async def test_telegram_notification_includes_approximate_usd_for_non_usd_price():
+    item = VintedItem(
+        id=100,
+        title="PLN Item",
+        price=39,
+        currency="PLN",
+        brand="Brand",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.pl/items/100",
+        domain="vinted.pl",
+        seller_id=10,
+    )
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+
+    with patch("app.telegram.notifications.asyncio.sleep", AsyncMock()):
+        await notifications.send_item_notification(bot, 12345, item)
+
+    _, kwargs = bot.send_message.await_args
+    assert "<b>Price:</b> 39 PLN (~$10.00)" in kwargs["text"]
+    assert "message_thread_id" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_telegram_notification_keeps_usd_price_clean():
+    item = VintedItem(
+        id=101,
+        title="USD Item",
+        price=10,
+        currency="USD",
+        brand="Brand",
+        size="M",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.com/items/101",
+        domain="vinted.com",
+        seller_id=11,
+    )
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+
+    with patch("app.telegram.notifications.asyncio.sleep", AsyncMock()):
+        await notifications.send_item_notification(bot, 12345, item)
+
+    _, kwargs = bot.send_message.await_args
+    assert "<b>Price:</b> 10 USD" in kwargs["text"]
+    assert "(~$" not in kwargs["text"]

@@ -62,3 +62,4 @@ tags:
 - 2026-06-04: Wired automatic `FoundItem` notification delivery into topic routing behind `telegram_topics_enabled`, with lazy topic creation/reuse, explicit fallback behavior, safe diagnostics, and retry-preserving failures.
 - 2026-06-05: Topic name normalization now uses only monitor name text and syncs old active verbose topic names without recreating topics.
 - 2026-06-05: Added batch monitor topic status loading for the frontend so `/monitors` no longer issues one topic GET per monitor card.
+- 2026-06-05: Item notification price formatting now uses static approximate USD conversion from `app.pricing.currency`. Non-USD messages include the original price/currency plus an approximate USD value, USD prices are not duplicated, and topic routing uses the same formatter unchanged.
