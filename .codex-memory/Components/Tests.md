@@ -250,6 +250,7 @@ tags:
 - 2026-06-05: Added `backend/tests/test_currency_conversion.py` for static USD conversion, comma decimals, unknown/missing currencies, malformed amounts, and zero/negative fallbacks. Telegram runtime tests now assert non-USD messages include approximate USD and USD messages do not duplicate conversion text.
 - 2026-06-05: Added `backend/tests/test_scheduler_backpressure.py` for global/per-user monitor check limits, same-monitor overlap prevention, semaphore release on success/failure, and no DB session held during mocked scraper work. Added config env/default tests, `/api/health` backpressure field assertions, and manual Check Now busy-response coverage.
 - 2026-06-05: Added regression coverage for recent-items monitor correctness: comma/path Vinted filter parsing, nested brand-id extraction, scheduler URL-derived filter fallback when stored params are stale, refusal of unfiltered Vinted monitors, and explicit `/api/v1/items` recent-items user scoping.
+- 2026-06-05: Added `frontend/tests/e2e/async-actions.spec.ts` for exact-key async action behavior: monitor Pause remains pending while another monitor Check runs, topic settings Save/Verify have independent pending states, and Recent Items hide-seller loading is scoped per seller. Frontend lint/build/e2e passed with the known Node `DEP0205` warning and existing mocked-test backend proxy noise.
 
 ## Related Frontend Notes
 

@@ -119,6 +119,7 @@ tags:
 - 2026-06-04: Monitor runtime was verified and tightened: cold start writes `SeenItem` baseline only, user-level stable item IDs dedupe repeats across domains, and Telegram notifications use safe HTML through the monitor owner's saved credentials.
 - 2026-06-04: Telegram bot stop/status was hardened: stop no longer reports success until polling ends, timeout/incomplete stops remain visible as running, `/api/health` prunes stale bot tasks, and a safe cleanup script can clear webhook/pending-update state without printing credentials.
 - 2026-06-04: CF Worker routing mode persistence was hardened with startup user-column migrations, explicit `cf_worker_mode` PATCH/GET tests, frontend payload/error handling tests, and a fixed monitor debug trigger.
+- 2026-06-05: Frontend action buttons now use a shared exact-key async action model. Monitor mutations update local state from returned API data where available, same-monitor conflicting actions are disabled, unrelated monitor/seller/settings actions keep independent loading state, and stale monitor poll responses are ignored after newer mutations.
 
 ## Recommended Obsidian Graph Groups
 

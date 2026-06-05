@@ -35,6 +35,7 @@ import { Label } from "@/components/ui/label";
 import { DomainSelection } from "@/components/domain-selection";
 import { MonitorDebugPanel } from "@/components/monitor-debug-panel";
 import { MonitorTelegramTopicPanel } from "@/components/monitor-telegram-topic-panel";
+import { useAsyncActions } from "@/hooks/use-async-actions";
 import { getMonitorTopicBatch, getTelegramTopicSettings, MonitorTopicStatus } from "@/lib/telegram-topics";
 import { cn } from "@/lib/utils";
 
@@ -88,15 +89,15 @@ export function MonitorPreview() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [topicsEnabled, setTopicsEnabled] = useState(false);
   const [topicStatuses, setTopicStatuses] = useState<Record<number, MonitorTopicStatus>>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [actionKey, setActionKey] = useState<string | null>(null);
   const [editingMonitor, setEditingMonitor] = useState<Monitor | null>(null);
   const [draft, setDraft] = useState<MonitorDraft>(emptyDraft);
   const monitorRequestId = useRef(0);
+  const monitorMutationVersion = useRef(0);
+  const { isPending, hasPending, runAction } = useAsyncActions();
 
   const fetchMonitors = useCallback(async (signal?: AbortSignal) => {
     const requestId = ++monitorRequestId.current;
+    const startedMutationVersion = monitorMutationVersion.current;
     setError(false);
     try {
       const response = await fetch("/api/v1/monitors", {
@@ -108,7 +109,11 @@ export function MonitorPreview() {
         throw new Error("Unable to load monitors");
       }
       const data = (await response.json()) as Monitor[];
-      if (signal?.aborted || requestId !== monitorRequestId.current) return;
+      if (
+        signal?.aborted ||
+        requestId !== monitorRequestId.current ||
+        startedMutationVersion !== monitorMutationVersion.current
+      ) return;
       setMonitors(data);
       setSelectedIds((current) => current.filter((id) => data.some((monitor) => monitor.id === id)));
       setTopicStatuses((current) => {
@@ -188,6 +193,30 @@ export function MonitorPreview() {
     });
   }, []);
 
+  const upsertMonitor = useCallback((updated: Monitor) => {
+    monitorMutationVersion.current += 1;
+    setMonitors((current) => {
+      if (!current) return [updated];
+      const exists = current.some((monitor) => monitor.id === updated.id);
+      if (!exists) return [updated, ...current];
+      return current.map((monitor) => (monitor.id === updated.id ? updated : monitor));
+    });
+  }, []);
+
+  const removeMonitors = useCallback((ids: number[]) => {
+    const idSet = new Set(ids);
+    monitorMutationVersion.current += 1;
+    setMonitors((current) => (current ? current.filter((monitor) => !idSet.has(monitor.id)) : current));
+    setSelectedIds((current) => current.filter((id) => !idSet.has(id)));
+    setTopicStatuses((current) => {
+      const next = { ...current };
+      for (const id of idSet) {
+        delete next[id];
+      }
+      return next;
+    });
+  }, []);
+
 
   const getCsrfToken = async () => {
     const response = await fetch("/api/v1/auth/csrf", {
@@ -218,10 +247,8 @@ export function MonitorPreview() {
   };
 
   const handleAction = async (id: number, action: "check-now" | "pause" | "resume" | "delete") => {
-    const nextActionKey = `${id}:${action}`;
-    setActionKey(nextActionKey);
-
-    try {
+    const nextActionKey = `monitor:${id}:${action}`;
+    await runAction(nextActionKey, async () => {
       const csrfToken = await getCsrfToken();
       const isDelete = action === "delete";
       const response = await fetch(isDelete ? `/api/v1/monitors/${id}` : `/api/v1/monitors/${id}/${action}`, {
@@ -236,20 +263,26 @@ export function MonitorPreview() {
 
       const message = action === "check-now" ? "Monitor check queued" : `Monitor ${isDelete ? "deleted" : "updated"}`;
       toast.success(message);
+      if (isDelete) {
+        removeMonitors([id]);
+        return;
+      }
+      if (action === "pause" || action === "resume") {
+        const updated = (await response.json()) as Monitor;
+        upsertMonitor(updated);
+        return;
+      }
       void fetchMonitors();
-    } catch {
+    }).catch(() => {
       toast.error("Monitor action failed");
-    } finally {
-      setActionKey(null);
-    }
+    });
   };
 
   const handleBulkDelete = async () => {
     if (selectedIds.length === 0) return;
     if (!confirm(`Delete ${selectedIds.length} selected monitor${selectedIds.length === 1 ? "" : "s"}?`)) return;
 
-    setBulkDeleting(true);
-    try {
+    await runAction("monitors:bulk-delete", async () => {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/monitors/bulk-delete", {
         method: "POST",
@@ -265,13 +298,10 @@ export function MonitorPreview() {
 
       const { deleted_count } = (await response.json()) as { deleted_count: number };
       toast.success(`${deleted_count} monitor${deleted_count === 1 ? "" : "s"} deleted`);
-      setSelectedIds([]);
-      void fetchMonitors();
-    } catch {
+      removeMonitors(selectedIds);
+    }).catch(() => {
       toast.error("Bulk delete failed");
-    } finally {
-      setBulkDeleting(false);
-    }
+    });
   };
 
   const handleCreateOrUpdate = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -280,8 +310,6 @@ export function MonitorPreview() {
       toast.error("Please select at least one domain");
       return;
     }
-    setIsSubmitting(true);
-
     const interval = Number.parseInt(draft.interval_sec, 10);
     const payload = {
       name: draft.name,
@@ -290,7 +318,8 @@ export function MonitorPreview() {
       domains: draft.domains,
     };
 
-    try {
+    const submitKey = editingMonitor ? `monitor:${editingMonitor.id}:save` : "monitor:create";
+    await runAction(submitKey, async () => {
       const csrfToken = await getCsrfToken();
       const method = editingMonitor ? "PATCH" : "POST";
       const path = editingMonitor ? `/api/v1/monitors/${editingMonitor.id}` : "/api/v1/monitors";
@@ -314,14 +343,12 @@ export function MonitorPreview() {
       const wasNormalized = data.original_url !== payload.url;
 
       toast.success(`Monitor ${editingMonitor ? "updated" : "created"}${wasNormalized ? " (URL cleaned)" : ""}`);
+      upsertMonitor(data);
       closeEditor();
-      void fetchMonitors();
-    } catch (err) {
+    }).catch((err) => {
       const message = err instanceof Error ? err.message : `Failed to ${editingMonitor ? "update" : "create"} monitor`;
       toast.error(message);
-    } finally {
-      setIsSubmitting(false);
-    }
+    });
   };
 
   const getDomain = (url: string) => {
@@ -377,6 +404,8 @@ export function MonitorPreview() {
   };
 
   const hasMonitors = monitors && monitors.length > 0;
+  const isSubmitting = isPending(editingMonitor ? `monitor:${editingMonitor.id}:save` : "monitor:create");
+  const bulkDeleting = isPending("monitors:bulk-delete");
 
   return (
     <Card className="glass-panel min-w-0 overflow-hidden">
@@ -550,10 +579,11 @@ export function MonitorPreview() {
 
             <div className="grid gap-3">
               {monitors.map((monitor) => {
-                const checkKey = `${monitor.id}:check-now`;
-                const pauseKey = `${monitor.id}:pause`;
-                const resumeKey = `${monitor.id}:resume`;
-                const deleteKey = `${monitor.id}:delete`;
+                const checkKey = `monitor:${monitor.id}:check-now`;
+                const pauseKey = `monitor:${monitor.id}:pause`;
+                const resumeKey = `monitor:${monitor.id}:resume`;
+                const deleteKey = `monitor:${monitor.id}:delete`;
+                const monitorBusy = hasPending(`monitor:${monitor.id}:`);
                 const isSelected = selectedIds.includes(monitor.id);
                 const domainSummary = formatMonitorDomains(monitor);
 
@@ -608,6 +638,7 @@ export function MonitorPreview() {
                           <div className="flex flex-wrap gap-2">
                             <Button
                               aria-label={`Edit monitor ${monitor.name}`}
+                              disabled={monitorBusy || bulkDeleting}
                               onClick={() => openEditDialog(monitor)}
                               size="sm"
                               title="Edit monitor"
@@ -618,13 +649,13 @@ export function MonitorPreview() {
                             </Button>
                             <Button
                               aria-label={`Run monitor check for ${monitor.name}`}
-                              disabled={!monitor.is_active || actionKey === checkKey}
+                              disabled={!monitor.is_active || monitorBusy || bulkDeleting}
                               onClick={() => handleAction(monitor.id, "check-now")}
                               size="sm"
                               title="Check now"
                               variant="outline"
                             >
-                              {actionKey === checkKey ? (
+                              {isPending(checkKey) ? (
                                 <Loader2 className="size-3.5 animate-spin" />
                               ) : (
                                 <RefreshCcw className="size-3.5" />
@@ -640,13 +671,13 @@ export function MonitorPreview() {
                             />
                             <Button
                               aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
-                              disabled={actionKey === pauseKey || actionKey === resumeKey}
+                              disabled={monitorBusy || bulkDeleting}
                               onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
                               size="sm"
                               title={monitor.is_active ? "Pause monitor" : "Resume monitor"}
                               variant="outline"
                             >
-                              {actionKey === pauseKey || actionKey === resumeKey ? (
+                              {isPending(pauseKey) || isPending(resumeKey) ? (
                                 <Loader2 className="size-3.5 animate-spin" />
                               ) : monitor.is_active ? (
                                 <Pause className="size-3.5" />
@@ -657,13 +688,13 @@ export function MonitorPreview() {
                             </Button>
                             <Button
                               aria-label={`Delete monitor ${monitor.name}`}
-                              disabled={actionKey === deleteKey}
+                              disabled={monitorBusy || bulkDeleting}
                               onClick={() => handleAction(monitor.id, "delete")}
                               size="sm"
                               title="Delete monitor"
                               variant="destructive"
                             >
-                              {actionKey === deleteKey ? (
+                              {isPending(deleteKey) ? (
                                 <Loader2 className="size-3.5 animate-spin" />
                               ) : (
                                 <Trash2 className="size-3.5" />

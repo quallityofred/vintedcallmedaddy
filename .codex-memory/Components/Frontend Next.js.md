@@ -168,6 +168,7 @@ updated: 2026-06-04
 - 2026-06-04: `/monitors` edit/create forms now use isolated controlled draft state. Edit initializes from persisted monitor name, URL, interval, and selected `domains`; closing via Escape/outside/close discards drafts without submitting. Monitor cards display selected domains under `Domains` with truncate/title behavior.
 - 2026-06-05: `/monitors` request load was reduced for users with many monitors. The page fetches Telegram topic settings once on mount, loads stored monitor topic statuses through one batch `/api/v1/monitors/telegram-topics` request, stops per-card topic status GETs on mount, polls the monitor list every 30 seconds only while the tab is visible, and aborts/ignores stale monitor refreshes.
 - 2026-06-05: The frontend "proxy" seen in Railway logs is the intended Next.js rewrite from `/api/:path*` to `BACKEND_URL`. Login now distinguishes backend temporary unavailability (`503`) from wrong credentials and shows a retry-later message instead of a generic login failure.
+- 2026-06-05: Added `useAsyncActions()` as the shared exact-key pending-action model. `/monitors` now keys mutations as `monitor:<id>:<action>`, disables conflicting same-monitor controls, applies pause/resume/create/edit/delete responses locally, removes deleted monitors without a page reload, and ignores monitor poll responses that started before a newer mutation.
 
 ## Settings Feedback
 
@@ -176,6 +177,7 @@ updated: 2026-06-04
 - Telegram test failures display backend-provided safe `detail` messages and do not expose token/chat values.
 - 2026-06-04: CF Worker routing mode save now sends flat `cf_worker_mode`, uses a typed `auto`/`direct`/`worker` union, validates optional numeric fields before PATCH, updates local state from PATCH response, and displays backend `detail` on failure while keeping the selected value visible.
 - Routing mode labels render as `Auto`, `Direct only`, and `CF Worker only` instead of raw API values.
+- 2026-06-05: Settings actions now use independent pending keys for Telegram credential save, Telegram start/stop/test, Telegram topic save/verify, and Cloudflare Worker save. Topic monitor Ensure/Test and dashboard hide-seller controls also use exact scoped pending keys so one action cannot clear another action's spinner.
 
 ## Related
 

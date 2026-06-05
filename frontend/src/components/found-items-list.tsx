@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useAsyncActions } from "@/hooks/use-async-actions";
 import { cn } from "@/lib/utils";
 
 interface FoundItem {
@@ -26,7 +27,7 @@ export function FoundItemsList() {
   const [items, setItems] = useState<FoundItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [hidingSellerId, setHidingSellerId] = useState<number | null>(null);
+  const { isPending, runAction } = useAsyncActions();
 
   const fetchItems = useCallback(async () => {
     setError(false);
@@ -61,8 +62,7 @@ export function FoundItemsList() {
   };
 
   const handleHideSeller = async (sellerId: number) => {
-    setHidingSellerId(sellerId);
-    try {
+    await runAction(`seller:${sellerId}:hide`, async () => {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/hidden-sellers", {
         method: "POST",
@@ -75,12 +75,10 @@ export function FoundItemsList() {
       });
       if (!response.ok) throw new Error("Failed to hide seller");
       toast.success("Seller hidden");
-      void fetchItems();
-    } catch {
+      setItems((current) => current.filter((item) => item.seller_id !== sellerId));
+    }).catch(() => {
       toast.error("Seller could not be hidden");
-    } finally {
-      setHidingSellerId(null);
-    }
+    });
   };
 
   return (
@@ -148,13 +146,13 @@ export function FoundItemsList() {
                           <Button
                             aria-label={`Hide seller ${item.seller_id}`}
                             className="text-amber-300 hover:text-amber-200"
-                            disabled={hidingSellerId === item.seller_id}
+                            disabled={isPending(`seller:${item.seller_id}:hide`)}
                             onClick={() => handleHideSeller(item.seller_id)}
                             size="icon-xs"
                             title="Hide seller"
                             variant="ghost"
                           >
-                            {hidingSellerId === item.seller_id ? (
+                            {isPending(`seller:${item.seller_id}:hide`) ? (
                               <Loader2 className="size-3.5 animate-spin" />
                             ) : (
                               <EyeOff className="size-3.5" />

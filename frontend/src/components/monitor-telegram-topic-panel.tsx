@@ -1,7 +1,7 @@
-import { useState } from "react";
 import { Loader2, RefreshCcw, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useAsyncActions } from "@/hooks/use-async-actions";
 import { ensureMonitorTopic, testMonitorTopic, MonitorTopicStatus } from "@/lib/telegram-topics";
 
 interface Props {
@@ -12,9 +12,13 @@ interface Props {
 }
 
 export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled, status, onStatusChange }: Props) {
-  const [actionLoading, setActionLoading] = useState<"ensure" | "test" | null>(null);
+  const { isPending, hasPending, runAction } = useAsyncActions();
 
   if (!topicsEnabled) return null;
+  const topicActionPrefix = `topic:${monitorId}:`;
+  const ensureKey = `${topicActionPrefix}ensure`;
+  const testKey = `${topicActionPrefix}test`;
+  const topicBusy = hasPending(topicActionPrefix);
 
   const getCsrfToken = async () => {
     const response = await fetch("/api/v1/auth/csrf", { cache: "no-store" });
@@ -23,8 +27,8 @@ export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled, status, on
   };
 
   const handleAction = async (action: "ensure" | "test") => {
-    setActionLoading(action);
-    try {
+    const actionKey = action === "ensure" ? ensureKey : testKey;
+    await runAction(actionKey, async () => {
       const csrfToken = await getCsrfToken();
       if (action === "ensure") {
         const data = await ensureMonitorTopic(monitorId, csrfToken);
@@ -37,11 +41,9 @@ export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled, status, on
         }
         toast.success(message);
       }
-    } catch (err) {
+    }).catch((err) => {
       toast.error(err instanceof Error ? err.message : "Action failed");
-    } finally {
-      setActionLoading(null);
-    }
+    });
   };
 
   return (
@@ -53,12 +55,12 @@ export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled, status, on
                 {status.last_error && <p className="text-red-400">Error: {status.last_error}</p>}
                 
                 <div className="flex gap-2">
-                    <Button size="sm" variant="outline" disabled={actionLoading !== null} onClick={() => handleAction("ensure")}>
-                        {actionLoading === "ensure" ? <Loader2 className="size-3 animate-spin"/> : <RefreshCcw className="size-3"/>}
+                    <Button size="sm" variant="outline" disabled={topicBusy} onClick={() => handleAction("ensure")}>
+                        {isPending(ensureKey) ? <Loader2 className="size-3 animate-spin"/> : <RefreshCcw className="size-3"/>}
                         Ensure
                     </Button>
-                    <Button size="sm" variant="outline" disabled={actionLoading !== null} onClick={() => handleAction("test")}>
-                        {actionLoading === "test" ? <Loader2 className="size-3 animate-spin"/> : <Send className="size-3"/>}
+                    <Button size="sm" variant="outline" disabled={topicBusy} onClick={() => handleAction("test")}>
+                        {isPending(testKey) ? <Loader2 className="size-3 animate-spin"/> : <Send className="size-3"/>}
                         Test
                     </Button>
                 </div>
@@ -67,8 +69,8 @@ export function MonitorTelegramTopicPanel({ monitorId, topicsEnabled, status, on
             <div className="space-y-2">
                 <p>Status: <span className="font-medium">not_created</span></p>
                 <div className="flex gap-2">
-                    <Button size="sm" variant="outline" disabled={actionLoading !== null} onClick={() => handleAction("ensure")}>
-                        {actionLoading === "ensure" ? <Loader2 className="size-3 animate-spin"/> : <RefreshCcw className="size-3"/>}
+                    <Button size="sm" variant="outline" disabled={topicBusy} onClick={() => handleAction("ensure")}>
+                        {isPending(ensureKey) ? <Loader2 className="size-3 animate-spin"/> : <RefreshCcw className="size-3"/>}
                         Ensure
                     </Button>
                 </div>

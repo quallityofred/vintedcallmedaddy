@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useAsyncActions } from "@/hooks/use-async-actions";
 import { 
     Select, 
     SelectContent, 
@@ -71,10 +72,8 @@ function SettingsContent() {
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [token, setToken] = useState("");
   const [chatId, setChatId] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [savingCf, setSavingCf] = useState(false);
-  const [actionInFlight, setActionInFlight] = useState<"start" | "stop" | "test" | null>(null);
   const [telegramNotice, setTelegramNotice] = useState<Notice | null>(null);
+  const { isPending, hasPending, runAction } = useAsyncActions();
   
   const [cfUrl, setCfUrl] = useState("");
   const [cfBlock, setCfBlock] = useState("");
@@ -84,9 +83,13 @@ function SettingsContent() {
 
   const [topicSettings, setTopicSettings] = useState<TelegramTopicSettings | null>(null);
   const [targetChatId, setTargetChatId] = useState("");
-  const [topicSaving, setTopicSaving] = useState(false);
-  const [verifyingGroup, setVerifyingGroup] = useState(false);
   const [topicNotice, setTopicNotice] = useState<Notice | null>(null);
+
+  const telegramSaving = isPending("telegram:settings:save");
+  const cfSaving = isPending("cloudflare:settings:save");
+  const topicSaving = isPending("telegram:topics:save");
+  const verifyingGroup = isPending("telegram:topics:verify");
+  const telegramRuntimeBusy = hasPending("telegram:runtime:");
 
   const fetchTopicSettings = useCallback(async () => {
       try {
@@ -99,9 +102,8 @@ function SettingsContent() {
   }, []);
 
   const handleUpdateTopicSettings = async () => {
-      setTopicSaving(true);
       setTopicNotice(null);
-      try {
+      await runAction("telegram:topics:save", async () => {
           const csrfToken = await getCsrfToken();
           const settings = await patchTelegramTopicSettings({
               enabled: topicSettings?.enabled,
@@ -112,28 +114,23 @@ function SettingsContent() {
           }, csrfToken);
           setTopicSettings(settings);
           toast.success("Topic settings updated");
-      } catch (err) {
+      }).catch((err) => {
           const message = err instanceof Error ? err.message : "Failed to update topic settings";
           setTopicNotice({ type: "error", text: message });
-      } finally {
-          setTopicSaving(false);
-      }
+      });
   };
 
   const handleVerifyGroup = async () => {
-    setVerifyingGroup(true);
     setTopicNotice(null);
-    try {
+    await runAction("telegram:topics:verify", async () => {
         const csrfToken = await getCsrfToken();
         const { message } = await verifyTelegramTopicGroup(targetChatId, csrfToken);
         toast.success(message);
         setTopicNotice({ type: "success", text: message });
-    } catch (err) {
+    }).catch((err) => {
         const message = err instanceof Error ? err.message : "Verification failed";
         setTopicNotice({ type: "error", text: message });
-    } finally {
-        setVerifyingGroup(false);
-    }
+    });
   };
 
   const applyCloudflareWorkerState = useCallback((payload: CloudflareWorkerPayload) => {
@@ -201,9 +198,8 @@ function SettingsContent() {
   };
 
   const handleUpdateTelegram = async () => {
-    setSaving(true);
     setTelegramNotice(null);
-    try {
+    await runAction("telegram:settings:save", async () => {
       const csrfToken = await getCsrfToken();
       const response = await fetch("/api/v1/settings/telegram", {
         method: "PATCH",
@@ -224,19 +220,16 @@ function SettingsContent() {
       setToken("");
       setChatId("");
       void fetchSettings();
-    } catch (err) {
+    }).catch((err) => {
       const message = err instanceof Error ? err.message : "Telegram credentials could not be saved";
       toast.error(message);
       setTelegramNotice({ type: "error", text: message });
-    } finally {
-      setSaving(false);
-    }
+    });
   };
 
   const handleUpdateCfWorker = async () => {
-    setSavingCf(true);
     setCfNotice(null);
-    try {
+    await runAction("cloudflare:settings:save", async () => {
       const csrfToken = await getCsrfToken();
       
       const payload: { 
@@ -273,19 +266,16 @@ function SettingsContent() {
       toast.success("Settings updated");
       setCfNotice({ type: "success", text: "Cloudflare Worker settings saved." });
       await fetchSettings();
-    } catch (err) {
+    }).catch((err) => {
       const message = err instanceof Error ? err.message : "Failed to update settings";
       toast.error(message);
       setCfNotice({ type: "error", text: message });
-    } finally {
-      setSavingCf(false);
-    }
+    });
   };
 
   const handleAction = async (action: "start" | "stop" | "test") => {
-    setActionInFlight(action);
     setTelegramNotice(null);
-    try {
+    await runAction(`telegram:runtime:${action}`, async () => {
       const csrfToken = await getCsrfToken();
       const response = await fetch(`/api/v1/telegram/${action}`, {
         method: "POST",
@@ -301,13 +291,11 @@ function SettingsContent() {
       toast.success(successMessage);
       setTelegramNotice({ type: "success", text: successMessage });
       void fetchSettings();
-    } catch (err) {
+    }).catch((err) => {
       const message = err instanceof Error ? err.message : `Failed to ${action} bot`;
       toast.error(message);
       setTelegramNotice({ type: "error", text: message });
-    } finally {
-      setActionInFlight(null);
-    }
+    });
   };
 
   const tokenConfigured = Boolean(status?.token_configured);
@@ -390,10 +378,10 @@ function SettingsContent() {
                     ) : null}
 
                     <div className="flex gap-2">
-                        <Button id="verifyTopicGroup" disabled={topicSaving || verifyingGroup} onClick={handleVerifyGroup}>
+                        <Button id="verifyTopicGroup" disabled={verifyingGroup} onClick={handleVerifyGroup}>
                             {verifyingGroup ? "Verifying..." : "Verify group"}
                         </Button>
-                        <Button id="saveTopicSettings" disabled={topicSaving || verifyingGroup} onClick={handleUpdateTopicSettings}>
+                        <Button id="saveTopicSettings" disabled={topicSaving} onClick={handleUpdateTopicSettings}>
                             {topicSaving ? "Saving..." : "Save settings"}
                         </Button>
                     </div>
@@ -471,7 +459,7 @@ function SettingsContent() {
                     <Label htmlFor="token">Bot token</Label>
                     <Input
                       autoComplete="off"
-                      disabled={saving}
+                      disabled={telegramSaving}
                       id="token"
                       onChange={(event) => setToken(event.target.value)}
                       placeholder="Leave empty to keep saved token"
@@ -483,7 +471,7 @@ function SettingsContent() {
                     <Label htmlFor="chat">Chat ID</Label>
                     <Input
                       autoComplete="off"
-                      disabled={saving}
+                      disabled={telegramSaving}
                       id="chat"
                       onChange={(event) => setChatId(event.target.value)}
                       placeholder="Leave empty to keep saved chat"
@@ -500,34 +488,34 @@ function SettingsContent() {
                 </div>
 
                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                  <Button className="sm:w-auto" disabled={saving} onClick={handleUpdateTelegram}>
-                    {saving ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
-                    {saving ? "Saving" : "Save credentials"}
+                  <Button className="sm:w-auto" disabled={telegramSaving} onClick={handleUpdateTelegram}>
+                    {telegramSaving ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+                    {telegramSaving ? "Saving" : "Save credentials"}
                   </Button>
                   <Button
-                    disabled={actionInFlight !== null || !telegramConfigured}
+                    disabled={telegramRuntimeBusy || !telegramConfigured}
                     onClick={() => handleAction("test")}
                     variant="outline"
                   >
-                    {actionInFlight === "test" ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-                    {actionInFlight === "test" ? "Sending test" : "Send test"}
+                    {isPending("telegram:runtime:test") ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                    {isPending("telegram:runtime:test") ? "Sending test" : "Send test"}
                   </Button>
                   {status?.bot_running ? (
                     <Button
-                      disabled={actionInFlight !== null}
+                      disabled={telegramRuntimeBusy}
                       onClick={() => handleAction("stop")}
                       variant="destructive"
                     >
-                      {actionInFlight === "stop" ? <Loader2 className="size-4 animate-spin" /> : null}
-                      {actionInFlight === "stop" ? "Stopping" : "Stop bot"}
+                      {isPending("telegram:runtime:stop") ? <Loader2 className="size-4 animate-spin" /> : null}
+                      {isPending("telegram:runtime:stop") ? "Stopping" : "Stop bot"}
                     </Button>
                   ) : (
                     <Button
-                      disabled={actionInFlight !== null || !tokenConfigured}
+                      disabled={telegramRuntimeBusy || !tokenConfigured}
                       onClick={() => handleAction("start")}
                     >
-                      {actionInFlight === "start" ? <Loader2 className="size-4 animate-spin" /> : null}
-                      {actionInFlight === "start" ? "Starting" : "Start bot"}
+                      {isPending("telegram:runtime:start") ? <Loader2 className="size-4 animate-spin" /> : null}
+                      {isPending("telegram:runtime:start") ? "Starting" : "Start bot"}
                     </Button>
                   )}
                 </div>
@@ -554,7 +542,7 @@ function SettingsContent() {
               <div className="space-y-2 md:col-span-3">
                 <Label htmlFor="cfUrl">Worker URL</Label>
                 <Input
-                  disabled={savingCf}
+                  disabled={cfSaving}
                   id="cfUrl"
                   onChange={(event) => setCfUrl(event.target.value)}
                   placeholder="https://worker.example.com"
@@ -582,7 +570,7 @@ function SettingsContent() {
               <div className="space-y-2">
                 <Label htmlFor="cfBlock">Block threshold</Label>
                 <Input
-                  disabled={savingCf}
+                  disabled={cfSaving}
                   id="cfBlock"
                   type="number"
                   onChange={(event) => setCfBlock(event.target.value)}
@@ -592,7 +580,7 @@ function SettingsContent() {
               <div className="space-y-2">
                 <Label htmlFor="cfRecovery">Recovery minutes</Label>
                 <Input
-                  disabled={savingCf}
+                  disabled={cfSaving}
                   id="cfRecovery"
                   type="number"
                   onChange={(event) => setCfRecovery(event.target.value)}
@@ -618,9 +606,9 @@ function SettingsContent() {
                 </div>
               </div>
             ) : null}
-            <Button className="sm:w-auto" disabled={savingCf} onClick={handleUpdateCfWorker}>
-              {savingCf ? <Loader2 className="size-4 animate-spin" /> : <Cog className="size-4" />}
-              {savingCf ? "Saving" : "Save settings"}
+            <Button className="sm:w-auto" disabled={cfSaving} onClick={handleUpdateCfWorker}>
+              {cfSaving ? <Loader2 className="size-4 animate-spin" /> : <Cog className="size-4" />}
+              {cfSaving ? "Saving" : "Save settings"}
             </Button>
             <p className="text-xs text-muted-foreground">If no Worker is configured, checks run without CF Worker.</p>
           </CardContent>
