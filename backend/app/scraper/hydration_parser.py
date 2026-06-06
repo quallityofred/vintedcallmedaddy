@@ -90,6 +90,7 @@ def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
         domain=domain,
         seller_id=int(record.get("user_id") or 0),
         brand_id=None,
+        raw_source="hydration",
     )
 
 def find_item_field_paths(raw: dict | list, current_path: str = "") -> dict[str, list[str]]:

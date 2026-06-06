@@ -23,6 +23,7 @@ class VintedItem:
     domain: str
     seller_id: int
     brand_id: int | None = None
+    raw_source: str | None = None
 
 
 @dataclass(frozen=True)

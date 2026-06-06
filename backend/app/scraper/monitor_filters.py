@@ -74,6 +74,10 @@ def extract_monitor_filters(params: dict[str, Any]) -> MonitorFilters:
 def item_matches_monitor_filters(item: VintedItem, filters: MonitorFilters) -> tuple[bool, str | None]:
     if filters.brand_ids:
         if item.brand_id is None:
+            # For hydration source, we are already on a filtered page, 
+            # so missing brand_id is tolerated if it's the primary source.
+            if item.raw_source == "hydration":
+                return True, None
             return False, "missing_brand_id"
         if str(item.brand_id) not in filters.brand_ids:
             return False, "wrong_brand"
