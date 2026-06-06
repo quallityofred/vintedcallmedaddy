@@ -18,14 +18,59 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
         # Unescape quotes and slashes
         decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
         
-        # Strategy: Try parsing as JSON
+        # Strategy 1: Try parsing as JSON
         try:
             data = json.loads(decoded)
             candidate_items.extend(_find_candidate_items(data))
         except json.JSONDecodeError:
             pass
 
+    # Strategy 2: If no candidates found, try field-sequence scan
+    if not candidate_items:
+        for chunk in chunks:
+            decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
+            candidate_items.extend(_extract_items_from_field_sequence(decoded))
+
     return _normalize_items(candidate_items, domain)
+
+def _extract_items_from_field_sequence(chunk: str) -> list[dict]:
+    """Extract item records from React Flight field-sequence segments."""
+    items = []
+    # Look for IDs as anchors
+    for match in re.finditer(r'"id":\s*(\d+)', chunk):
+        start = max(0, match.start() - 200)
+        end = min(len(chunk), match.end() + 200)
+        window = chunk[start:end]
+        
+        # Check for marker evidence in the window
+        # Require: path, title, brand, price markers
+        has_path = ('"path":' in window or '"url":' in window)
+        has_title = ('"title":' in window or '"name":' in window)
+        has_brand = ('"brand_title":' in window or '"brand":' in window)
+        
+        if has_path and has_title and has_brand:
+            # Extract fields if evidence exists
+            id_val = match.group(1)
+            
+            # Simple regex extraction for fields within the window
+            path_match = re.search(r'"(?:path|url)":\s*"(.*?)"', window)
+            title_match = re.search(r'"(?:title|name)":\s*"(.*?)"', window)
+            brand_match = re.search(r'"(?:brand_title|brand)":\s*"(.*?)"', window)
+            
+            # Price is tricky because it's an object. 
+            # Look for "price":{"amount":"..."}
+            price_match = re.search(r'"amount":\s*"(.*?)"', window)
+            currency_match = re.search(r'"currency_code":\s*"(.*?)"', window)
+            
+            items.append({
+                "id": id_val,
+                "title": title_match.group(1) if title_match else "Unknown",
+                "brand_title": brand_match.group(1) if brand_match else "Unknown",
+                "path": path_match.group(1) if path_match else "",
+                "price": float(price_match.group(1)) if price_match else 0.0,
+                "currency": currency_match.group(1) if currency_match else "EUR"
+            })
+    return items
 
 def _is_vinted_item(obj: dict) -> bool:
     """Strict signature check for Vinted items."""
