@@ -7,7 +7,7 @@ from app.models import Monitor
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
-from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html, get_candidate_samples
+from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html, get_candidate_samples, collect_redacted_candidate_structures
 from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 
 logger = logging.getLogger(__name__)
@@ -116,11 +116,13 @@ async def perform_monitor_dry_run(
             if source == "hydration":
                 html = await client.fetch_catalog_html(domain_url, domain=domain)
                 
-                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items, analyze_hydration_html, get_candidate_samples
+                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items, analyze_hydration_html, get_candidate_samples, collect_redacted_candidate_structures
                 chunks = extract_next_f_chunks(html)
                 hydration_items = extract_hydration_items(html, domain=domain)
                 analysis = analyze_hydration_html(html)
                 candidate_samples = get_candidate_samples(html, max_samples=5)
+                if not candidate_samples:
+                    candidate_samples = collect_redacted_candidate_structures(html, max_samples=5)
                 
                 raw_count = len(hydration_items)
                 items = [hydration_record_to_vinted_item(r, domain) for r in hydration_items]

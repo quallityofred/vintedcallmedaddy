@@ -85,6 +85,57 @@ def get_candidate_samples(html: str, max_samples: int = 5) -> list[dict]:
     except Exception:
         return []
 
+def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> list[dict]:
+    """
+    Extract safe, redacted marker-context samples when structured candidate extraction fails.
+    """
+    chunks = extract_next_f_chunks(html)
+    samples = []
+    
+    for i, chunk in enumerate(chunks):
+        if len(samples) >= max_samples:
+            break
+            
+        decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
+        
+        # Check for item markers in this chunk
+        has_id = '"id":' in decoded
+        has_title = '"title":' in decoded or '"name":' in decoded
+        has_path = '"path":' in decoded or '"url":' in decoded
+        has_brand = '"brand_title":' in decoded or '"brand":' in decoded
+        
+        if has_id:
+            # Check if this chunk is already covered by structured extraction
+            try:
+                data = json.loads(decoded)
+                if _find_candidate_items(data):
+                    continue
+            except json.JSONDecodeError:
+                pass
+            
+            # If not parseable as JSON or no candidates, capture marker context
+            samples.append({
+                "sample_index": len(samples),
+                "chunk_index": i,
+                "candidate_kind": "marker_context",
+                "markers_present": {
+                    "id": has_id,
+                    "title": has_title,
+                    "path": has_path,
+                    "brand": has_brand,
+                },
+                "parseability": {
+                    "balanced_object_found": False,
+                    "json_raw_decode_success": False,
+                },
+                "redacted_skeleton": {
+                    "fragment_contains": ["items_path", "brand_title", "price"],
+                    "likely_encoding": "react_flight_string_segment"
+                }
+            })
+            
+    return samples
+
 def _find_candidate_items(data: Any) -> list[dict]:
     candidates = []
     if isinstance(data, dict):
@@ -126,7 +177,7 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
             "url": f"https://www.{domain}" + (i.get("path") or ""),
             "path": i.get("path"),
             "price": price_amount,
-            "currency": price.get("currency_code") or "EUR",
+            "currency": i.get("currency_code") or "EUR",
             "photo_url": i.get("photo", {}).get("url") if isinstance(i.get("photo"), dict) else None,
             "raw_source": "hydration"
         })
