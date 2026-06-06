@@ -263,6 +263,57 @@ class VintedClient:
             logger.exception("CF Worker request failed for domain=%s", domain)
             return []
 
+    async def fetch_catalog_html(self, url: str, *, domain: str | None = None) -> str:
+        """
+        Fetch the public catalog HTML page.
+        """
+        if domain is None:
+            # Simple domain extraction from URL
+            domain = "vinted.pl"
+            if ".fr/" in url: domain = "vinted.fr"
+            elif ".de/" in url: domain = "vinted.de"
+            # ... can be improved later
+            
+        await self.rate_limiter.acquire(domain)
+        await self._warmup_session(domain)
+
+        session = await self._ensure_session(domain)
+        
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": f"https://www.{domain}/",
+        }
+
+        try:
+            async with _http_budget.acquire(domain):
+                response = await session.get(
+                    url,
+                    headers=headers,
+                    timeout=30.0,
+                )
+            
+            if response.status_code != 200:
+                logger.warning("Failed to fetch catalog HTML, status=%d", response.status_code)
+                return ""
+                
+            return response.text
+        except Exception:
+            logger.exception("Failed to fetch catalog HTML for url=%s", url)
+            return ""
+
+    async def fetch_catalog_hydration_items(self, url: str, *, domain: str = "vinted.pl") -> list[dict]:
+        """
+        Fetch and parse catalog items via hydration payload.
+        """
+        html = await self.fetch_catalog_html(url, domain=domain)
+        if not html:
+            return []
+            
+        from app.scraper.hydration_parser import extract_hydration_items
+        return extract_hydration_items(html, domain=domain)
+
     async def search(self, domain: str, params: dict, mode: str = "auto") -> list[VintedItem]:
         if self.cf_fallback:
             self.cf_fallback.mode = mode
