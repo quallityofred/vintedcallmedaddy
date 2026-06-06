@@ -7,27 +7,15 @@ from app.models import Monitor
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
-try:
-    from app.scraper.hydration_parser import (
-        hydration_record_to_vinted_item,
-        analyze_hydration_html,
-        get_candidate_samples,
-        collect_redacted_candidate_structures,
-        collect_literal_marker_diagnostics,
-    )
-except ImportError:
-    from app.scraper.hydration_parser import (
-        hydration_record_to_vinted_item,
-        analyze_hydration_html,
-        get_candidate_samples,
-        collect_redacted_candidate_structures,
-    )
-    # Fallback for production deployment lag
-    def collect_literal_marker_diagnostics(html: str, max_samples: int = 3) -> dict:
-        return {
-            "literal_marker_samples": {"items_path": [], "brand_title": [], "price": []},
-            "literal_marker_chunk_summary": {"top_chunks_with_all_core_markers": []}
-        }
+from app.scraper.hydration_parser import (
+    hydration_record_to_vinted_item,
+    analyze_hydration_html,
+    get_candidate_samples,
+    collect_redacted_candidate_structures,
+    collect_literal_marker_diagnostics,
+    extract_next_f_chunks,
+    extract_hydration_items,
+)
 from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 
 logger = logging.getLogger(__name__)
