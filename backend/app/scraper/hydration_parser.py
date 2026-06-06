@@ -41,6 +41,33 @@ def _is_vinted_item(obj: dict) -> bool:
         return False
     return True
 
+def get_candidate_samples(html: str, max_samples: int = 5) -> list[dict]:
+    """
+    Extract safe, redacted sample structures from hydration payload.
+    """
+    chunks = extract_next_f_chunks(html)
+    full_payload = ""
+    for chunk in chunks:
+        full_payload += chunk.replace('\\\"', '"').replace('\\\\', '\\')
+        
+    try:
+        data = json.loads(full_payload)
+        candidates = _find_candidate_items(data)
+        
+        samples = []
+        for cand in candidates[:max_samples]:
+            samples.append({
+                "id": cand.get("id"),
+                "keys": list(cand.keys()),
+                "has_title": "title" in cand or "name" in cand,
+                "has_brand": "brand" in cand or "brand_title" in cand,
+                "has_price": "price" in cand,
+                "has_path": "path" in cand or "url" in cand,
+            })
+        return samples
+    except Exception:
+        return []
+
 def _find_candidate_items(data: Any) -> list[dict]:
     candidates = []
     if isinstance(data, dict):

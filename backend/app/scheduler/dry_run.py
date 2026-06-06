@@ -7,7 +7,7 @@ from app.models import Monitor
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
-from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html
+from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html, get_candidate_samples
 from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ class FetchDiagnostics:
     chunks_with_items_path_marker: int
     candidate_item_objects_count: int
     parser_strategy_used: str
+    candidate_samples: List[Dict[str, Any]] = field(default_factory=list)
     safe_error: Optional[str] = None
 
 @dataclass
@@ -115,10 +116,11 @@ async def perform_monitor_dry_run(
             if source == "hydration":
                 html = await client.fetch_catalog_html(domain_url, domain=domain)
                 
-                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items, analyze_hydration_html
+                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items, analyze_hydration_html, get_candidate_samples
                 chunks = extract_next_f_chunks(html)
                 hydration_items = extract_hydration_items(html, domain=domain)
                 analysis = analyze_hydration_html(html)
+                candidate_samples = get_candidate_samples(html, max_samples=5)
                 
                 raw_count = len(hydration_items)
                 items = [hydration_record_to_vinted_item(r, domain) for r in hydration_items]
@@ -145,7 +147,8 @@ async def perform_monitor_dry_run(
                     chunks_with_price_marker=analysis["chunks_with_price_marker"],
                     chunks_with_items_path_marker=analysis["chunks_with_items_path_marker"],
                     candidate_item_objects_count=analysis["candidate_item_objects_count"],
-                    parser_strategy_used="current_regex_or_structural"
+                    parser_strategy_used="current_regex_or_structural",
+                    candidate_samples=candidate_samples
                 )
             else:
                 # Minimal API dry-run: use search_all_domains but for one domain
@@ -200,6 +203,12 @@ async def perform_monitor_dry_run(
                     next_f_chunks=0,
                     normalized_hydration_records=0,
                     safe_page_markers={},
+                    chunks_with_item_text_markers=0,
+                    chunks_with_brand_title_marker=0,
+                    chunks_with_price_marker=0,
+                    chunks_with_items_path_marker=0,
+                    candidate_item_objects_count=0,
+                    parser_strategy_used="none",
                     safe_error=str(e)
                 )
 
