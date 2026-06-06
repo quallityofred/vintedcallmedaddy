@@ -143,6 +143,19 @@ def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> li
     chunks = extract_next_f_chunks(html)
     samples = []
     
+    # Map markers to detect
+    marker_map = [
+        ("id", '"id":'),
+        ("title", '"title":'),
+        ("title", '"name":'),
+        ("path", '"path":'),
+        ("path", '"url":'),
+        ("brand", '"brand_title":'),
+        ("brand", '"brand":'),
+        ("price", '"price":'),
+        ("price", '"amount":')
+    ]
+    
     for i, chunk in enumerate(chunks):
         if len(samples) >= max_samples:
             break
@@ -154,6 +167,7 @@ def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> li
         has_title = '"title":' in decoded or '"name":' in decoded
         has_path = '"path":' in decoded or '"url":' in decoded
         has_brand = '"brand_title":' in decoded or '"brand":' in decoded
+        has_price = '"price":' in decoded or '"amount":' in decoded
         
         if has_id:
             # Check if this chunk is already covered by structured extraction
@@ -164,10 +178,15 @@ def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> li
             except json.JSONDecodeError:
                 pass
             
-            # If not parseable as JSON or no candidates, capture marker context with tokens
+            # Capture marker context with tokens for all found markers
             token_windows = []
-            if has_id: token_windows.append(get_token_window_diagnostics(decoded, '"id":'))
-            if has_path: token_windows.append(get_token_window_diagnostics(decoded, '"path":'))
+            
+            # Helper to add windows only if marker exists in chunk
+            for marker_type, marker_str in marker_map:
+                if marker_str in decoded:
+                    window = get_token_window_diagnostics(decoded, marker_str)
+                    if window and window not in token_windows:
+                        token_windows.append(window)
 
             samples.append({
                 "sample_index": len(samples),
@@ -178,6 +197,7 @@ def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> li
                     "title": has_title,
                     "path": has_path,
                     "brand": has_brand,
+                    "price": has_price,
                 },
                 "parseability": {
                     "balanced_object_found": False,
