@@ -56,13 +56,30 @@ def get_candidate_samples(html: str, max_samples: int = 5) -> list[dict]:
         
         samples = []
         for cand in candidates[:max_samples]:
+            key_paths = []
+            skeleton = {}
+            
+            def _traverse(d: Any, path: str = "$"):
+                if isinstance(d, dict):
+                    for k, v in d.items():
+                        p = f"{path}.{k}"
+                        t = type(v).__name__
+                        key_paths.append(f"{p}:{t}")
+                        if k in ["id", "title", "name", "path", "url", "price", "brand_title", "brand"]:
+                            if isinstance(v, dict):
+                                skeleton[k] = {}
+                            else:
+                                skeleton[k] = f"<{t}>"
+                        _traverse(v, p)
+                elif isinstance(d, list):
+                    for i, v in enumerate(d[:3]): # Limit breadth
+                        p = f"{path}[{i}]"
+                        _traverse(v, p)
+            
+            _traverse(cand)
             samples.append({
-                "id": cand.get("id"),
-                "keys": list(cand.keys()),
-                "has_title": "title" in cand or "name" in cand,
-                "has_brand": "brand" in cand or "brand_title" in cand,
-                "has_price": "price" in cand,
-                "has_path": "path" in cand or "url" in cand,
+                "key_paths": key_paths[:30],
+                "redacted_skeleton": skeleton,
             })
         return samples
     except Exception:
