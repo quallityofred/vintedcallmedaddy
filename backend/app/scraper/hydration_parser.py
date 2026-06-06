@@ -80,6 +80,7 @@ def get_candidate_samples(html: str, max_samples: int = 5) -> list[dict]:
             samples.append({
                 "key_paths": key_paths[:30],
                 "redacted_skeleton": skeleton,
+                "token_windows": [] # Structured candidates may not have raw context easily
             })
         return samples
     except Exception:
