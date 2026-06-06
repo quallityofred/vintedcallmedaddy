@@ -85,6 +85,56 @@ def get_candidate_samples(html: str, max_samples: int = 5) -> list[dict]:
     except Exception:
         return []
 
+def get_token_window_diagnostics(decoded_chunk: str, marker: str, window_size: int = 60) -> dict:
+    """Extract safe, redacted token-window diagnostics around a marker."""
+    index = decoded_chunk.find(marker)
+    if index == -1:
+        return {}
+        
+    start = max(0, index - window_size)
+    end = min(len(decoded_chunk), index + window_size + len(marker))
+    window = decoded_chunk[start:end]
+    
+    # Tokenize (simplified: split by common delimiters)
+    tokens = re.split(r'([:,{}\[\]"])', window)
+    
+    diagnostic_tokens = []
+    
+    # Very basic token classifier
+    for t in tokens:
+        if not t.strip() or t in [':', ',', '{', '}', '[', ']', '"']:
+            continue
+        
+        # Redact/classify based on field names or type
+        kind = "value"
+        value = "str"
+        
+        if t in ["id", "item_id"]:
+            kind = "field"
+            value = t
+        elif t in ["title", "name"]:
+            kind = "field"
+            value = t
+        elif t in ["path", "url", "item_url"]:
+            kind = "field"
+            value = t
+        elif t in ["brand", "brand_title", "brand_name"]:
+            kind = "field"
+            value = t
+        elif t in ["price", "amount", "currency", "currency_code"]:
+            kind = "field"
+            value = t
+            
+        diagnostic_tokens.append({"kind": kind, "value": value})
+        
+    return {
+        "around_marker": marker,
+        "window_token_count": len(tokens),
+        "tokens": diagnostic_tokens[:10],
+        "contains_required_item_signature": "id" in [tok["value"] for tok in diagnostic_tokens],
+        "likely_extraction_pattern": "field_sequence"
+    }
+
 def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> list[dict]:
     """
     Extract safe, redacted marker-context samples when structured candidate extraction fails.
@@ -113,7 +163,11 @@ def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> li
             except json.JSONDecodeError:
                 pass
             
-            # If not parseable as JSON or no candidates, capture marker context
+            # If not parseable as JSON or no candidates, capture marker context with tokens
+            token_windows = []
+            if has_id: token_windows.append(get_token_window_diagnostics(decoded, '"id":'))
+            if has_path: token_windows.append(get_token_window_diagnostics(decoded, '"path":'))
+
             samples.append({
                 "sample_index": len(samples),
                 "chunk_index": i,
@@ -128,6 +182,7 @@ def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> li
                     "balanced_object_found": False,
                     "json_raw_decode_success": False,
                 },
+                "token_windows": token_windows,
                 "redacted_skeleton": {
                     "fragment_contains": ["items_path", "brand_title", "price"],
                     "likely_encoding": "react_flight_string_segment"
