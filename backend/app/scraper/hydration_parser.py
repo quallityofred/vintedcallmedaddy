@@ -291,3 +291,70 @@ def analyze_hydration_html(html: str) -> dict:
         "chunks_with_items_path_marker": len(re.findall(r'"path":', full_payload)),
         "candidate_item_objects_count": len(re.findall(r'\{"id":', full_payload)),
     }
+
+def collect_literal_marker_diagnostics(html: str, max_samples: int = 3) -> dict:
+    """
+    Extract safe, redacted literal-marker samples when structured candidate extraction fails.
+    """
+    chunks = extract_next_f_chunks(html)
+    
+    samples = {
+        "items_path": [],
+        "brand_title": [],
+        "price": []
+    }
+    chunk_summary = {
+        "top_chunks_with_all_core_markers": []
+    }
+
+    marker_map = [
+        ("items_path", '"path":'),
+        ("brand_title", '"brand_title":'),
+        ("price", '"price":'),
+    ]
+    
+    scored_chunks = []
+    
+    for i, chunk in enumerate(chunks):
+        decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
+        
+        # Check for markers in this chunk
+        markers = {
+            "id": '"id":' in decoded,
+            "title": '"title":' in decoded or '"name":' in decoded,
+            "path": '"path":' in decoded or '"url":' in decoded,
+            "brand": '"brand_title":' in decoded or '"brand":' in decoded,
+            "price": '"price":' in decoded or '"amount":' in decoded
+        }
+        score = sum(markers.values())
+        
+        # Populate summary data
+        if markers["id"] and markers["title"] and markers["path"] and markers["brand"] and markers["price"]:
+            scored_chunks.append({
+                "chunk_index": i,
+                "items_path_count": decoded.count('"path":'),
+                "brand_title_count": decoded.count('"brand_title":'),
+                "price_count": decoded.count('"price":'),
+                "title_count": decoded.count('"title":'),
+                "id_count": decoded.count('"id":')
+            })
+
+        # Capture marker samples for markers that exist
+        for marker_type, marker_str in marker_map:
+            if marker_str in decoded and len(samples[marker_type]) < max_samples:
+                window = get_token_window_diagnostics(decoded, marker_str)
+                if window:
+                    samples[marker_type].append({
+                        "chunk_index": i,
+                        "marker": marker_type,
+                        "tokens": window["tokens"]
+                    })
+                
+    # Sort and take top chunks for summary
+    scored_chunks.sort(key=lambda x: x["items_path_count"] + x["brand_title_count"] + x["price_count"], reverse=True)
+    chunk_summary["top_chunks_with_all_core_markers"] = scored_chunks[:10]
+    
+    return {
+        "literal_marker_samples": samples,
+        "literal_marker_chunk_summary": chunk_summary
+    }
