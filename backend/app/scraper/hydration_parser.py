@@ -17,8 +17,10 @@ def extract_next_f_chunks(html: str) -> list[str]:
 def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
     """
     Extract and normalize item dicts from hydration payload.
+    Uses a hybrid approach: rigid structure check, then recursive search.
     """
     chunks = extract_next_f_chunks(html)
+    print(f"DEBUG: chunks count={len(chunks)}")
     
     # Reconstruct the payload to search for items
     full_payload = ""
@@ -27,39 +29,79 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
         decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
         full_payload += decoded
     
-    # Locate items.items array
-    # Looking for a structure like "items":{"items":[{...}]}
-    # Make regex more robust to whitespace/nesting
+    print(f"DEBUG: full_payload={full_payload}")
+    # ...
     match = re.search(r'"items":\s*\{\s*"items":\s*(\[.*?\])', full_payload)
-    if not match:
-        print(f"DEBUG: match failed. payload len={len(full_payload)} payload={full_payload}")
-        return []
-    
-    try:
-        raw_items = json.loads(match[1])
-        print(f"DEBUG: match success. items count={len(raw_items)}")
-    except json.JSONDecodeError:
-        print("DEBUG: JSON decode error")
-        return []
+    if match:
+        try:
+            raw_items = json.loads(match[1])
+            return _normalize_items(raw_items, domain)
+        except json.JSONDecodeError:
+            pass
 
+    # Strategy 2: Recursive search for item-like objects
+    # Attempt to parse the entire full_payload first
+    try:
+        data = json.loads(full_payload)
+        candidate_items = _find_candidate_items(data)
+        print(f"DEBUG: strategy 2 candidates={len(candidate_items)}")
+        if candidate_items:
+            return _normalize_items(candidate_items, domain)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: Try parsing individual chunks if full_payload fails
+    for chunk in chunks:
+        decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
+        try:
+            data = json.loads(decoded)
+            candidate_items = _find_candidate_items(data)
+            if candidate_items:
+                return _normalize_items(candidate_items, domain)
+        except json.JSONDecodeError:
+            continue
+
+    return []
+
+def _find_candidate_items(data: Any) -> list[dict]:
+    """
+    Recursively search for objects that look like Vinted items.
+    """
+    candidates = []
+    if isinstance(data, dict):
+        # Look for IDs and minimal evidence
+        if "id" in data:
+            if "title" in data or "path" in data or "price" in data or "brand_title" in data:
+                candidates.append(data)
+        for v in data.values():
+            candidates.extend(_find_candidate_items(v))
+    elif isinstance(data, list):
+        for v in data:
+            candidates.extend(_find_candidate_items(v))
+    return candidates
+
+def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
     normalized = []
     seen_ids = set()
     
     for i in raw_items:
-        item_id = str(i.get("id"))
-        if not item_id or item_id in seen_ids:
+        item_id = i.get("id")
+        if item_id is None:
+            continue
+        item_id_str = str(item_id)
+        if item_id_str in seen_ids:
             continue
         
-        seen_ids.add(item_id)
+        seen_ids.add(item_id_str)
         
         price = i.get("price") or {}
         user = i.get("user") or {}
         
         normalized.append({
-            "id": item_id,
+            "id": item_id_str,
             "title": i.get("title"),
             "brand_title": i.get("brand_title"),
-            "url": f"https://www.{domain}" + i.get("path", ""),
+            "url": f"https://www.{domain}" + (i.get("path") or ""),
             "path": i.get("path"),
             "price": float(price.get("amount") or 0.0),
             "currency": price.get("currency_code"),
@@ -68,7 +110,6 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
             "user_login": user.get("login"),
             "raw_source": "hydration"
         })
-        
     return normalized
 
 def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
