@@ -12,10 +12,44 @@ from app.scraper.hydration_parser import (
     analyze_hydration_html,
     get_candidate_samples,
     collect_redacted_candidate_structures,
-    collect_literal_marker_diagnostics,
     extract_next_f_chunks,
     extract_hydration_items,
 )
+
+# ... (rest of imports) ...
+
+def _safe_collect_literal_marker_diagnostics(html: str, max_samples: int = 3) -> dict:
+    """Startup-safe wrapper for literal marker diagnostics."""
+    try:
+        from app.scraper.hydration_parser import collect_literal_marker_diagnostics
+    except ImportError:
+        return {
+            "literal_marker_samples": {"items_path": [], "brand_title": [], "price": []},
+            "literal_marker_chunk_summary": {"top_chunks_with_all_core_markers": []},
+            "safe_error": "literal_marker_diagnostics_unavailable",
+        }
+    except Exception:
+        return {
+            "literal_marker_samples": {"items_path": [], "brand_title": [], "price": []},
+            "literal_marker_chunk_summary": {"top_chunks_with_all_core_markers": []},
+            "safe_error": "literal_marker_diagnostics_failed",
+        }
+
+    try:
+        result = collect_literal_marker_diagnostics(html)
+        if not isinstance(result, dict):
+            return {
+                "literal_marker_samples": {"items_path": [], "brand_title": [], "price": []},
+                "literal_marker_chunk_summary": {"top_chunks_with_all_core_markers": []},
+                "safe_error": "literal_marker_diagnostics_invalid_result",
+            }
+        return result
+    except Exception:
+        return {
+            "literal_marker_samples": {"items_path": [], "brand_title": [], "price": []},
+            "literal_marker_chunk_summary": {"top_chunks_with_all_core_markers": []},
+            "safe_error": "literal_marker_diagnostics_failed",
+        }
 from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 
 logger = logging.getLogger(__name__)
@@ -133,7 +167,7 @@ async def perform_monitor_dry_run(
                 if not candidate_samples:
                     candidate_samples = collect_redacted_candidate_structures(html, max_samples=5)
                 
-                literal_diag = collect_literal_marker_diagnostics(html, max_samples=3)
+                literal_diag = _safe_collect_literal_marker_diagnostics(html, max_samples=3)
 
                 raw_count = len(hydration_items)
                 items = [hydration_record_to_vinted_item(r, domain) for r in hydration_items]
