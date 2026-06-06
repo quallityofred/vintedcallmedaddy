@@ -56,7 +56,7 @@ class _ReusedSessionContext:
 		return self.session
 
 	async def __aexit__(self, exc_type, exc, tb) -> None:
-		return None
+		await self.session.close()
 
 
 def _new_session():

@@ -132,7 +132,6 @@ async def _authenticate_login(
 
     step_started = time.monotonic()
     logger.info("auth_login_session_create_start")
-    logger.info("auth_login_session_commit_start")
     session_token = await _run_auth_api_operation(
         db,
         lambda active_db: _create_session_token(active_db, user_id=user.id),
