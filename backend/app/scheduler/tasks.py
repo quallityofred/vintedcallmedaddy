@@ -396,18 +396,17 @@ async def _fetch_domain_results(
 	# Hydration Source Branch
 	if should_use_hydration_source(context.params):
 		logger.info("Using hydration source for monitor=%s", context.monitor_id)
-		# Assuming we use the original URL for hydration fetch, 
-		# this needs to be passed in context
-		hydration_items = await client.fetch_catalog_hydration_items(context.params.get("_original_url", ""), domain=context.domains[0])
-		items = [hydration_record_to_vinted_item(i, context.domains[0]) for i in hydration_items]
-		
-		# Return structured items per domain (simplified for now)
 		by_domain: dict[str, list[VintedItem]] = {domain: [] for domain in context.domains}
-		for item in items or []:
-			# Assign to first domain for hydration items for now
-			by_domain.setdefault(context.domains[0], []).append(item)
+		for domain in context.domains:
+			# Use client to fetch per domain
+			domain_url = context.original_url.replace("vinted.pl", domain) 
+			hydration_items = await client.fetch_catalog_hydration_items(domain_url, domain=domain)
+			items = [hydration_record_to_vinted_item(i, domain) for i in hydration_items]
+			by_domain[domain].extend(items)
+		
+		# Return structured items per domain
 		return [
-			DomainSearchResult(domain=domain, items=by_domain.get(domain, []), request_count=1)
+			DomainSearchResult(domain=domain, items=by_domain.get(domain, []), request_count=len(context.domains))
 			for domain in context.domains
 		]
 

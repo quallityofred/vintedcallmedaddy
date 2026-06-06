@@ -61,6 +61,17 @@ class FakeDomainClient:
             for d in domains
         ]
 
+    async def search_all_domains(self, params, domains, mode="auto"):
+        results = await self.search_domains(params, domains, mode=mode)
+        unique_items: list[VintedItem] = []
+        seen_ids: set[int] = set()
+        for result in results:
+            for item in result.items:
+                if item.id not in seen_ids:
+                    seen_ids.add(item.id)
+                    unique_items.append(item)
+        return unique_items
+
     async def fetch_item_detail(self, domain, item_id):
         return VintedItemDetail(item_id=item_id, listed_at=datetime.now(timezone.utc))
     
