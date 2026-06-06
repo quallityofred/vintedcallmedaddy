@@ -20,7 +20,6 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
     Uses a hybrid approach: rigid structure check, then recursive search.
     """
     chunks = extract_next_f_chunks(html)
-    print(f"DEBUG: chunks count={len(chunks)}")
     
     # Reconstruct the payload to search for items
     full_payload = ""
@@ -29,8 +28,7 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
         decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
         full_payload += decoded
     
-    print(f"DEBUG: full_payload={full_payload}")
-    # ...
+    # Strategy 1: Strict structured match
     match = re.search(r'"items":\s*\{\s*"items":\s*(\[.*?\])', full_payload)
     if match:
         try:
@@ -44,7 +42,6 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
     try:
         data = json.loads(full_payload)
         candidate_items = _find_candidate_items(data)
-        print(f"DEBUG: strategy 2 candidates={len(candidate_items)}")
         if candidate_items:
             return _normalize_items(candidate_items, domain)
     except json.JSONDecodeError:
@@ -74,10 +71,12 @@ def _find_candidate_items(data: Any) -> list[dict]:
             if "title" in data or "path" in data or "price" in data or "brand_title" in data:
                 candidates.append(data)
         for v in data.values():
-            candidates.extend(_find_candidate_items(v))
+            if isinstance(v, (dict, list)):
+                candidates.extend(_find_candidate_items(v))
     elif isinstance(data, list):
         for v in data:
-            candidates.extend(_find_candidate_items(v))
+            if isinstance(v, (dict, list)):
+                candidates.extend(_find_candidate_items(v))
     return candidates
 
 def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:

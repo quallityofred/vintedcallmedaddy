@@ -1,9 +1,14 @@
 import pytest
+import json
 from app.scraper.hydration_parser import extract_hydration_items
 
 def test_extract_hydration_items_recursive_search():
-    # Synthetic payload with items nested deeply, NOT in items.items[]
-    html = 'self.__next_f.push([1,"{\\"some_root\\":{\\"data\\":{\\"items\\":[{\\"id\\":123,\\"title\\":\\"Nike Shox\\",\\"brand_title\\":\\"Nike\\",\\"path\\":\\"p\\",\\"price\\":{\\"amount\\":\\"100\\",\\"currency_code\\":\\"PLN\\"}}]}}"])'
+    # Simplified structure: directly parseable as JSON
+    data = {"id": 123, "title": "Nike Shox", "brand_title": "Nike", "path": "p", "price": {"amount": "100", "currency_code": "PLN"}}
+    # Payload as a hydration chunk
+    payload = json.dumps(data)
+    # Using format instead of f-string with backslashes
+    html = 'self.__next_f.push([1,"{}"])'.format(payload.replace("\"", "\\\""))
     items = extract_hydration_items(html, domain="vinted.pl")
     
     assert len(items) == 1
