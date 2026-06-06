@@ -33,6 +33,7 @@ class MonitorDryRunResult:
     counts_by_domain: Dict[str, int]
     samples_by_domain: Dict[str, List[DryRunItem]]
     errors_by_domain: Dict[str, str]
+    pipeline_counts_by_domain: Dict[str, Dict[str, int]] = field(default_factory=dict)
     side_effects: Dict[str, bool] = field(default_factory=lambda: {
         "runs_scheduler_check": False,
         "writes_seen_items": False,
@@ -75,29 +76,43 @@ async def perform_monitor_dry_run(
     counts_by_domain = {}
     samples_by_domain = {}
     errors_by_domain = {}
+    pipeline_counts_by_domain = {}
 
     filters = extract_monitor_filters(params)
 
     for domain in dry_run_domains:
         try:
             items: List[VintedItem] = []
+            raw_count = 0
             if source == "hydration":
                 domain_url = monitor.original_url.replace("vinted.pl", domain)
                 raw_records = await client.fetch_catalog_hydration_items(domain_url, domain=domain)
+                raw_count = len(raw_records)
                 items = [hydration_record_to_vinted_item(r, domain) for r in raw_records]
             else:
                 # Minimal API dry-run: use search_all_domains but for one domain
                 # search_all_domains is already deduplicated and filtered by brand
                 items = await client.search_all_domains(params, [domain])
+                raw_count = len(items)
 
             # Apply filters
             accepted_items = []
+            filter_rejections = {}
             for item in items:
                 matches, skip_reason = item_matches_monitor_filters(item, filters)
                 if matches:
                     accepted_items.append(item)
+                else:
+                    filter_rejections[skip_reason] = filter_rejections.get(skip_reason, 0) + 1
 
             counts_by_domain[domain] = len(accepted_items)
+            pipeline_counts_by_domain[domain] = {
+                "raw_fetched": raw_count,
+                "converted": len(items),
+                "after_filters": len(accepted_items),
+                "rejections": filter_rejections
+            }
+            
             samples = []
             for item in accepted_items[:max_items_per_domain]:
                 samples.append(DryRunItem(
@@ -129,5 +144,6 @@ async def perform_monitor_dry_run(
         dry_run_domains=dry_run_domains,
         counts_by_domain=counts_by_domain,
         samples_by_domain=samples_by_domain,
-        errors_by_domain=errors_by_domain
+        errors_by_domain=errors_by_domain,
+        pipeline_counts_by_domain=pipeline_counts_by_domain
     )
