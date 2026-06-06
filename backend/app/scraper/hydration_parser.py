@@ -67,6 +67,25 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
         
     return normalized
 
+def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
+    """
+    Convert a normalized hydration record to a VintedItem.
+    """
+    from app.scraper.parser import VintedItem
+    
+    return VintedItem(
+        id=int(record["id"]),
+        title=record["title"],
+        brand_id=None, # Not explicitly available in hydration payload
+        brand_title=record["brand_title"],
+        url=record["url"],
+        price=float(record["price"]),
+        currency=record["currency"],
+        photo_url=record["photo_url"],
+        # VintedItem dataclass might not have user fields, 
+        # but check if we can populate anything else
+    )
+
 def find_item_field_paths(raw: dict | list, current_path: str = "") -> dict[str, list[str]]:
     """
     Diagnostic helper to find field paths.
