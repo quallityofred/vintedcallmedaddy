@@ -7,7 +7,7 @@ from app.models import Monitor
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
-from app.scraper.hydration_parser import hydration_record_to_vinted_item
+from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html
 from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,12 @@ class FetchDiagnostics:
     next_f_chunks: int
     normalized_hydration_records: int
     safe_page_markers: Dict[str, bool]
+    chunks_with_item_text_markers: int
+    chunks_with_brand_title_marker: int
+    chunks_with_price_marker: int
+    chunks_with_items_path_marker: int
+    candidate_item_objects_count: int
+    parser_strategy_used: str
     safe_error: Optional[str] = None
 
 @dataclass
@@ -109,9 +115,10 @@ async def perform_monitor_dry_run(
             if source == "hydration":
                 html = await client.fetch_catalog_html(domain_url, domain=domain)
                 
-                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items
+                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items, analyze_hydration_html
                 chunks = extract_next_f_chunks(html)
                 hydration_items = extract_hydration_items(html, domain=domain)
+                analysis = analyze_hydration_html(html)
                 
                 raw_count = len(hydration_items)
                 items = [hydration_record_to_vinted_item(r, domain) for r in hydration_items]
@@ -124,15 +131,21 @@ async def perform_monitor_dry_run(
                     requested_url_param_keys=list(parse_qs(parsed_url.query).keys()),
                     html_fetched=bool(html),
                     html_bytes=len(html),
-                    html_contains_next_f=bool(chunks),
-                    next_f_chunks=len(chunks),
+                    html_contains_next_f=analysis["html_contains_next_f"],
+                    next_f_chunks=analysis["next_f_chunks"],
                     normalized_hydration_records=raw_count,
                     safe_page_markers={
                         "has_catalog_marker": "catalog" in html.lower(),
                         "has_login_marker": "login" in html.lower() or "signin" in html.lower(),
                         "has_block_marker": "access denied" in html.lower() or "blocked" in html.lower(),
                         "has_consent_marker": "consent" in html.lower(),
-                    }
+                    },
+                    chunks_with_item_text_markers=analysis["chunks_with_item_text_markers"],
+                    chunks_with_brand_title_marker=analysis["chunks_with_brand_title_marker"],
+                    chunks_with_price_marker=analysis["chunks_with_price_marker"],
+                    chunks_with_items_path_marker=analysis["chunks_with_items_path_marker"],
+                    candidate_item_objects_count=analysis["candidate_item_objects_count"],
+                    parser_strategy_used="current_regex_or_structural"
                 )
             else:
                 # Minimal API dry-run: use search_all_domains but for one domain
@@ -149,7 +162,7 @@ async def perform_monitor_dry_run(
                     accepted_items.append(item)
                 else:
                     filter_rejections[skip_reason] = filter_rejections.get(skip_reason, 0) + 1
-
+            
             counts_by_domain[domain] = len(accepted_items)
             pipeline_counts_by_domain[domain] = {
                 "raw_fetched": raw_count,

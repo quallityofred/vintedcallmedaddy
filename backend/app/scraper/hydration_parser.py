@@ -29,13 +29,17 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
     
     # Locate items.items array
     # Looking for a structure like "items":{"items":[{...}]}
-    match = re.search(r'"items":\{"items":(\[.*?\])\}', full_payload)
+    # Make regex more robust to whitespace/nesting
+    match = re.search(r'"items":\s*\{\s*"items":\s*(\[.*?\])', full_payload)
     if not match:
+        print(f"DEBUG: match failed. payload len={len(full_payload)} payload={full_payload}")
         return []
     
     try:
         raw_items = json.loads(match[1])
+        print(f"DEBUG: match success. items count={len(raw_items)}")
     except json.JSONDecodeError:
+        print("DEBUG: JSON decode error")
         return []
 
     normalized = []
