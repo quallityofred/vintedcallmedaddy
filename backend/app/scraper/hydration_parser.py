@@ -73,17 +73,23 @@ def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
     """
     from app.scraper.parser import VintedItem
     
+    url = record.get("url")
+    if not url and record.get("path"):
+        url = f"https://www.{domain}{record['path']}"
+
     return VintedItem(
         id=int(record["id"]),
-        title=record["title"],
-        brand_id=None, # Not explicitly available in hydration payload
-        brand_title=record["brand_title"],
-        url=record["url"],
-        price=float(record["price"]),
-        currency=record["currency"],
-        photo_url=record["photo_url"],
-        # VintedItem dataclass might not have user fields, 
-        # but check if we can populate anything else
+        title=record.get("title", ""),
+        price=float(record.get("price") or 0.0),
+        currency=record.get("currency", "EUR"),
+        brand=record.get("brand_title", ""),
+        size="",
+        condition="",
+        photo_url=record.get("photo_url", ""),
+        item_url=url or "",
+        domain=domain,
+        seller_id=int(record.get("user_id") or 0),
+        brand_id=None,
     )
 
 def find_item_field_paths(raw: dict | list, current_path: str = "") -> dict[str, list[str]]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Any
+from typing import Any, Optional
 
 from app.web.api_dependencies import require_api_user
 from app.web.dependencies import get_db
@@ -10,6 +10,9 @@ from app.models import User, Monitor
 from app.scheduler.diagnostics import registry
 from app.scraper.source_selector import should_use_hydration_source
 from app.config import get_settings
+from app.scheduler.dry_run import perform_monitor_dry_run
+from app.scraper.client import VintedClient
+from app.scraper.rate_limiter import TokenBucketLimiter
 
 router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
 
@@ -70,7 +73,51 @@ async def get_monitor_source_selection(
             "runs_monitor_check": False,
             "writes_seen_items": False,
             "writes_found_items": False,
+            "updates_monitor": False,
+            "enqueues_notifications": False,
             "sends_telegram": False,
-            "calls_vinted": False
+            "calls_vinted": True
         }
     }
+
+@router.post("/monitors/{monitor_id}/dry-run-source")
+async def post_monitor_dry_run_source(
+    monitor_id: int,
+    max_domains: int = 1,
+    max_items_per_domain: int = 10,
+    domain: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Perform a read-only dry-run of a monitor check."""
+    settings = get_settings()
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+
+    from app.scraper.client import VintedClient, TokenBucketLimiter
+    from app.scheduler.dry_run import perform_monitor_dry_run
+
+    # Manual client creation for dry-run
+    rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
+    client = VintedClient(rate_limiter=rate_limiter)
+    try:
+        res = await perform_monitor_dry_run(
+            monitor, 
+            client, 
+            max_domains=min(max_domains, 3), 
+            max_items_per_domain=min(max_items_per_domain, 20),
+            target_domain=domain
+        )
+        import dataclasses
+        return dataclasses.asdict(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Dry-run failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await client.close()
