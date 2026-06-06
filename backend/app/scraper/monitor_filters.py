@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +27,7 @@ class MonitorFilters:
     price_to: str | None
     search_text: str | None
     order: str | None
+    allowed_brand_names: frozenset[str] = frozenset()
 
     @property
     def filter_keys(self) -> list[str]:
@@ -57,7 +59,21 @@ def _string_set_from_aliases(params: dict[str, Any], aliases: tuple[str, ...]) -
     return frozenset(values)
 
 
-def extract_monitor_filters(params: dict[str, Any]) -> MonitorFilters:
+def extract_monitor_filters(params: dict[str, Any], monitor_name: str | None = None) -> MonitorFilters:
+    brand_names: set[str] = set()
+    
+    # Extract brand names from search_text if present
+    search_text = params.get("search_text")
+    if search_text:
+        brand_names.add(str(search_text).strip().lower())
+        
+    # Extract brand names from monitor_name if present
+    if monitor_name:
+        # Simple heuristic: treat each word in monitor name as a potential brand name
+        for word in re.findall(r"\w+", monitor_name):
+            if len(word) > 2:
+                brand_names.add(word.lower())
+
     return MonitorFilters(
         brand_ids=_string_set_from_aliases(params, ARRAY_PARAM_ALIASES["brand_ids"]),
         catalog_ids=_string_set_from_aliases(params, ARRAY_PARAM_ALIASES["catalog_ids"]),
@@ -68,19 +84,28 @@ def extract_monitor_filters(params: dict[str, Any]) -> MonitorFilters:
         price_to=str(params["price_to"]).strip() if params.get("price_to") not in (None, "") else None,
         search_text=str(params["search_text"]).strip() if params.get("search_text") not in (None, "") else None,
         order=str(params["order"]).strip() if params.get("order") not in (None, "") else None,
+        allowed_brand_names=frozenset(brand_names),
     )
 
 
 def item_matches_monitor_filters(item: VintedItem, filters: MonitorFilters) -> tuple[bool, str | None]:
     if filters.brand_ids:
-        if item.brand_id is None:
-            # For hydration source, we are already on a filtered page, 
-            # so missing brand_id is tolerated if it's the primary source.
-            if item.raw_source == "hydration":
-                return True, None
+        if item.brand_id is not None:
+            if str(item.brand_id) not in filters.brand_ids:
+                return False, "wrong_brand"
+        elif item.raw_source == "hydration":
+            # For hydration source, we tolerate missing brand_id because hydration payload doesn't have it.
+            # HOWEVER, if we have brand names in our filters (from search_text or monitor name),
+            # we should verify that the item's brand title matches at least one of them.
+            if filters.allowed_brand_names:
+                item_brand_lower = (item.brand or "").lower()
+                if not any(name in item_brand_lower or item_brand_lower in name for name in filters.allowed_brand_names):
+                    return False, "wrong_brand"
+            
+            # If we have no brand names to check against, we trust the source page (which was brand-filtered).
+            return True, None
+        else:
             return False, "missing_brand_id"
-        if str(item.brand_id) not in filters.brand_ids:
-            return False, "wrong_brand"
     return True, None
 
 

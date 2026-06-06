@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from app.scheduler.dry_run import perform_monitor_dry_run
 from app.scraper.client import VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
 
 @router.get("/monitors/{monitor_id}/source-selection")
