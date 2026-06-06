@@ -7,7 +7,13 @@ from app.models import Monitor
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
-from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html, get_candidate_samples, collect_redacted_candidate_structures, collect_literal_marker_diagnostics
+from app.scraper.hydration_parser import (
+    hydration_record_to_vinted_item,
+    analyze_hydration_html,
+    get_candidate_samples,
+    collect_redacted_candidate_structures,
+    collect_literal_marker_diagnostics,
+)
 from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 
 logger = logging.getLogger(__name__)
