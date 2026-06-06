@@ -763,6 +763,12 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					context=context,
 					mode=context.cf_worker_mode,
 				)
+				
+				# Record diagnostics
+				from app.scheduler.diagnostics import registry
+				domain_counts = {r.domain: len(r.items or []) for r in domain_results}
+				source = "hydration" if should_use_hydration_source(context.params) else "api"
+				await registry.record_check(context.monitor_id, source, domain_counts)
 
 				raw_result_count = sum(len(result.items or []) for result in domain_results)
 				domain_deltas: list[DomainDeltaResult] = []
