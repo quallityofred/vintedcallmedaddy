@@ -32,7 +32,6 @@ def _is_vinted_item(obj: dict) -> bool:
     if "id" not in obj:
         return False
     path = obj.get("path") or obj.get("url") or ""
-    # Allow leniency for testing synthetic payloads that might not start with /items/
     if not isinstance(path, str):
         return False
     if not (obj.get("title") or obj.get("name")):
@@ -80,7 +79,7 @@ def get_candidate_samples(html: str, max_samples: int = 5) -> list[dict]:
             samples.append({
                 "key_paths": key_paths[:30],
                 "redacted_skeleton": skeleton,
-                "token_windows": [] # Structured candidates may not have raw context easily
+                "token_windows": []
             })
         return samples
     except Exception:
@@ -139,76 +138,75 @@ def get_token_window_diagnostics(decoded_chunk: str, marker: str, window_size: i
 def collect_redacted_candidate_structures(html: str, max_samples: int = 5) -> list[dict]:
     """
     Extract safe, redacted marker-context samples when structured candidate extraction fails.
+    Prioritizes chunks with the most item-like markers.
     """
     chunks = extract_next_f_chunks(html)
-    samples = []
     
-    # Map markers to detect
-    marker_map = [
-        ("id", '"id":'),
-        ("title", '"title":'),
-        ("title", '"name":'),
-        ("path", '"path":'),
-        ("path", '"url":'),
-        ("brand", '"brand_title":'),
-        ("brand", '"brand":'),
-        ("price", '"price":'),
-        ("price", '"amount":')
-    ]
-    
+    # Analyze all chunks to find the best candidates
+    scored_chunks = []
     for i, chunk in enumerate(chunks):
-        if len(samples) >= max_samples:
-            break
-            
         decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
         
         # Check for item markers in this chunk
-        has_id = '"id":' in decoded
-        has_title = '"title":' in decoded or '"name":' in decoded
-        has_path = '"path":' in decoded or '"url":' in decoded
-        has_brand = '"brand_title":' in decoded or '"brand":' in decoded
-        has_price = '"price":' in decoded or '"amount":' in decoded
+        markers = {
+            "id": '"id":' in decoded,
+            "title": '"title":' in decoded or '"name":' in decoded,
+            "path": '"path":' in decoded or '"url":' in decoded,
+            "brand": '"brand_title":' in decoded or '"brand":' in decoded,
+            "price": '"price":' in decoded or '"amount":' in decoded
+        }
+        score = sum(markers.values())
         
-        if has_id:
-            # Check if this chunk is already covered by structured extraction
-            try:
-                data = json.loads(decoded)
-                if _find_candidate_items(data):
-                    continue
-            except json.JSONDecodeError:
-                pass
+        # Only consider chunks that have an ID
+        if not markers["id"]:
+            continue
             
-            # Capture marker context with tokens for all found markers
-            token_windows = []
+        # Check if this chunk is already covered by structured extraction
+        try:
+            data = json.loads(decoded)
+            if _find_candidate_items(data):
+                continue
+        except json.JSONDecodeError:
+            pass
             
-            # Helper to add windows only if marker exists in chunk
-            for marker_type, marker_str in marker_map:
-                if marker_str in decoded:
-                    window = get_token_window_diagnostics(decoded, marker_str)
-                    if window and window not in token_windows:
-                        token_windows.append(window)
+        scored_chunks.append((score, i, decoded, markers))
+        
+    # Sort by score descending (most markers first)
+    scored_chunks.sort(key=lambda x: x[0], reverse=True)
+    
+    samples = []
+    marker_map = [
+        ("path", '"path":'),
+        ("brand", '"brand_title":'),
+        ("price", '"price":'),
+        ("title", '"title":')
+    ]
+    
+    for _, i, decoded, markers in scored_chunks[:max_samples]:
+        # Capture marker context with tokens for all found markers
+        token_windows = []
+        
+        for marker_type, marker_str in marker_map:
+            if marker_str in decoded:
+                window = get_token_window_diagnostics(decoded, marker_str)
+                if window:
+                    token_windows.append(window)
 
-            samples.append({
-                "sample_index": len(samples),
-                "chunk_index": i,
-                "candidate_kind": "marker_context",
-                "markers_present": {
-                    "id": has_id,
-                    "title": has_title,
-                    "path": has_path,
-                    "brand": has_brand,
-                    "price": has_price,
-                },
-                "parseability": {
-                    "balanced_object_found": False,
-                    "json_raw_decode_success": False,
-                },
-                "token_windows": token_windows,
-                "redacted_skeleton": {
-                    "fragment_contains": ["items_path", "brand_title", "price"],
-                    "likely_encoding": "react_flight_string_segment"
-                }
-            })
+        samples.append({
+            "sample_index": len(samples),
+            "chunk_index": i,
+            "candidate_kind": "marker_context",
+            "markers_present": markers,
+            "parseability": {
+                "balanced_object_found": False,
+                "json_raw_decode_success": False,
+            },
+            "token_windows": token_windows,
+            "redacted_skeleton": {
+                "fragment_contains": ["items_path", "brand_title", "price"],
+                "likely_encoding": "react_flight_string_segment"
+            }
+        })
             
     return samples
 
