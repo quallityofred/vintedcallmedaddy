@@ -34,9 +34,10 @@ class Settings(BaseSettings):
     monitor_check_max_pages_per_domain: int = Field(default=1, ge=1)
     monitor_candidate_detail_max_per_check: int = Field(default=10, ge=0)
     monitor_freshness_grace_seconds: int = Field(default=600, ge=0)
-    monitor_detail_guard_enabled: bool = True
-    monitor_detail_category_guard_enabled: bool = True
-    monitor_detail_freshness_guard_enabled: bool = True
+    monitor_detail_guard_enabled: bool = False
+    monitor_detail_category_guard_enabled: bool = False
+    monitor_detail_freshness_guard_enabled: bool = False
+    monitor_hydration_source_enabled: bool = False
     scraper_global_http_concurrency: int = Field(default=8, ge=1)
     scraper_domain_http_concurrency: int = Field(default=1, ge=1)
     scraper_domain_cooldown_seconds: int = Field(default=300, ge=0)

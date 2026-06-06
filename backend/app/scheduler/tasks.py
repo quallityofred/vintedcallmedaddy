@@ -85,6 +85,7 @@ class MonitorCheckContext:
 	user_id: int
 	monitor_name: str
 	params: dict
+	original_url: str
 	domains: list[str]
 	monitor_filters: object
 	hidden_seller_ids: set[int]
@@ -378,11 +379,13 @@ async def _load_seen_item_ids(db, monitor_id: int, domain: str, item_ids: set[in
 async def _fetch_domain_results(
 	client: VintedClient,
 	*,
-	params: dict,
-	domains: list[str],
+	context: MonitorCheckContext,
 	mode: str,
 ) -> list[DomainSearchResult]:
-	search_params = _runtime_search_params(params)
+	from app.scraper.source_selector import should_use_hydration_source
+	from app.scraper.hydration_parser import hydration_record_to_vinted_item
+	
+	search_params = _runtime_search_params(context.params)
 	max_pages = max(1, settings.monitor_check_max_pages_per_domain)
 	if max_pages > 1:
 		logger.warning(
@@ -390,17 +393,32 @@ async def _fetch_domain_results(
 			max_pages,
 		)
 
-	search_domains = getattr(client, "search_domains", None)
-	if search_domains is not None and inspect.iscoroutinefunction(search_domains):
-		return await search_domains(search_params, domains, mode=mode)
+	# Hydration Source Branch
+	if should_use_hydration_source(context.params):
+		logger.info("Using hydration source for monitor=%s", context.monitor_id)
+		# Assuming we use the original URL for hydration fetch, 
+		# this needs to be passed in context
+		hydration_items = await client.fetch_catalog_hydration_items(context.params.get("_original_url", ""), domain=context.domains[0])
+		items = [hydration_record_to_vinted_item(i, context.domains[0]) for i in hydration_items]
+		
+		# Return structured items per domain (simplified for now)
+		by_domain: dict[str, list[VintedItem]] = {domain: [] for domain in context.domains}
+		for item in items or []:
+			# Assign to first domain for hydration items for now
+			by_domain.setdefault(context.domains[0], []).append(item)
+		return [
+			DomainSearchResult(domain=domain, items=by_domain.get(domain, []), request_count=1)
+			for domain in context.domains
+		]
 
-	items = await client.search_all_domains(search_params, domains, mode=mode)
-	by_domain: dict[str, list[VintedItem]] = {domain: [] for domain in domains}
+	# API Path Branch
+	items = await client.search_all_domains(search_params, context.domains, mode=mode)
+	by_domain: dict[str, list[VintedItem]] = {domain: [] for domain in context.domains}
 	for item in items or []:
 		by_domain.setdefault(item.domain, []).append(item)
 	return [
 		DomainSearchResult(domain=domain, items=by_domain.get(domain, []), request_count=1)
-		for domain in domains
+		for domain in context.domains
 	]
 
 
@@ -673,6 +691,7 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 			user_id=monitor.user_id,
 			monitor_name=monitor.name,
 			params=params,
+			original_url=monitor.original_url,
 			domains=domains,
 			monitor_filters=monitor_filters,
 			hidden_seller_ids=hidden_seller_ids,
@@ -742,8 +761,7 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 			try:
 				domain_results = await _fetch_domain_results(
 					client,
-					params=context.params,
-					domains=context.domains,
+					context=context,
 					mode=context.cf_worker_mode,
 				)
 
