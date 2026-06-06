@@ -93,20 +93,26 @@ def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
         raw_source="hydration",
     )
 
-def find_item_field_paths(raw: dict | list, current_path: str = "") -> dict[str, list[str]]:
+def analyze_hydration_html(html: str) -> dict:
     """
-    Diagnostic helper to find field paths.
+    Diagnostic helper to analyze hydration payload structure safely.
     """
-    found = {}
+    chunks = extract_next_f_chunks(html)
     
-    if isinstance(raw, dict):
-        for k, v in raw.items():
-            path = f"{current_path}.{k}" if current_path else k
-            if "catalog" in k.lower() or "category" in k.lower() or "created" in k.lower() or "uploaded" in k.lower() or "timestamp" in k.lower():
-                found.setdefault(k, []).append(path)
-            found.update(find_item_field_paths(v, path))
-    elif isinstance(raw, list):
-        for i, v in enumerate(raw):
-            found.update(find_item_field_paths(v, f"{current_path}[{i}]"))
-            
-    return found
+    # Reconstruct the payload to search for items
+    full_payload = ""
+    for chunk in chunks:
+        # Unescape quotes and slashes
+        decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
+        full_payload += decoded
+    
+    # Analyze presence of markers
+    return {
+        "html_contains_next_f": bool(chunks),
+        "next_f_chunks": len(chunks),
+        "chunks_with_item_text_markers": len(re.findall(r'"title":', full_payload)),
+        "chunks_with_brand_title_marker": len(re.findall(r'"brand_title":', full_payload)),
+        "chunks_with_price_marker": len(re.findall(r'"price":', full_payload)),
+        "chunks_with_items_path_marker": len(re.findall(r'"path":', full_payload)),
+        "candidate_item_objects_count": len(re.findall(r'\{"id":', full_payload)),
+    }
