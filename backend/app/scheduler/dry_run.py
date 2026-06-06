@@ -7,7 +7,7 @@ from app.models import Monitor
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
-from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html, get_candidate_samples, collect_redacted_candidate_structures
+from app.scraper.hydration_parser import hydration_record_to_vinted_item, analyze_hydration_html, get_candidate_samples, collect_redacted_candidate_structures, collect_literal_marker_diagnostics
 from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,8 @@ class FetchDiagnostics:
     candidate_item_objects_count: int
     parser_strategy_used: str
     candidate_samples: List[Dict[str, Any]] = field(default_factory=list)
+    literal_marker_samples: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    literal_marker_chunk_summary: Dict[str, Any] = field(default_factory=dict)
     safe_error: Optional[str] = None
 
 @dataclass
@@ -116,7 +118,6 @@ async def perform_monitor_dry_run(
             if source == "hydration":
                 html = await client.fetch_catalog_html(domain_url, domain=domain)
                 
-                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items, analyze_hydration_html, get_candidate_samples, collect_redacted_candidate_structures
                 chunks = extract_next_f_chunks(html)
                 hydration_items = extract_hydration_items(html, domain=domain)
                 analysis = analyze_hydration_html(html)
@@ -124,6 +125,8 @@ async def perform_monitor_dry_run(
                 if not candidate_samples:
                     candidate_samples = collect_redacted_candidate_structures(html, max_samples=5)
                 
+                literal_diag = collect_literal_marker_diagnostics(html, max_samples=3)
+
                 raw_count = len(hydration_items)
                 items = [hydration_record_to_vinted_item(r, domain) for r in hydration_items]
                 
@@ -150,7 +153,9 @@ async def perform_monitor_dry_run(
                     chunks_with_items_path_marker=analysis["chunks_with_items_path_marker"],
                     candidate_item_objects_count=analysis["candidate_item_objects_count"],
                     parser_strategy_used="current_regex_or_structural",
-                    candidate_samples=candidate_samples
+                    candidate_samples=candidate_samples,
+                    literal_marker_samples=literal_diag["literal_marker_samples"],
+                    literal_marker_chunk_summary=literal_diag["literal_marker_chunk_summary"]
                 )
             else:
                 # Minimal API dry-run: use search_all_domains but for one domain
