@@ -24,6 +24,20 @@ class DryRunItem:
     source: str
 
 @dataclass
+class FetchDiagnostics:
+    requested_domain: str
+    requested_url_host: str
+    requested_url_path: str
+    requested_url_param_keys: List[str]
+    html_fetched: bool
+    html_bytes: int
+    html_contains_next_f: bool
+    next_f_chunks: int
+    normalized_hydration_records: int
+    safe_page_markers: Dict[str, bool]
+    safe_error: Optional[str] = None
+
+@dataclass
 class MonitorDryRunResult:
     monitor_id: int
     selected_source: str
@@ -34,6 +48,7 @@ class MonitorDryRunResult:
     samples_by_domain: Dict[str, List[DryRunItem]]
     errors_by_domain: Dict[str, str]
     pipeline_counts_by_domain: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    fetch_diagnostics_by_domain: Dict[str, FetchDiagnostics] = field(default_factory=dict)
     side_effects: Dict[str, bool] = field(default_factory=lambda: {
         "runs_scheduler_check": False,
         "writes_seen_items": False,
@@ -77,18 +92,48 @@ async def perform_monitor_dry_run(
     samples_by_domain = {}
     errors_by_domain = {}
     pipeline_counts_by_domain = {}
+    fetch_diagnostics_by_domain = {}
 
-    filters = extract_monitor_filters(params)
+    filters = extract_monitor_filters(params, monitor_name=monitor.name)
 
     for domain in dry_run_domains:
         try:
             items: List[VintedItem] = []
             raw_count = 0
+            
+            # Setup for hydration diagnostics
+            domain_url = monitor.original_url.replace("vinted.pl", domain)
+            from urllib.parse import urlparse, parse_qs
+            parsed_url = urlparse(domain_url)
+            
             if source == "hydration":
-                domain_url = monitor.original_url.replace("vinted.pl", domain)
-                raw_records = await client.fetch_catalog_hydration_items(domain_url, domain=domain)
-                raw_count = len(raw_records)
-                items = [hydration_record_to_vinted_item(r, domain) for r in raw_records]
+                html = await client.fetch_catalog_html(domain_url, domain=domain)
+                
+                from app.scraper.hydration_parser import extract_next_f_chunks, extract_hydration_items
+                chunks = extract_next_f_chunks(html)
+                hydration_items = extract_hydration_items(html, domain=domain)
+                
+                raw_count = len(hydration_items)
+                items = [hydration_record_to_vinted_item(r, domain) for r in hydration_items]
+                
+                # Fetch diagnostics
+                fetch_diagnostics_by_domain[domain] = FetchDiagnostics(
+                    requested_domain=domain,
+                    requested_url_host=parsed_url.hostname or "",
+                    requested_url_path=parsed_url.path,
+                    requested_url_param_keys=list(parse_qs(parsed_url.query).keys()),
+                    html_fetched=bool(html),
+                    html_bytes=len(html),
+                    html_contains_next_f=bool(chunks),
+                    next_f_chunks=len(chunks),
+                    normalized_hydration_records=raw_count,
+                    safe_page_markers={
+                        "has_catalog_marker": "catalog" in html.lower(),
+                        "has_login_marker": "login" in html.lower() or "signin" in html.lower(),
+                        "has_block_marker": "access denied" in html.lower() or "blocked" in html.lower(),
+                        "has_consent_marker": "consent" in html.lower(),
+                    }
+                )
             else:
                 # Minimal API dry-run: use search_all_domains but for one domain
                 # search_all_domains is already deduplicated and filtered by brand
@@ -130,6 +175,20 @@ async def perform_monitor_dry_run(
         except Exception as e:
             logger.exception("Dry-run failed for domain=%s", domain)
             errors_by_domain[domain] = str(e)
+            if domain not in fetch_diagnostics_by_domain:
+                 fetch_diagnostics_by_domain[domain] = FetchDiagnostics(
+                    requested_domain=domain,
+                    requested_url_host="",
+                    requested_url_path="",
+                    requested_url_param_keys=[],
+                    html_fetched=False,
+                    html_bytes=0,
+                    html_contains_next_f=False,
+                    next_f_chunks=0,
+                    normalized_hydration_records=0,
+                    safe_page_markers={},
+                    safe_error=str(e)
+                )
 
     reason = "catalog_filter_detected" if source == "hydration" else "brand_only_api_path"
     if source == "api" and should_use_hydration_source(params) == False: # Double check logic
@@ -145,5 +204,6 @@ async def perform_monitor_dry_run(
         counts_by_domain=counts_by_domain,
         samples_by_domain=samples_by_domain,
         errors_by_domain=errors_by_domain,
-        pipeline_counts_by_domain=pipeline_counts_by_domain
+        pipeline_counts_by_domain=pipeline_counts_by_domain,
+        fetch_diagnostics_by_domain=fetch_diagnostics_by_domain
     )
