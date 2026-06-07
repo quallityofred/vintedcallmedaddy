@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import dataclasses
 import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -366,3 +367,126 @@ async def post_monitor_seen_baseline_no_notify(
                     monitor_id,
                     type(exc).__name__,
                 )
+
+@router.post("/monitors/{monitor_id}/start-with-baseline", response_model=None)
+async def post_monitor_start_with_baseline(
+    monitor_id: int,
+    domain: str | None = None,
+    max_domains: int = Query(default=2, ge=1, le=8),
+    max_items_per_domain: int = Query(default=96, ge=1, le=120),
+    dry_run: bool = True,
+    activate_after: bool = False,
+    sample_limit: int = Query(default=10, ge=0, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Run a baseline-only check and optionally activate the monitor."""
+    settings = get_settings()
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+
+    if domain is None and max_domains > 2:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "For batch baseline, please specify explicit domains or reduce max_domains to <= 2"},
+        )
+
+    last_check_at_before = monitor.last_check_at
+    monitor_activated = False
+    
+    try:
+        selected_domains = json.loads(monitor.domains_json)
+    except Exception:
+        selected_domains = []
+
+    if activate_after:
+        # Determine if this specific run covers all selected domains
+        # If domain is specified, it only covers one domain (or none if not matched)
+        # If max_domains is used, it only covers a subset
+        # Safest condition: only allow if ALL domains are covered.
+        covers_all = False
+        if domain is not None:
+             # If specific domain, is it the only one?
+             covers_all = (len(selected_domains) == 1 and domain in selected_domains)
+        else:
+             # If no specific domain, does max_domains cover all?
+             covers_all = (max_domains >= len(selected_domains))
+        
+        if not covers_all:
+             return JSONResponse(
+                status_code=400,
+                content={
+                    "reason": "partial_baseline_activation_not_allowed",
+                    "selected_domains": selected_domains,
+                    "baseline_domains": [domain] if domain else [],
+                    "selected_domain_count": len(selected_domains),
+                    "baseline_domain_count": 1 if domain else max_domains,
+                    "safe_error": "partial_baseline_activation_not_allowed",
+                    "side_effects": {
+                        "runs_scheduler_check": False,
+                        "writes_seen_items": False,
+                        "writes_found_items": False,
+                        "updates_monitor": False,
+                        "enqueues_notifications": False,
+                        "sends_telegram": False,
+                        "calls_vinted": False,
+                        "reads_database": True
+                    },
+                    "monitor_activated": False
+                }
+            )
+
+    client = None
+    try:
+        rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
+        client = VintedClient(rate_limiter=rate_limiter)
+        
+        dry_run_res = await perform_monitor_baseline_seen(
+            monitor,
+            client,
+            db,
+            max_domains=max_domains,
+            max_items_per_domain=max_items_per_domain,
+            target_domain=domain,
+            dry_run=dry_run,
+            sample_limit=sample_limit,
+        )
+
+        if not dry_run and activate_after:
+            monitor.is_active = True
+            if monitor.last_check_at is None:
+                monitor.last_check_at = datetime.now(timezone.utc)
+            monitor_activated = True
+            await db.commit()
+            await db.refresh(monitor)
+
+        res = {
+            "reason": "start_with_baseline",
+            "dry_run": dry_run,
+            "activate_after": activate_after,
+            "monitor_activated": monitor_activated,
+            "monitor_last_check_at_before": last_check_at_before,
+            "monitor_last_check_at_after": monitor.last_check_at,
+            **dry_run_res,
+        }
+        return JSONResponse(status_code=200, content=jsonable_encoder(res))
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.warning(
+            "start_with_baseline_failed monitor_id=%s exception_type=%s",
+            monitor_id,
+            type(exc).__name__,
+        )
+        return JSONResponse(
+            status_code=500,
+            content=jsonable_encoder(_create_failed_full_cycle_response(monitor_id, exc)),
+        )
+    finally:
+        if client is not None:
+            await client.close()
