@@ -53,6 +53,7 @@ test("monitor action loading is keyed per monitor action", async ({ page }) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ topics_enabled: false, topics: {} }) });
   });
   await page.route("**/api/v1/monitors/1/pause", async (route) => {
+    expect(route.request().headers()["x-csrf-token"]).toBe("test-csrf-token");
     await new Promise<void>((resolve) => {
       releasePause = resolve;
     });
@@ -60,6 +61,7 @@ test("monitor action loading is keyed per monitor action", async ({ page }) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(monitors[0]) });
   });
   await page.route("**/api/v1/monitors/2/check-now", async (route) => {
+    expect(route.request().headers()["x-csrf-token"]).toBe("test-csrf-token");
     await new Promise<void>((resolve) => {
       releaseCheck = resolve;
     });
@@ -94,6 +96,42 @@ test("monitor action loading is keyed per monitor action", async ({ page }) => {
   releasePause?.();
   await expect(page.getByRole("button", { name: "Resume monitor Nike search" })).toBeVisible();
   await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+});
+
+test("check-now reports an actionable CSRF rejection", async ({ page }) => {
+  const monitors = [
+    {
+      id: 3,
+      name: "Protected monitor",
+      original_url: "https://www.vinted.pl/catalog?search_text=nike",
+      interval_sec: 120,
+      is_active: true,
+      last_check_at: null,
+      items_found_count: 0,
+      domains: ["vinted.pl"],
+    },
+  ];
+  await page.route("**/api/v1/settings/telegram/topics", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ enabled: false }) });
+  });
+  await page.route("**/api/v1/monitors/telegram-topics", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ topics_enabled: false, topics: {} }) });
+  });
+  await page.route("**/api/v1/monitors/3/check-now", async (route) => {
+    expect(route.request().headers()["x-csrf-token"]).toBe("test-csrf-token");
+    await route.fulfill({
+      status: 403,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Invalid CSRF token" }),
+    });
+  });
+  await page.route("**/api/v1/monitors", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(monitors) });
+  });
+
+  await page.goto("/monitors");
+  await page.getByRole("button", { name: "Run monitor check for Protected monitor" }).click();
+  await expect(page.getByText("Action rejected by CSRF/auth; refresh the page and try again through the UI.")).toBeVisible();
 });
 
 test("settings topic verify and save keep independent loading states", async ({ page }) => {

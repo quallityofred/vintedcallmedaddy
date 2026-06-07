@@ -36,6 +36,7 @@ import { DomainSelection } from "@/components/domain-selection";
 import { MonitorDebugPanel } from "@/components/monitor-debug-panel";
 import { MonitorTelegramTopicPanel } from "@/components/monitor-telegram-topic-panel";
 import { useAsyncActions } from "@/hooks/use-async-actions";
+import { checkMonitorNow, csrfFetch } from "@/lib/api-client";
 import { getMonitorTopicBatch, getTelegramTopicSettings, MonitorTopicStatus } from "@/lib/telegram-topics";
 import { cn } from "@/lib/utils";
 
@@ -218,16 +219,6 @@ export function MonitorPreview() {
   }, []);
 
 
-  const getCsrfToken = async () => {
-    const response = await fetch("/api/v1/auth/csrf", {
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    });
-    const { csrf_token } = (await response.json()) as { csrf_token: string };
-    return csrf_token;
-  };
-
   const openCreateDialog = () => {
     setEditingMonitor(null);
     setDraft(emptyDraft);
@@ -249,34 +240,26 @@ export function MonitorPreview() {
   const handleAction = async (id: number, action: "check-now" | "pause" | "resume" | "delete") => {
     const nextActionKey = `monitor:${id}:${action}`;
     await runAction(nextActionKey, async () => {
-      const csrfToken = await getCsrfToken();
+      if (action === "check-now") {
+        await checkMonitorNow(id);
+        toast.success("Monitor check queued");
+        void fetchMonitors();
+        return;
+      }
       const isDelete = action === "delete";
-      const response = await fetch(isDelete ? `/api/v1/monitors/${id}` : `/api/v1/monitors/${id}/${action}`, {
+      const response = await csrfFetch(isDelete ? `/api/v1/monitors/${id}` : `/api/v1/monitors/${id}/${action}`, {
         method: isDelete ? "DELETE" : "POST",
-        credentials: "same-origin",
-        headers: {
-          "X-CSRF-Token": csrfToken,
-        },
       });
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.message || "Action failed");
-      }
-
-      const message = action === "check-now" ? "Monitor check queued" : `Monitor ${isDelete ? "deleted" : "updated"}`;
+      const message = `Monitor ${isDelete ? "deleted" : "updated"}`;
 
       toast.success(message);
       if (isDelete) {
         removeMonitors([id]);
         return;
       }
-      if (action === "pause" || action === "resume") {
-        const updated = (await response.json()) as Monitor;
-        upsertMonitor(updated);
-        return;
-      }
-      void fetchMonitors();
+      const updated = (await response.json()) as Monitor;
+      upsertMonitor(updated);
     }).catch(async (err) => {
       const message = err instanceof Error ? err.message : "Monitor action failed";
       toast.error(message);
@@ -288,18 +271,13 @@ export function MonitorPreview() {
     if (!confirm(`Delete ${selectedIds.length} selected monitor${selectedIds.length === 1 ? "" : "s"}?`)) return;
 
     await runAction("monitors:bulk-delete", async () => {
-      const csrfToken = await getCsrfToken();
-      const response = await fetch("/api/v1/monitors/bulk-delete", {
+      const response = await csrfFetch("/api/v1/monitors/bulk-delete", {
         method: "POST",
-        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
         },
         body: JSON.stringify({ monitor_ids: selectedIds }),
       });
-
-      if (!response.ok) throw new Error("Bulk delete failed");
 
       const { deleted_count } = (await response.json()) as { deleted_count: number };
       toast.success(`${deleted_count} monitor${deleted_count === 1 ? "" : "s"} deleted`);
@@ -325,24 +303,16 @@ export function MonitorPreview() {
 
     const submitKey = editingMonitor ? `monitor:${editingMonitor.id}:save` : "monitor:create";
     await runAction(submitKey, async () => {
-      const csrfToken = await getCsrfToken();
       const method = editingMonitor ? "PATCH" : "POST";
       const path = editingMonitor ? `/api/v1/monitors/${editingMonitor.id}` : "/api/v1/monitors";
 
-      const response = await fetch(path, {
+      const response = await csrfFetch(path, {
         method,
-        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
         },
         body: JSON.stringify(payload),
       });
-
-      if (!response.ok) {
-        const errData = (await response.json()) as { detail?: string };
-        throw new Error(errData.detail || `Failed to ${editingMonitor ? "update" : "create"} monitor`);
-      }
 
       const data = (await response.json()) as Monitor;
       const wasNormalized = data.original_url !== payload.url;

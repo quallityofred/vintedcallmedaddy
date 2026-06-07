@@ -24,6 +24,8 @@ class VintedItem:
     seller_id: int
     brand_id: int | None = None
     raw_source: str | None = None
+    listed_at: datetime | None = None
+    timestamp_source: str | None = None
 
 
 @dataclass(frozen=True)

@@ -463,6 +463,120 @@ async def test_check_now_returns_busy_when_monitor_is_running(db_session):
 
 
 @pytest.mark.asyncio
+async def test_check_now_requires_csrf(db_session):
+    user = await _create_user(db_session, "mon_check_csrf")
+    _override_db(db_session)
+    monitor = Monitor(
+        user_id=user.id,
+        name="CSRF protected",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json=json.dumps(["vinted.fr"]),
+        is_active=True,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await _login_user(client, user.username)
+        response = await client.post(f"/api/v1/monitors/{monitor.id}/check-now")
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Invalid CSRF token"}
+
+
+@pytest.mark.asyncio
+async def test_check_now_with_valid_csrf_starts_check(db_session):
+    user = await _create_user(db_session, "mon_check_valid_csrf")
+    _override_db(db_session)
+    monitor = Monitor(
+        user_id=user.id,
+        name="Controlled check",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json=json.dumps(["vinted.fr"]),
+        is_active=True,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    class SchedulerStub:
+        def __init__(self):
+            self.triggered: list[int] = []
+
+        def trigger_now(self, monitor_id: int) -> bool:
+            self.triggered.append(monitor_id)
+            return True
+
+    scheduler = SchedulerStub()
+    previous_scheduler = getattr(app.state, "scheduler", None)
+    app.state.scheduler = scheduler
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            csrf_token = await _login_user(client, user.username)
+            response = await client.post(
+                f"/api/v1/monitors/{monitor.id}/check-now",
+                headers={"X-CSRF-Token": csrf_token},
+            )
+    finally:
+        app.state.scheduler = previous_scheduler
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == "triggered"
+    assert scheduler.triggered == [monitor.id]
+
+
+@pytest.mark.asyncio
+async def test_check_now_rejects_other_user_monitor(db_session):
+    owner = await _create_user(db_session, "mon_check_owner")
+    other = await _create_user(db_session, "mon_check_other")
+    _override_db(db_session)
+    monitor = Monitor(
+        user_id=owner.id,
+        name="Owner only",
+        original_url="https://www.vinted.fr/catalog?search_text=nike",
+        params_json="{}",
+        domains_json=json.dumps(["vinted.fr"]),
+        is_active=True,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf_token = await _login_user(client, other.username)
+        response = await client.post(
+            f"/api/v1/monitors/{monitor.id}/check-now",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 404
+    assert response.json()["detail"] in {"Not found", "Monitor not found"}
+
+
+@pytest.mark.asyncio
+async def test_check_now_does_not_bypass_auth(db_session):
+    _override_db(db_session)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/monitors/999/check-now",
+            headers={"X-CSRF-Token": "not-a-valid-token"},
+        )
+
+    app.dependency_overrides.clear()
+    assert response.status_code in {401, 403}
+
+
+@pytest.mark.asyncio
 async def test_delete_monitor_owner_only(db_session):
     user1 = await _create_user(db_session, "mon_mut_user6")
     user2 = await _create_user(db_session, "mon_mut_user7")

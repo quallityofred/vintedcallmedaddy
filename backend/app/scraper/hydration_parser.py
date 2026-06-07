@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import re
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -13,6 +14,39 @@ _ITEM_PATH_PATTERN = re.compile(
 )
 _ITEMS_LITERAL_PATTERN = re.compile(r"/items/", re.IGNORECASE)
 _FIELD_SEQUENCE_RADIUS = 1500
+
+_TIMESTAMP_FIELDS = (
+    "listed_at",
+    "created_at",
+    "uploaded_at",
+    "published_at",
+    "publication_date",
+    "updated_at",
+    "bumped_at",
+    "timestamp",
+)
+
+
+def _empty_item_field_diagnostics() -> dict:
+    return {
+        "sampled_items": 0,
+        "photo_url_present": 0,
+        "photo_url_missing": 0,
+        "photo_field_presence": {
+            "direct.photo_url": 0,
+            "photo.url": 0,
+            "photo.full_size_url": 0,
+            "photo.thumbnail_url": 0,
+            "photo.high_resolution.url": 0,
+            "photo_high_resolution.url": 0,
+            "photos[0].url": 0,
+            "thumbnails[0].url": 0,
+            "image.url": 0,
+        },
+        "timestamp_field_presence": {field: 0 for field in _TIMESTAMP_FIELDS},
+        "timestamp_parsed": 0,
+        "timestamp_missing": 0,
+    }
 
 def _empty_field_sequence_diagnostics() -> dict:
     return {
@@ -90,7 +124,20 @@ def extract_hydration_items(
             deduplicated_candidates.append(candidate)
         candidate_items = deduplicated_candidates
 
+    item_field_diagnostics = _collect_item_field_diagnostics(candidate_items)
     normalized = _normalize_items(candidate_items, domain)
+    item_field_diagnostics["photo_url_present"] = sum(
+        bool(item.get("photo_url")) for item in normalized
+    )
+    item_field_diagnostics["photo_url_missing"] = (
+        len(normalized) - item_field_diagnostics["photo_url_present"]
+    )
+    item_field_diagnostics["timestamp_parsed"] = sum(
+        bool(item.get("listed_at")) for item in normalized
+    )
+    item_field_diagnostics["timestamp_missing"] = (
+        len(normalized) - item_field_diagnostics["timestamp_parsed"]
+    )
     if field_sequence_diagnostics["parser_strategy_used"] == (
         "react_flight_field_sequence_path_anchored"
     ):
@@ -98,6 +145,7 @@ def extract_hydration_items(
     if diagnostics is not None:
         diagnostics.clear()
         diagnostics.update(field_sequence_diagnostics)
+        diagnostics["item_field_diagnostics"] = item_field_diagnostics
     return normalized
 
 def _is_vinted_item(obj: dict) -> bool:
@@ -226,6 +274,85 @@ def _extract_photo_url(item: dict) -> str:
                 if candidate:
                     return candidate
     return ""
+
+
+def _has_non_empty_path(item: dict, *path: str) -> bool:
+    value: Any = item
+    for key in path:
+        if not isinstance(value, dict):
+            return False
+        value = value.get(key)
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _first_list_item_has_url(item: dict, key: str) -> bool:
+    values = item.get(key)
+    return bool(
+        isinstance(values, list)
+        and values
+        and isinstance(values[0], dict)
+        and isinstance(values[0].get("url"), str)
+        and values[0]["url"].strip()
+    )
+
+
+def _collect_item_field_diagnostics(items: list[dict]) -> dict:
+    diagnostics = _empty_item_field_diagnostics()
+    diagnostics["sampled_items"] = len(items)
+    photo_checks = {
+        "direct.photo_url": lambda item: _has_non_empty_path(item, "photo_url"),
+        "photo.url": lambda item: _has_non_empty_path(item, "photo", "url"),
+        "photo.full_size_url": lambda item: _has_non_empty_path(item, "photo", "full_size_url"),
+        "photo.thumbnail_url": lambda item: _has_non_empty_path(item, "photo", "thumbnail_url"),
+        "photo.high_resolution.url": lambda item: _has_non_empty_path(item, "photo", "high_resolution", "url"),
+        "photo_high_resolution.url": lambda item: _has_non_empty_path(item, "photo_high_resolution", "url"),
+        "photos[0].url": lambda item: _first_list_item_has_url(item, "photos"),
+        "thumbnails[0].url": lambda item: _first_list_item_has_url(item, "thumbnails"),
+        "image.url": lambda item: _has_non_empty_path(item, "image", "url"),
+    }
+    for item in items:
+        for name, check in photo_checks.items():
+            if check(item):
+                diagnostics["photo_field_presence"][name] += 1
+        for field in _TIMESTAMP_FIELDS:
+            if item.get(field) not in (None, ""):
+                diagnostics["timestamp_field_presence"][field] += 1
+    return diagnostics
+
+
+def _parse_hydration_timestamp(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            timestamp = float(value)
+            if timestamp > 10_000_000_000:
+                timestamp /= 1000
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return _parse_hydration_timestamp(int(text))
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return None
+
+
+def _extract_hydration_timestamp(item: dict) -> tuple[datetime | None, str | None]:
+    for field in _TIMESTAMP_FIELDS:
+        parsed = _parse_hydration_timestamp(item.get(field))
+        if parsed is not None:
+            return parsed, field
+    return None, None
 
 
 def _extract_items_from_field_sequence(
@@ -546,6 +673,7 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
              
         user = i.get("user") or {}
         
+        listed_at, timestamp_source = _extract_hydration_timestamp(i)
         normalized.append({
             "id": item_id_str,
             "title": title,
@@ -555,6 +683,8 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
             "price": price_amount,
             "currency": currency,
             "photo_url": _extract_photo_url(i),
+            "listed_at": listed_at.isoformat() if listed_at else None,
+            "timestamp_source": timestamp_source,
             "user_id": str(user.get("id")) if isinstance(user, dict) and user.get("id") else None,
             "user_login": user.get("login") if isinstance(user, dict) else None,
             "raw_source": "hydration"
@@ -563,6 +693,7 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
 
 def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
     from app.scraper.parser import VintedItem
+    listed_at = _parse_hydration_timestamp(record.get("listed_at"))
     return VintedItem(
         id=int(record["id"]),
         title=record.get("title", ""),
@@ -577,6 +708,8 @@ def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
         seller_id=0,
         brand_id=None,
         raw_source="hydration",
+        listed_at=listed_at,
+        timestamp_source=record.get("timestamp_source"),
     )
 
 def analyze_hydration_html(html: str) -> dict:

@@ -8,6 +8,8 @@ from app.web.api_dependencies import require_api_user
 from app.web.dependencies import get_db
 import json
 
+from app.scheduler.dry_run import perform_monitor_dry_run
+
 def create_test_app():
     app = FastAPI()
     app.include_router(router)
@@ -39,3 +41,50 @@ async def test_full_cycle_rejects_oversized_max_domains_before_vinted_calls():
             assert data["safe_error"] == "full_cycle_dry_run_request_too_large"
             assert data["side_effects"]["calls_vinted"] is False
             mock_helper.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_full_cycle_dry_run_exposes_safe_hydration_field_diagnostics():
+    item = {
+        "id": 9100000001,
+        "title": "Synthetic Nike shoe",
+        "brand_title": "Nike",
+        "path": "/items/9100000001-synthetic-nike-shoe",
+        "price": {"amount": "64", "currency_code": "PLN"},
+        "listed_at": "2026-06-07T12:34:56Z",
+    }
+    encoded = json.dumps({"items": {"items": [item]}}, separators=(",", ":")).replace('"', '\\"')
+    html = f'self.__next_f.push([1,"{encoded}"])'
+
+    class ClientStub:
+        async def fetch_catalog_html(self, url, *, domain):
+            return html
+
+    monitor = Monitor(
+        id=22,
+        user_id=1,
+        name="Nike shoes",
+        original_url="https://www.vinted.pl/catalog?brand_ids[]=53&catalog[]=1231",
+        params_json=json.dumps({"brand_ids[]": ["53"], "catalog[]": ["1231"]}),
+        domains_json=json.dumps(["vinted.pl"]),
+        is_active=False,
+    )
+
+    with patch("app.scheduler.dry_run.should_use_hydration_source", return_value=True):
+        result = await perform_monitor_dry_run(
+            monitor,
+            ClientStub(),
+            target_domain="vinted.pl",
+            max_items_per_domain=10,
+        )
+
+    fields = result.pipeline_counts_by_domain["vinted.pl"]["item_field_diagnostics"]
+    assert fields["photo_url_missing"] == 1
+    assert fields["timestamp_field_presence"]["listed_at"] == 1
+    sample = result.samples_by_domain["vinted.pl"][0]
+    assert sample.has_photo is False
+    assert sample.timestamp == "2026-06-07T12:34:56+00:00"
+    serialized = json.dumps(result, default=lambda value: value.__dict__)
+    assert "self.__next_f" not in serialized
+    assert "Synthetic Nike shoe" in serialized
+    assert "https://images" not in serialized

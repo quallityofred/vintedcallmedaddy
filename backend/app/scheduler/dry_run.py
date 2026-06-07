@@ -70,6 +70,8 @@ class DryRunItem:
     domain: str
     source: str
     has_photo: bool = False
+    timestamp: Optional[str] = None
+    timestamp_source: Optional[str] = None
 
 @dataclass
 class FetchDiagnostics:
@@ -97,6 +99,7 @@ class FetchDiagnostics:
     candidate_samples: List[Dict[str, Any]] = field(default_factory=list)
     literal_marker_samples: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     literal_marker_chunk_summary: Dict[str, Any] = field(default_factory=dict)
+    item_field_diagnostics: Dict[str, Any] = field(default_factory=dict)
     safe_error: Optional[str] = None
 
 @dataclass
@@ -292,6 +295,10 @@ async def perform_monitor_dry_run(
                     candidate_samples=candidate_samples,
                     literal_marker_samples=literal_diag["literal_marker_samples"],
                     literal_marker_chunk_summary=literal_diag["literal_marker_chunk_summary"],
+                    item_field_diagnostics=parser_diagnostics.get(
+                        "item_field_diagnostics",
+                        {},
+                    ),
                     safe_error=literal_diag.get("safe_error"),
                 )
             else:
@@ -335,6 +342,10 @@ async def perform_monitor_dry_run(
                         "field_sequence_records_after_dedup",
                         0,
                     ),
+                    "item_field_diagnostics": parser_diagnostics.get(
+                        "item_field_diagnostics",
+                        {},
+                    ),
                 })
             
             samples = []
@@ -349,6 +360,8 @@ async def perform_monitor_dry_run(
                     domain=domain,
                     source=source,
                     has_photo=bool(item.photo_url),
+                    timestamp=item.listed_at.isoformat() if item.listed_at else None,
+                    timestamp_source=item.timestamp_source,
                 ))
             samples_by_domain[domain] = samples
 
