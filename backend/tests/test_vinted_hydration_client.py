@@ -30,7 +30,7 @@ async def test_fetch_catalog_hydration_items_uses_domain_from_url(mock_client):
 
 @pytest.mark.asyncio
 async def test_fetch_catalog_hydration_items_preserves_parser_order(mock_client):
-    html = '<html><script>self.__next_f.push([1,"{\\"items\\":{\\"items\\":[{\\"id\\":1},{\\"id\\":2}]}}"])</script></html>'
+    html = '<html><script>self.__next_f.push([1,"{\\"items\\":{\\"items\\":[{\\"id\\":1,\\"title\\":\\"One\\",\\"brand_title\\":\\"Brand\\",\\"path\\":\\"/items/1-one\\"},{\\"id\\":2,\\"title\\":\\"Two\\",\\"brand_title\\":\\"Brand\\",\\"path\\":\\"/items/2-two\\"}]}}"])</script></html>'
     mock_client.fetch_catalog_html = AsyncMock(return_value=html)
     items = await mock_client.fetch_catalog_hydration_items("...")
     assert [i["id"] for i in items] == ["1", "2"]
@@ -38,7 +38,7 @@ async def test_fetch_catalog_hydration_items_preserves_parser_order(mock_client)
 @pytest.mark.asyncio
 async def test_fetch_catalog_hydration_items_does_not_require_dom_cards(mock_client):
     # Payload in script only
-    html = '<script>self.__next_f.push([1,"{\\"items\\":{\\"items\\":[{\\"id\\":1}]}}"])</script>'
+    html = '<script>self.__next_f.push([1,"{\\"items\\":{\\"items\\":[{\\"id\\":1,\\"title\\":\\"One\\",\\"brand_title\\":\\"Brand\\",\\"path\\":\\"/items/1-one\\"}]}}"])</script>'
     mock_client.fetch_catalog_html = AsyncMock(return_value=html)
     items = await mock_client.fetch_catalog_hydration_items("...")
     assert len(items) == 1

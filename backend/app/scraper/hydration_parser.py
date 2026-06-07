@@ -3,16 +3,48 @@ import json
 import re
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
+
+_ITEM_PATH_PATTERN = re.compile(
+    r'(?P<value>(?:https?://[^"\'\s\\]+)?/items/(?P<id>\d+)(?:-[^"\'\s\\]*)?)',
+    re.IGNORECASE,
+)
+_ITEMS_LITERAL_PATTERN = re.compile(r"/items/", re.IGNORECASE)
+_FIELD_SEQUENCE_RADIUS = 1500
+
+
+def _empty_field_sequence_diagnostics() -> dict:
+    return {
+        "field_sequence_path_markers": 0,
+        "field_sequence_records_before_validation": 0,
+        "field_sequence_records_after_validation": 0,
+        "field_sequence_records_after_dedup": 0,
+        "field_sequence_rejections": {
+            "missing_path_id": 0,
+            "missing_title": 0,
+            "missing_brand": 0,
+            "missing_price": 0,
+            "missing_currency": 0,
+            "duplicate_path_id": 0,
+            "generic_id_mismatch_ignored": 0,
+            "unknown_title": 0,
+        },
+        "parser_strategy_used": "structured_json",
+    }
 
 def extract_next_f_chunks(html: str) -> list[str]:
     return re.findall(r'self\.__next_f\.push\(\[1,\"(.*?)\"\]\)', html)
 
-def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
+def extract_hydration_items(
+    html: str,
+    domain: str = "vinted.pl",
+    diagnostics: dict | None = None,
+) -> list[dict]:
     chunks = extract_next_f_chunks(html)
-    
-    candidate_items = []
+    candidate_items: list[dict] = []
+    field_sequence_diagnostics = _empty_field_sequence_diagnostics()
 
     for chunk in chunks:
         # Unescape quotes and slashes
@@ -27,11 +59,47 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
 
     # Strategy 2: If no candidates found, try field-sequence scan
     if not candidate_items:
+        field_sequence_diagnostics["parser_strategy_used"] = (
+            "react_flight_field_sequence_path_anchored"
+        )
         for chunk in chunks:
             decoded = chunk.replace('\\\"', '"').replace('\\\\', '\\')
-            candidate_items.extend(_extract_items_from_field_sequence(decoded))
+            candidate_items.extend(
+                _extract_items_from_field_sequence(
+                    decoded,
+                    diagnostics=field_sequence_diagnostics,
+                )
+            )
+        deduplicated_candidates: list[dict] = []
+        seen_path_ids: set[str] = set()
+        seen_paths: set[str] = set()
+        for candidate in candidate_items:
+            candidate_path = _normalized_item_path(candidate.get("path"))
+            candidate_id = _path_item_id(candidate_path)
+            if (
+                candidate_id in seen_path_ids
+                or (candidate_path is not None and candidate_path in seen_paths)
+            ):
+                field_sequence_diagnostics["field_sequence_rejections"][
+                    "duplicate_path_id"
+                ] += 1
+                continue
+            if candidate_id is not None:
+                seen_path_ids.add(candidate_id)
+            if candidate_path is not None:
+                seen_paths.add(candidate_path)
+            deduplicated_candidates.append(candidate)
+        candidate_items = deduplicated_candidates
 
-    return _normalize_items(candidate_items, domain)
+    normalized = _normalize_items(candidate_items, domain)
+    if field_sequence_diagnostics["parser_strategy_used"] == (
+        "react_flight_field_sequence_path_anchored"
+    ):
+        field_sequence_diagnostics["field_sequence_records_after_dedup"] = len(normalized)
+    if diagnostics is not None:
+        diagnostics.clear()
+        diagnostics.update(field_sequence_diagnostics)
+    return normalized
 
 def _is_vinted_item(obj: dict) -> bool:
     """Strict signature check for Vinted items."""
@@ -46,32 +114,162 @@ def _is_vinted_item(obj: dict) -> bool:
         return False
     return True
 
-def _extract_items_from_field_sequence(chunk: str) -> list[dict]:
-    """Extract item records from React Flight field-sequence segments."""
-    items = []
-    # Look for IDs as anchors
-    for match in re.finditer(r'"id":\s*(\d+)', chunk):
-        start = max(0, match.start() - 200)
-        end = min(len(chunk), match.end() + 200)
-        window = chunk[start:end]
-        
-        # Check for marker evidence in the window
-        # Require: path, title, brand, price markers (lenient check)
-        
-        # Extract fields
-        path_match = re.search(r'"(?:path|url)":\s*"(.*?)"', window)
-        title_match = re.search(r'"(?:title|name)":\s*"(.*?)"', window)
-        brand_match = re.search(r'"(?:brand_title|brand)":\s*"(.*?)"', window)
-        price_match = re.search(r'"amount":\s*"(.*?)"', window)
-        currency_match = re.search(r'"currency_code":\s*"(.*?)"', window)
-        
+def _decode_string_value(value: str) -> str:
+    try:
+        return json.loads(f'"{value}"')
+    except (json.JSONDecodeError, TypeError):
+        return value
+
+
+def _nearest_string_field(
+    segment: str,
+    field_names: tuple[str, ...],
+    anchor_offset: int,
+) -> str | None:
+    for field_name in field_names:
+        matches = list(
+            re.finditer(
+                rf'"{re.escape(field_name)}"\s*:\s*"((?:\\.|[^"\\])*)"',
+                segment,
+                re.IGNORECASE,
+            )
+        )
+        if matches:
+            match = min(matches, key=lambda candidate: abs(candidate.start() - anchor_offset))
+            value = _decode_string_value(match.group(1)).strip()
+            if value:
+                return value
+    return None
+
+
+def _nearest_amount_field(segment: str, anchor_offset: int) -> str | None:
+    matches = list(
+        re.finditer(
+            r'"amount"\s*:\s*(?:"((?:\\.|[^"\\])*)"|(-?\d+(?:\.\d+)?))',
+            segment,
+            re.IGNORECASE,
+        )
+    )
+    if not matches:
+        return None
+    match = min(matches, key=lambda candidate: abs(candidate.start() - anchor_offset))
+    value = match.group(1) if match.group(1) is not None else match.group(2)
+    return _decode_string_value(value).strip() if value else None
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _normalized_item_path(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.lower().startswith(("http://", "https://")):
+        text = urlsplit(text).path
+    match = _ITEM_PATH_PATTERN.search(text)
+    if not match:
+        return text
+    path = match.group("value")
+    if path.lower().startswith(("http://", "https://")):
+        path = urlsplit(path).path
+    return path.split("?", 1)[0].split("#", 1)[0]
+
+
+def _path_item_id(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = _ITEM_PATH_PATTERN.search(value)
+    return match.group("id") if match else None
+
+
+def _extract_items_from_field_sequence(
+    chunk: str,
+    diagnostics: dict | None = None,
+) -> list[dict]:
+    """Extract strict item records anchored to canonical `/items/<id>` paths."""
+    local_diagnostics = (
+        diagnostics if diagnostics is not None else _empty_field_sequence_diagnostics()
+    )
+    rejections = local_diagnostics["field_sequence_rejections"]
+    path_matches = list(_ITEM_PATH_PATTERN.finditer(chunk))
+    local_diagnostics["field_sequence_path_markers"] += len(path_matches)
+    local_diagnostics["field_sequence_records_before_validation"] += len(path_matches)
+    rejections["missing_path_id"] += max(
+        0,
+        len(_ITEMS_LITERAL_PATTERN.findall(chunk)) - len(path_matches),
+    )
+
+    items: list[dict] = []
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    for index, path_match in enumerate(path_matches):
+        previous_start = path_matches[index - 1].start() if index > 0 else None
+        next_start = path_matches[index + 1].start() if index + 1 < len(path_matches) else None
+        start = max(0, path_match.start() - _FIELD_SEQUENCE_RADIUS)
+        end = min(len(chunk), path_match.end() + _FIELD_SEQUENCE_RADIUS)
+        if previous_start is not None:
+            start = max(start, (previous_start + path_match.start()) // 2)
+        if next_start is not None:
+            end = min(end, (path_match.start() + next_start) // 2)
+
+        segment = chunk[start:end]
+        anchor_offset = path_match.start() - start
+        path = _normalized_item_path(path_match.group("value"))
+        path_id = path_match.group("id")
+        generic_ids = re.findall(r'"id"\s*:\s*"?(\d+)"?', segment)
+        rejections["generic_id_mismatch_ignored"] += sum(
+            generic_id != path_id for generic_id in generic_ids
+        )
+
+        title = _nearest_string_field(segment, ("title", "name"), anchor_offset)
+        brand = _nearest_string_field(segment, ("brand_title", "brand"), anchor_offset)
+        amount = _nearest_amount_field(segment, anchor_offset)
+        currency = _nearest_string_field(segment, ("currency_code",), anchor_offset)
+
+        rejected = False
+        if not path or not path_id:
+            rejections["missing_path_id"] += 1
+            rejected = True
+        if not title:
+            rejections["missing_title"] += 1
+            rejected = True
+        elif title.casefold() == "unknown":
+            rejections["unknown_title"] += 1
+            rejected = True
+        if not brand or brand.casefold() == "unknown":
+            rejections["missing_brand"] += 1
+            rejected = True
+        if amount is None or _safe_float(amount) is None:
+            rejections["missing_price"] += 1
+            rejected = True
+        if not currency:
+            rejections["missing_currency"] += 1
+            rejected = True
+        if rejected:
+            continue
+
+        local_diagnostics["field_sequence_records_after_validation"] += 1
+        if path_id in seen_ids or path in seen_paths:
+            rejections["duplicate_path_id"] += 1
+            continue
+        seen_ids.add(path_id)
+        seen_paths.add(path)
         items.append({
-            "id": match.group(1),
-            "title": title_match.group(1) if title_match else "Unknown",
-            "brand_title": brand_match.group(1) if brand_match else "Unknown",
-            "path": path_match.group(1) if path_match else "",
-            "price": float(price_match.group(1)) if price_match else 0.0,
-            "currency": currency_match.group(1) if currency_match else "EUR"
+            "id": path_id,
+            "title": title,
+            "brand_title": brand,
+            "path": path,
+            "price": {
+                "amount": amount,
+                "currency_code": currency,
+            },
+            "raw_source": "hydration",
+            "_extraction_strategy": "react_flight_field_sequence_path_anchored",
         })
     return items
 
@@ -260,37 +458,72 @@ def _find_candidate_items(data: Any) -> list[dict]:
     return candidates
 
 def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
-    normalized = []
-    seen_ids = set()
+    normalized: list[dict] = []
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
     
     for i in raw_items:
-        item_id = i.get("id")
+        raw_path = i.get("path") or i.get("url")
+        normalized_path = _normalized_item_path(raw_path)
+        path_item_id = _path_item_id(raw_path)
+        item_id = path_item_id or i.get("id")
         if item_id is None:
             continue
         item_id_str = str(item_id)
-        if item_id_str in seen_ids:
+        is_field_sequence = i.get("_extraction_strategy") == (
+            "react_flight_field_sequence_path_anchored"
+        )
+        title = i.get("title") or i.get("name")
+        brand = i.get("brand_title") or i.get("brand")
+        if is_field_sequence:
+            if not path_item_id or not normalized_path:
+                continue
+            if not title or str(title).strip().casefold() == "unknown":
+                continue
+            if not brand or str(brand).strip().casefold() == "unknown":
+                continue
+
+        if item_id_str in seen_ids or (
+            normalized_path is not None and normalized_path in seen_paths
+        ):
             continue
         
         seen_ids.add(item_id_str)
+        if normalized_path is not None:
+            seen_paths.add(normalized_path)
         
         price = i.get("price") or {}
+        raw_price_amount: Any = None
         if isinstance(price, (int, float)):
-             price_amount = float(price)
-             currency = "EUR"
+             raw_price_amount = price
+             price_amount = _safe_float(price) or 0.0
+             currency = i.get("currency") or "EUR"
         elif isinstance(price, dict):
-             price_amount = float(price.get("amount") or 0.0)
-             currency = price.get("currency_code") or "EUR"
+             raw_price_amount = price.get("amount")
+             price_amount = _safe_float(price.get("amount")) or 0.0
+             currency = price.get("currency_code") or i.get("currency") or "EUR"
         else:
              price_amount = 0.0
-             currency = "EUR"
+             currency = i.get("currency") or "EUR"
+
+        if is_field_sequence and (
+            _safe_float(raw_price_amount) is None or not currency
+        ):
+            continue
         
         user = i.get("user") or {}
+        if normalized_path:
+            item_url = f"https://www.{domain}{normalized_path}"
+        elif isinstance(raw_path, str) and raw_path.lower().startswith(("http://", "https://")):
+            item_url = raw_path
+        else:
+            item_url = f"https://www.{domain}" + (raw_path or "")
         normalized.append({
             "id": item_id_str,
-            "title": i.get("title") or i.get("name"),
-            "brand_title": i.get("brand_title") or i.get("brand"),
-            "url": f"https://www.{domain}" + (i.get("path") or ""),
-            "path": i.get("path"),
+            "title": title,
+            "brand_title": brand,
+            "url": item_url,
+            "path": normalized_path or raw_path,
             "price": price_amount,
             "currency": currency,
             "photo_url": i.get("photo", {}).get("url") if isinstance(i.get("photo"), dict) else None,

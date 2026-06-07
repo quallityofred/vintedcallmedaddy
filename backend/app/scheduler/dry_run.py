@@ -83,6 +83,11 @@ class FetchDiagnostics:
     chunks_with_items_path_marker: int
     candidate_item_objects_count: int
     parser_strategy_used: str
+    field_sequence_path_markers: int = 0
+    field_sequence_records_before_validation: int = 0
+    field_sequence_records_after_validation: int = 0
+    field_sequence_records_after_dedup: int = 0
+    field_sequence_rejections: Dict[str, int] = field(default_factory=dict)
     candidate_samples: List[Dict[str, Any]] = field(default_factory=list)
     literal_marker_samples: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     literal_marker_chunk_summary: Dict[str, Any] = field(default_factory=dict)
@@ -161,7 +166,12 @@ async def perform_monitor_dry_run(
                 html = await client.fetch_catalog_html(domain_url, domain=domain)
                 
                 chunks = extract_next_f_chunks(html)
-                hydration_items = extract_hydration_items(html, domain=domain)
+                parser_diagnostics: Dict[str, Any] = {}
+                hydration_items = extract_hydration_items(
+                    html,
+                    domain=domain,
+                    diagnostics=parser_diagnostics,
+                )
                 analysis = analyze_hydration_html(html)
                 candidate_samples = get_candidate_samples(html, max_samples=5)
                 if not candidate_samples:
@@ -194,10 +204,34 @@ async def perform_monitor_dry_run(
                     chunks_with_price_marker=analysis["chunks_with_price_marker"],
                     chunks_with_items_path_marker=analysis["chunks_with_items_path_marker"],
                     candidate_item_objects_count=analysis["candidate_item_objects_count"],
-                    parser_strategy_used="current_regex_or_structural",
+                    parser_strategy_used=parser_diagnostics.get(
+                        "parser_strategy_used",
+                        "structured_json",
+                    ),
+                    field_sequence_path_markers=parser_diagnostics.get(
+                        "field_sequence_path_markers",
+                        0,
+                    ),
+                    field_sequence_records_before_validation=parser_diagnostics.get(
+                        "field_sequence_records_before_validation",
+                        0,
+                    ),
+                    field_sequence_records_after_validation=parser_diagnostics.get(
+                        "field_sequence_records_after_validation",
+                        0,
+                    ),
+                    field_sequence_records_after_dedup=parser_diagnostics.get(
+                        "field_sequence_records_after_dedup",
+                        0,
+                    ),
+                    field_sequence_rejections=parser_diagnostics.get(
+                        "field_sequence_rejections",
+                        {},
+                    ),
                     candidate_samples=candidate_samples,
                     literal_marker_samples=literal_diag["literal_marker_samples"],
-                    literal_marker_chunk_summary=literal_diag["literal_marker_chunk_summary"]
+                    literal_marker_chunk_summary=literal_diag["literal_marker_chunk_summary"],
+                    safe_error=literal_diag.get("safe_error"),
                 )
             else:
                 # Minimal API dry-run: use search_all_domains but for one domain
@@ -222,6 +256,25 @@ async def perform_monitor_dry_run(
                 "after_filters": len(accepted_items),
                 "rejections": filter_rejections
             }
+            if source == "hydration":
+                pipeline_counts_by_domain[domain].update({
+                    "field_sequence_path_markers": parser_diagnostics.get(
+                        "field_sequence_path_markers",
+                        0,
+                    ),
+                    "field_sequence_records_before_validation": parser_diagnostics.get(
+                        "field_sequence_records_before_validation",
+                        0,
+                    ),
+                    "field_sequence_records_after_validation": parser_diagnostics.get(
+                        "field_sequence_records_after_validation",
+                        0,
+                    ),
+                    "field_sequence_records_after_dedup": parser_diagnostics.get(
+                        "field_sequence_records_after_dedup",
+                        0,
+                    ),
+                })
             
             samples = []
             for item in accepted_items[:max_items_per_domain]:

@@ -6,6 +6,7 @@ from app.web.diagnostics_api_router import router
 from app.models import User
 from app.web.api_dependencies import require_api_user
 from app.web.dependencies import get_db
+from app.scheduler.dry_run import _safe_collect_literal_marker_diagnostics
 
 def create_test_app():
     app = FastAPI()
@@ -40,7 +41,7 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
     mock_db.execute = AsyncMock(return_value=mock_result)
     app.dependency_overrides[get_db] = lambda: mock_db
 
-    with patch("app.web.diagnostics_api_router.VintedClient") as mock_client_cls, \
+    with patch("app.scraper.client.VintedClient") as mock_client_cls, \
          patch("app.web.diagnostics_api_router.get_settings") as mock_settings_func, \
          patch("app.scraper.source_selector.get_settings") as mock_sel_settings_func, \
          patch("app.scheduler.dry_run.analyze_hydration_html") as mock_analyze, \
@@ -58,7 +59,15 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
         mock_sel_settings_func.return_value = mock_settings
         
         mock_client = AsyncMock()
-        mock_client.fetch_catalog_html = AsyncMock(return_value="<html></html>")
+        field_sequence = (
+            '"id":999,"title":"Nike Air max 95","brand_title":"Nike",'
+            '"path":"/items/9106911084-nike-air-max-95",'
+            '"amount":"64","currency_code":"EUR"'
+        )
+        escaped_sequence = field_sequence.replace('"', '\\"')
+        mock_client.fetch_catalog_html = AsyncMock(
+            return_value=f'self.__next_f.push([1,"{escaped_sequence}"])'
+        )
         mock_client_cls.return_value = mock_client
         
         mock_analyze.return_value = {
@@ -93,4 +102,45 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
             data = response.json()
             assert data["selected_source"] == "hydration"
             assert "fetch_diagnostics_by_domain" in data
-            assert data["fetch_diagnostics_by_domain"]["vinted.pl"]["candidate_samples"][0]["candidate_kind"] == "marker_context"
+            diagnostics = data["fetch_diagnostics_by_domain"]["vinted.pl"]
+            assert diagnostics["candidate_samples"][0]["candidate_kind"] == "marker_context"
+            assert diagnostics["parser_strategy_used"] == "react_flight_field_sequence_path_anchored"
+            assert diagnostics["field_sequence_path_markers"] == 1
+            assert diagnostics["field_sequence_records_before_validation"] == 1
+            assert diagnostics["field_sequence_records_after_validation"] == 1
+            assert diagnostics["field_sequence_records_after_dedup"] == 1
+            pipeline = data["pipeline_counts_by_domain"]["vinted.pl"]
+            assert pipeline["field_sequence_path_markers"] == 1
+            assert pipeline["field_sequence_records_after_dedup"] == 1
+            assert data["side_effects"] == {
+                "runs_scheduler_check": False,
+                "writes_seen_items": False,
+                "writes_found_items": False,
+                "updates_monitor": False,
+                "enqueues_notifications": False,
+                "sends_telegram": False,
+                "calls_vinted": True,
+            }
+
+
+def test_backend_import_ok():
+    from app.scheduler.dry_run import perform_monitor_dry_run
+    from app.main import app
+
+    assert perform_monitor_dry_run is not None
+    assert app is not None
+
+
+def test_literal_marker_diagnostics_remain_lazy_optional():
+    with patch(
+        "app.scraper.hydration_parser.collect_literal_marker_diagnostics",
+        side_effect=ValueError("synthetic diagnostics failure"),
+    ):
+        result = _safe_collect_literal_marker_diagnostics("synthetic")
+
+    assert result["safe_error"] == "literal_marker_diagnostics_failed"
+    assert result["literal_marker_samples"] == {
+        "items_path": [],
+        "brand_title": [],
+        "price": [],
+    }
