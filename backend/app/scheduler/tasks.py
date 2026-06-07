@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -1136,87 +1137,208 @@ class MonitorScheduler:
 			pass
 		return False
 
-from app.scraper.catalog_ssr_parser import parse_catalog_ssr_photo_map
-from app.scraper.hydration_parser import extract_hydration_items
+def _catalog_url_for_domain(original_url: str, domain: str) -> str:
+    parsed = urllib.parse.urlsplit(original_url)
+    return urllib.parse.urlunsplit(
+        (parsed.scheme or "https", f"www.{domain}", parsed.path, parsed.query, "")
+    )
 
-async def run_hydration_ssr_merge_job(monitor_id: int, job_id: str):
+
+def _public_item_path(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    parsed = urllib.parse.urlsplit(value)
+    path = parsed.path if parsed.scheme or parsed.netloc else value.split("?", 1)[0]
+    return path if path.startswith("/items/") else ""
+
+
+async def run_hydration_ssr_merge_job(
+    monitor_id: int,
+    job_id: str,
+    *,
+    target_domain: str | None = None,
+    max_domains: int = 8,
+    max_items_per_domain: int = 96,
+    sample_limit: int = 3,
+) -> dict | None:
+    """Run a read-only one-fetch-per-domain hydration/SSR merge diagnostic."""
     from app.scheduler.diagnostics import registry
-    session_factory = get_session_factory()
-    async with session_factory() as db:
-        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
-        monitor = result.scalar_one_or_none()
-        if not monitor:
-            await registry.record_check(monitor_id, f'job_{job_id}', {}, 'Monitor not found')
-            return
+
+    started_at = datetime.now(timezone.utc)
+    total_started = time.monotonic()
+    client = None
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as db:
+            query_result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+            monitor = query_result.scalar_one_or_none()
+
+        if monitor is None:
+            await registry.fail_job(job_id, "MonitorNotFound")
+            return None
+
         try:
-            selected_domains = json.loads(monitor.domains_json)
+            raw_domains = json.loads(monitor.domains_json)
+            selected_domains = (
+                list(dict.fromkeys(domain for domain in raw_domains if isinstance(domain, str)))
+                if isinstance(raw_domains, list)
+                else []
+            )
         except Exception:
             selected_domains = []
-        logger.info(f"Monitor: {monitor.id}, domains: {selected_domains}")
-        rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
+        if target_domain is not None:
+            if target_domain not in selected_domains:
+                await registry.fail_job(job_id, "DomainNotSelected")
+                return None
+            job_domains = [target_domain]
+        else:
+            job_domains = selected_domains[:max(1, min(max_domains, 8))]
+
+        rate_limiter = TokenBucketLimiter(
+            rate=float(settings.rate_limit_per_minute),
+            per=60.0,
+        )
         client = VintedClient(rate_limiter=rate_limiter)
-        logger.info(f"Client created: {client}")
 
-        overall_summary = {
+        async def process_domain(domain: str):
+            domain_started = time.monotonic()
+            fetch_started = time.monotonic()
+            domain_url = _catalog_url_for_domain(monitor.original_url, domain)
+            html = await client.fetch_catalog_html(domain_url, domain=domain)
+            fetch_duration_ms = int((time.monotonic() - fetch_started) * 1000)
 
-            'html_fetch_count_total': 0, 'hydration_items_total': 0, 'ssr_photo_map_total': 0,
-            'overlap_total': 0, 'merged_with_photo_total': 0, 'missing_photo_after_merge_total': 0,
-            'hydration_only_total': 0, 'ssr_photo_only_total': 0, 'duration_ms_total': 0
-        }
-        res_counts = {}
-        res_samples = {}
-        start_total = time.time()
-        try:
-            async def process_domain(d):
-                start_d = time.time()
-                domain_url = monitor.original_url.replace('vinted.pl', d)
-                html = await client.fetch_catalog_html(domain_url, domain=d)
-                hydration_items = extract_hydration_items(html, domain=d)
-                ssr_photo_map = parse_catalog_ssr_photo_map(html)
-                merged_items = []
-                merged_with_photo_count = 0
-                for item in hydration_items:
-                    item_id = str(item.get('id'))
-                    if item_id in ssr_photo_map:
-                        item['photo_url'] = ssr_photo_map[item_id]
-                        merged_with_photo_count += 1
-                    merged_items.append(item)
-                ssr_only_ids = [i for i in ssr_photo_map.keys() if i not in [str(item.get('id')) for item in hydration_items]]
-                redacted_samples = []
-                for item in merged_items[:10]:
-                    redacted_item = {
-                        'position': item.get('position', 0), 'item_id': item.get('id'),
-                        'item_url_path': item.get('path', ''), 'has_hydration_title': bool(item.get('title')),
-                        'title_preview': str(item.get('title', ''))[:50], 'has_hydration_price': bool(item.get('price')),
-                        'price': item.get('price', 0.0), 'currency': item.get('currency', 'PLN'),
-                        'has_ssr_photo': bool(item.get('photo_url')),
-                        'photo_host': urllib.parse.urlparse(item.get('photo_url', '')).hostname if item.get('photo_url') else None
+            parse_started = time.monotonic()
+            hydration_items = extract_hydration_items(html, domain=domain)[
+                :max_items_per_domain
+            ]
+            ssr_photo_map = parse_catalog_ssr_photo_map(html)
+            parse_duration_ms = int((time.monotonic() - parse_started) * 1000)
+
+            hydration_ids = {str(item.get("id")) for item in hydration_items}
+            overlap_ids = hydration_ids.intersection(ssr_photo_map)
+            samples = []
+            for position, item in enumerate(hydration_items[:sample_limit]):
+                item_id = str(item.get("id"))
+                photo_url = ssr_photo_map.get(item_id, "")
+                samples.append(
+                    {
+                        "position": position,
+                        "item_id": item_id,
+                        "item_url_path": _public_item_path(
+                            item.get("path") or item.get("url")
+                        ),
+                        "has_hydration_title": bool(item.get("title")),
+                        "title_preview": str(item.get("title") or "")[:50],
+                        "has_hydration_price": item.get("price") is not None,
+                        "currency": str(item.get("currency") or ""),
+                        "has_ssr_photo": bool(photo_url),
+                        "photo_host": urllib.parse.urlsplit(photo_url).hostname
+                        if photo_url
+                        else None,
                     }
-                    redacted_samples.append(redacted_item)
-                return d, {
-                    'html_fetch_count': 1, 'duration_ms': int((time.time() - start_d) * 1000),
-                    'hydration_items': len(hydration_items), 'ssr_photo_map_items': len(ssr_photo_map),
-                    'overlap_count': merged_with_photo_count, 'merged_with_photo': merged_with_photo_count,
-                    'missing_photo_after_merge': len([i for i in merged_items if not i.get('photo_url')]),
-                    'hydration_only_count': len([i for i in hydration_items if str(i.get('id')) not in ssr_photo_map]),
-                    'ssr_photo_only_count': len(ssr_only_ids), 'order_preserved': True,
-                    'photo_hosts': list(set([urllib.parse.urlparse(p).hostname for p in ssr_photo_map.values() if p]))
-                }, redacted_samples
-            results = await asyncio.gather(*(process_domain(d) for d in selected_domains), return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception): continue
-                d, counts, samples = result
-                res_counts[d] = counts
-                res_samples[d] = samples
-                overall_summary['html_fetch_count_total'] += counts['html_fetch_count']
-                overall_summary['hydration_items_total'] += counts['hydration_items']
-                overall_summary['ssr_photo_map_total'] += counts['ssr_photo_map_items']
-                overall_summary['overlap_total'] += counts['overlap_count']
-                overall_summary['merged_with_photo_total'] += counts['merged_with_photo']
-                overall_summary['missing_photo_after_merge_total'] += counts['missing_photo_after_merge']
-                overall_summary['hydration_only_total'] += counts['hydration_only_count']
-                overall_summary['ssr_photo_only_total'] += counts['ssr_photo_only_count']
-            overall_summary['duration_ms_total'] = int((time.time() - start_total) * 1000)
-            await registry.record_check(monitor_id, f'job_{job_id}', {d: res_counts[d]['hydration_items'] for d in res_counts}, None)
-        finally:
-            await client.close()
+                )
+
+            counts = {
+                "html_fetch_count": 1,
+                "duration_ms": int((time.monotonic() - domain_started) * 1000),
+                "fetch_duration_ms": fetch_duration_ms,
+                "parse_duration_ms": parse_duration_ms,
+                "hydration_items": len(hydration_items),
+                "ssr_photo_map_items": len(ssr_photo_map),
+                "overlap_count": len(overlap_ids),
+                "overlap_ratio": round(
+                    len(overlap_ids) / len(hydration_items), 4
+                ) if hydration_items else 0.0,
+                "merged_with_photo": len(overlap_ids),
+                "missing_photo_after_merge": len(hydration_items) - len(overlap_ids),
+                "hydration_only_count": len(hydration_ids - set(ssr_photo_map)),
+                "ssr_photo_only_count": len(set(ssr_photo_map) - hydration_ids),
+                "photo_hosts": sorted(
+                    {
+                        host
+                        for url in ssr_photo_map.values()
+                        if (host := urllib.parse.urlsplit(url).hostname)
+                    }
+                ),
+            }
+            return domain, counts, samples
+
+        domain_results = await asyncio.gather(
+            *(process_domain(domain) for domain in job_domains),
+            return_exceptions=True,
+        )
+        counts_by_domain: dict[str, dict] = {}
+        samples_by_domain: dict[str, list[dict]] = {}
+        errors_by_domain: dict[str, str] = {}
+        for domain, domain_result in zip(job_domains, domain_results):
+            if isinstance(domain_result, BaseException):
+                errors_by_domain[domain] = type(domain_result).__name__
+                logger.warning(
+                    "hydration_ssr_merge_domain_failed job_id=%s monitor_id=%s domain=%s exception_type=%s",
+                    job_id,
+                    monitor_id,
+                    domain,
+                    type(domain_result).__name__,
+                )
+                continue
+            result_domain, counts, samples = domain_result
+            counts_by_domain[result_domain] = counts
+            samples_by_domain[result_domain] = samples
+
+        summary = {
+            "domains_requested_total": len(job_domains),
+            "domains_processed_total": len(counts_by_domain) + len(errors_by_domain),
+            "domains_succeeded_total": len(counts_by_domain),
+            "domains_failed_total": len(errors_by_domain),
+            "html_fetch_count_total": sum(v["html_fetch_count"] for v in counts_by_domain.values()),
+            "hydration_items_total": sum(v["hydration_items"] for v in counts_by_domain.values()),
+            "ssr_photo_map_total": sum(v["ssr_photo_map_items"] for v in counts_by_domain.values()),
+            "overlap_total": sum(v["overlap_count"] for v in counts_by_domain.values()),
+            "merged_with_photo_total": sum(v["merged_with_photo"] for v in counts_by_domain.values()),
+            "missing_photo_after_merge_total": sum(v["missing_photo_after_merge"] for v in counts_by_domain.values()),
+            "hydration_only_total": sum(v["hydration_only_count"] for v in counts_by_domain.values()),
+            "ssr_photo_only_total": sum(v["ssr_photo_only_count"] for v in counts_by_domain.values()),
+        }
+        completed_at = datetime.now(timezone.utc)
+        diagnostic_result = {
+            "job_id": job_id,
+            "status": "completed",
+            "source": "hydration_with_ssr_photos",
+            "started_at": started_at.isoformat(),
+            "completed_at": completed_at.isoformat(),
+            "duration_ms_total": int((time.monotonic() - total_started) * 1000),
+            "summary": summary,
+            "counts_by_domain": counts_by_domain,
+            "samples_by_domain": samples_by_domain,
+            "errors_by_domain": errors_by_domain,
+            "side_effects": {
+                "reads_database": True,
+                "calls_vinted": True,
+                "writes_seen_items": False,
+                "writes_found_items": False,
+                "enqueues_notifications": False,
+                "sends_telegram": False,
+                "runs_scheduler_check": False,
+            },
+        }
+        await registry.complete_job(job_id, diagnostic_result)
+        return diagnostic_result
+    except Exception as exc:
+        logger.warning(
+            "hydration_ssr_merge_job_failed job_id=%s monitor_id=%s exception_type=%s",
+            job_id,
+            monitor_id,
+            type(exc).__name__,
+        )
+        await registry.fail_job(job_id, type(exc).__name__)
+        return None
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception as exc:
+                logger.warning(
+                    "hydration_ssr_merge_client_close_failed job_id=%s exception_type=%s",
+                    job_id,
+                    type(exc).__name__,
+                )
