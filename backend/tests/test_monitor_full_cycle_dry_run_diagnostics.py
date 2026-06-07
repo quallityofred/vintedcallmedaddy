@@ -34,8 +34,7 @@ async def test_full_cycle_dry_run_top_level_exception_returns_json():
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post("/api/v1/diagnostics/monitors/22/dry-run-full-cycle")
             
-            # Should be 200 with error JSON, not 500
             assert response.status_code == 200
             data = response.json()
-            assert data["errors_by_domain"]["__global__"] == "InternalServerError"
+            assert data["errors_by_domain"]["__global__"] == "Exception"
             assert data["side_effects"]["calls_vinted"] is False

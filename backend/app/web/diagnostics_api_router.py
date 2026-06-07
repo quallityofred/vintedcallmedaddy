@@ -11,12 +11,38 @@ from app.models import User, Monitor
 from app.scheduler.diagnostics import registry
 from app.scraper.source_selector import should_use_hydration_source
 from app.config import get_settings
-from app.scheduler.dry_run import perform_monitor_dry_run, perform_monitor_full_cycle_dry_run, _create_failed_full_cycle_result
+from app.scheduler.dry_run import perform_monitor_dry_run, perform_monitor_full_cycle_dry_run
 from app.scraper.client import VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
+
+def _create_failed_full_cycle_response(monitor_id: int, exc: Exception) -> dict:
+    return {
+        "monitor_id": monitor_id,
+        "selected_source": "unknown",
+        "reason": "full_cycle_dry_run_failed",
+        "selected_domains": [],
+        "dry_run_domains": [],
+        "summary": {},
+        "counts_by_domain": {},
+        "pipeline_counts_by_domain": {},
+        "seen_found_simulation_by_domain": {},
+        "samples_by_domain": {},
+        "errors_by_domain": {"__global__": exc.__class__.__name__},
+        "safe_error": "full_cycle_dry_run_failed",
+        "side_effects": {
+            "runs_scheduler_check": False,
+            "writes_seen_items": False,
+            "writes_found_items": False,
+            "updates_monitor": False,
+            "enqueues_notifications": False,
+            "sends_telegram": False,
+            "calls_vinted": False,
+            "reads_database": False
+        }
+    }
 
 @router.get("/monitors/{monitor_id}/source-selection")
 async def get_monitor_source_selection(
@@ -163,8 +189,8 @@ async def post_monitor_full_cycle_dry_run(
         return dataclasses.asdict(dry_run)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception:
+    except Exception as e:
         logger.exception("Full-cycle dry-run failed")
-        return _create_failed_full_cycle_result(monitor_id, "InternalServerError")
+        return _create_failed_full_cycle_response(monitor_id, e)
     finally:
         await client.close()
