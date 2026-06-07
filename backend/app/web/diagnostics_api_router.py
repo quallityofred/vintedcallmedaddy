@@ -51,6 +51,42 @@ def _create_failed_full_cycle_response(monitor_id: int, exc: Exception) -> dict:
         },
     }
 
+
+def _create_baseline_guard_response(monitor_id: int, selected_domains: list[str]) -> dict:
+    return {
+        "monitor_id": monitor_id,
+        "dry_run": True,
+        "selected_source": None,
+        "reason": "baseline_seen_no_notify",
+        "selected_domains": selected_domains,
+        "baseline_domains": [],
+        "summary": {
+            "domains_checked": 0,
+            "raw_fetched_total": 0,
+            "after_filters_total": 0,
+            "already_seen_total": 0,
+            "would_create_seen_items_total": 0,
+            "created_seen_items_total": 0,
+            "would_create_found_items_total": 0,
+            "would_enqueue_notifications_total": 0,
+            "would_send_telegram_total": 0,
+        },
+        "counts_by_domain": {},
+        "samples_by_domain": {},
+        "errors_by_domain": {},
+        "safe_error": "baseline_seen_request_too_large",
+        "side_effects": {
+            "runs_scheduler_check": False,
+            "writes_seen_items": False,
+            "writes_found_items": False,
+            "updates_monitor": False,
+            "enqueues_notifications": False,
+            "sends_telegram": False,
+            "calls_vinted": False,
+            "reads_database": True,
+        },
+    }
+
 @router.get("/monitors/{monitor_id}/source-selection")
 async def get_monitor_source_selection(
     monitor_id: int,
@@ -263,9 +299,10 @@ async def post_monitor_full_cycle_dry_run(
 async def post_monitor_seen_baseline_no_notify(
     monitor_id: int,
     domain: str | None = None,
-    max_domains: int = Query(default=1, ge=1, le=2),
+    max_domains: int = Query(default=1, ge=1, le=8),
     max_items_per_domain: int = Query(default=96, ge=1, le=120),
     dry_run: bool = True,
+    sample_limit: int = Query(default=10, ge=0, le=20),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -277,10 +314,16 @@ async def post_monitor_seen_baseline_no_notify(
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
-        
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from app.models import SeenItem
-    from datetime import datetime, timezone
+
+    try:
+        selected_domains = json.loads(monitor.domains_json)
+    except Exception:
+        selected_domains = []
+    if domain is None and max_domains > 2:
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder(_create_baseline_guard_response(monitor_id, selected_domains)),
+        )
 
     client = None
     try:
@@ -295,44 +338,31 @@ async def post_monitor_seen_baseline_no_notify(
             max_items_per_domain=max_items_per_domain,
             target_domain=domain,
             dry_run=dry_run,
+            sample_limit=sample_limit,
         )
-        
-        created_seen_items_total = 0
-        if not dry_run:
-            now = datetime.now(timezone.utc)
-            seen_items_to_insert = []
-            for d, items in dry_run_res.get("samples_by_domain", {}).items():
-                for item in items:
-                    seen_items_to_insert.append({
-                        "monitor_id": monitor_id,
-                        "user_id": monitor.user_id,
-                        "vinted_item_id": int(item["id"]),
-                        "domain": d,
-                        "seen_at": now,
-                    })
-            if seen_items_to_insert:
-                stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(
-                    index_elements=["monitor_id", "vinted_item_id", "domain"]
-                )
-                res = await db.execute(stmt)
-                created_seen_items_total = res.rowcount
-            await db.commit()
-
-        # Add SeenItem write count to summary if needed
-        # perform_monitor_baseline_seen already returns a dict, no asdict() needed
-        res_dict = dry_run_res
-        res_dict["summary"]["created_seen_items_total"] = created_seen_items_total
-        res_dict["side_effects"] = {"writes_seen_items": (created_seen_items_total > 0)}
         return JSONResponse(
             status_code=200,
-            content=jsonable_encoder(res_dict),
+            content=jsonable_encoder(dry_run_res),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.exception("Baseline seen failed")
+        logger.warning(
+            "baseline_seen_no_notify_failed monitor_id=%s exception_type=%s",
+            monitor_id,
+            type(exc).__name__,
+        )
         return JSONResponse(
             status_code=200,
             content=jsonable_encoder(_create_failed_full_cycle_response(monitor_id, exc)),
         )
     finally:
         if client is not None:
-            await client.close()
+            try:
+                await client.close()
+            except Exception as exc:
+                logger.warning(
+                    "baseline_seen_client_close_failed monitor_id=%s exception_type=%s",
+                    monitor_id,
+                    type(exc).__name__,
+                )

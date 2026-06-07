@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
@@ -555,3 +556,147 @@ async def perform_monitor_full_cycle_dry_run(
         samples_by_domain=samples_by_domain,
         errors_by_domain=errors_by_domain,
     )
+
+async def perform_monitor_baseline_seen(
+    monitor: Monitor,
+    client: VintedClient,
+    db: AsyncSession,
+    *,
+    max_domains: int = 1,
+    max_items_per_domain: int = 96,
+    target_domain: Optional[str] = None,
+    dry_run: bool = True,
+    sample_limit: int = 10,
+) -> dict:
+    """Fetch/filter monitor items and optionally persist only missing SeenItem rows."""
+    source_result = await perform_monitor_dry_run(
+        monitor,
+        client,
+        max_domains=max_domains,
+        max_items_per_domain=max_items_per_domain,
+        target_domain=target_domain,
+    )
+    summary = {
+        "domains_checked": len(source_result.dry_run_domains),
+        "raw_fetched_total": 0,
+        "after_filters_total": 0,
+        "already_seen_total": 0,
+        "would_create_seen_items_total": 0,
+        "created_seen_items_total": 0,
+        "would_create_found_items_total": 0,
+        "would_enqueue_notifications_total": 0,
+        "would_send_telegram_total": 0,
+    }
+    counts_by_domain: dict[str, dict[str, int]] = {}
+    samples_by_domain: dict[str, list[dict[str, Any]]] = {}
+    missing_by_domain: dict[str, list[DryRunItem]] = {}
+    existing_by_domain: dict[str, set[int]] = {}
+
+    for domain in source_result.dry_run_domains:
+        pipeline = source_result.pipeline_counts_by_domain.get(domain, {})
+        items = source_result.samples_by_domain.get(domain, [])[:max_items_per_domain]
+        item_ids = {int(item.id) for item in items}
+        seen_result = await db.execute(
+            select(SeenItem.vinted_item_id).where(
+                SeenItem.monitor_id == monitor.id,
+                SeenItem.domain == domain,
+                SeenItem.vinted_item_id.in_(item_ids),
+            )
+        ) if item_ids else None
+        existing_ids = {int(row[0]) for row in seen_result.fetchall()} if seen_result else set()
+        existing_by_domain[domain] = existing_ids
+        missing_items = [item for item in items if int(item.id) not in existing_ids]
+        missing_by_domain[domain] = missing_items
+
+        counts = {
+            "raw_fetched": int(pipeline.get("raw_fetched", 0)),
+            "converted": int(pipeline.get("converted", 0)),
+            "after_filters": int(pipeline.get("after_filters", 0)),
+            "already_seen": len(items) - len(missing_items),
+            "would_create_seen_items": len(missing_items),
+            "created_seen_items": 0,
+        }
+        counts_by_domain[domain] = counts
+        samples_by_domain[domain] = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "brand_title": item.brand_title,
+                "price": item.price,
+                "currency": item.currency,
+                "url": item.url,
+                "domain": item.domain,
+                "source": item.source,
+            }
+            for item in missing_items[:sample_limit]
+        ]
+        summary["raw_fetched_total"] += counts["raw_fetched"]
+        summary["after_filters_total"] += counts["after_filters"]
+        summary["already_seen_total"] += counts["already_seen"]
+        summary["would_create_seen_items_total"] += counts["would_create_seen_items"]
+
+    if not dry_run:
+        rows = [
+            {
+                "monitor_id": monitor.id,
+                "user_id": monitor.user_id,
+                "vinted_item_id": int(item.id),
+                "domain": domain,
+                "seen_at": datetime.now(timezone.utc),
+            }
+            for domain, items in missing_by_domain.items()
+            for item in items
+        ]
+        if rows:
+            dialect_name = db.get_bind().dialect.name
+            if dialect_name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert
+            elif dialect_name == "sqlite":
+                from sqlalchemy.dialects.sqlite import insert
+            else:
+                raise RuntimeError("Unsupported database dialect for conflict-safe baseline insert")
+            statement = insert(SeenItem).values(rows).on_conflict_do_nothing(
+                index_elements=["monitor_id", "vinted_item_id", "domain"]
+            )
+            await db.execute(statement)
+        await db.commit()
+
+        for domain, missing_items in missing_by_domain.items():
+            missing_ids = {int(item.id) for item in missing_items}
+            if not missing_ids:
+                continue
+            final_result = await db.execute(
+                select(SeenItem.vinted_item_id).where(
+                    SeenItem.monitor_id == monitor.id,
+                    SeenItem.domain == domain,
+                    SeenItem.vinted_item_id.in_(missing_ids),
+                )
+            )
+            final_ids = {int(row[0]) for row in final_result.fetchall()}
+            created = len(final_ids - existing_by_domain[domain])
+            counts_by_domain[domain]["created_seen_items"] = created
+            summary["created_seen_items_total"] += created
+
+    return {
+        "monitor_id": monitor.id,
+        "dry_run": dry_run,
+        "selected_source": source_result.selected_source,
+        "reason": "baseline_seen_no_notify",
+        "selected_domains": source_result.selected_domains,
+        "baseline_domains": source_result.dry_run_domains,
+        "summary": summary,
+        "counts_by_domain": counts_by_domain,
+        "samples_by_domain": samples_by_domain,
+        "errors_by_domain": source_result.errors_by_domain,
+        "safe_error": None,
+        "side_effects": {
+            "runs_scheduler_check": False,
+            "writes_seen_items": summary["created_seen_items_total"] > 0,
+            "writes_found_items": False,
+            "updates_monitor": False,
+            "enqueues_notifications": False,
+            "sends_telegram": False,
+            "calls_vinted": True,
+            "reads_database": True,
+        },
+    }
