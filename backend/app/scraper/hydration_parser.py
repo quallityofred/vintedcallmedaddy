@@ -14,7 +14,6 @@ _ITEM_PATH_PATTERN = re.compile(
 _ITEMS_LITERAL_PATTERN = re.compile(r"/items/", re.IGNORECASE)
 _FIELD_SEQUENCE_RADIUS = 1500
 
-
 def _empty_field_sequence_diagnostics() -> dict:
     return {
         "field_sequence_path_markers": 0,
@@ -493,36 +492,23 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
             seen_paths.add(normalized_path)
         
         price = i.get("price") or {}
-        raw_price_amount: Any = None
         if isinstance(price, (int, float)):
-             raw_price_amount = price
-             price_amount = _safe_float(price) or 0.0
-             currency = i.get("currency") or "EUR"
+             price_amount = float(price)
+             currency = "EUR"
         elif isinstance(price, dict):
-             raw_price_amount = price.get("amount")
-             price_amount = _safe_float(price.get("amount")) or 0.0
-             currency = price.get("currency_code") or i.get("currency") or "EUR"
+             price_amount = float(price.get("amount") or 0.0)
+             currency = price.get("currency_code") or "EUR"
         else:
              price_amount = 0.0
-             currency = i.get("currency") or "EUR"
-
-        if is_field_sequence and (
-            _safe_float(raw_price_amount) is None or not currency
-        ):
-            continue
-        
+             currency = "EUR"
+             
         user = i.get("user") or {}
-        if normalized_path:
-            item_url = f"https://www.{domain}{normalized_path}"
-        elif isinstance(raw_path, str) and raw_path.lower().startswith(("http://", "https://")):
-            item_url = raw_path
-        else:
-            item_url = f"https://www.{domain}" + (raw_path or "")
+        
         normalized.append({
             "id": item_id_str,
             "title": title,
             "brand_title": brand,
-            "url": item_url,
+            "url": f"https://www.{domain}" + (normalized_path or ""),
             "path": normalized_path or raw_path,
             "price": price_amount,
             "currency": currency,
