@@ -194,12 +194,25 @@ async def post_monitor_dry_run_source(
             html = await client.fetch_catalog_html(domain_url, domain=domain or "vinted.pl")
 
             # Parse
-            items = parse_catalog_ssr_html(html)
+            parser = VintedCatalogHTMLParser()
+            parser.feed(html)
+            items = parser.items
 
             # Count evidence
-            # This is a bit of a hack, but serves to provide evidence in diagnostics
             def count_token(token):
                 return html.lower().count(token.lower())
+
+            # Redact samples
+            redacted_samples = []
+            for item in items[:max_items_per_domain]:
+                redacted_item = item.copy()
+                if 'photo_url' in redacted_item:
+                    # Keep host only
+                    import urllib.parse
+                    parsed = urllib.parse.urlparse(redacted_item['photo_url'])
+                    redacted_item['photo_host'] = parsed.hostname
+                    del redacted_item['photo_url']
+                redacted_samples.append(redacted_item)
 
             # Return samples
             res = {
@@ -208,16 +221,17 @@ async def post_monitor_dry_run_source(
                 "normalized_items_total": len(items),
                 "with_photo_total": len([i for i in items if i['photo_url']]),
                 "missing_photo_total": len([i for i in items if not i['photo_url']]),
-                "samples": items[:max_items_per_domain],
+                "samples": redacted_samples,
+                "parser_diagnostics": parser.diagnostics,
                 "html_evidence": {
                     "html_bytes": len(html),
                     "item_path_count": count_token("/items/"),
                     "img_tag_count": count_token("<img"),
-                    "data_testid_item_card_count": count_token('data-testid="item-card"'),
                     "images1_vinted_net_count": count_token("images1.vinted.net"),
                 }
             }
             return JSONResponse(status_code=200, content=res)
+
         res = await perform_monitor_dry_run(
             monitor,
             client,
