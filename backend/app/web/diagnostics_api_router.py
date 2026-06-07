@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import dataclasses
+import json
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -174,6 +175,46 @@ async def post_monitor_full_cycle_dry_run(
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
+
+    # Guard: Reject oversized requests
+    if domain is None and max_domains > 2:
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder({
+                "monitor_id": monitor_id,
+                "selected_source": "hydration",
+                "reason": "full_cycle_dry_run_request_too_large",
+                "selected_domains": json.loads(monitor.domains_json),
+                "dry_run_domains": [],
+                "summary": {
+                    "domains_checked": 0, "raw_fetched_total": 0, "after_filters_total": 0,
+                    "already_seen_total": 0, "already_found_total": 0,
+                    "would_create_seen_items_total": 0, "would_create_found_items_total": 0,
+                    "would_enqueue_notifications_total": 0, "would_send_telegram_total": 0
+                },
+                "counts_by_domain": {},
+                "pipeline_counts_by_domain": {},
+                "seen_found_simulation_by_domain": {},
+                "samples_by_domain": {},
+                "errors_by_domain": {},
+                "safe_error": "full_cycle_dry_run_request_too_large",
+                "limits": {
+                    "max_domains_allowed": 2,
+                    "requested_max_domains": max_domains,
+                    "recommended_mode": "domain_or_small_batch"
+                },
+                "side_effects": {
+                    "runs_scheduler_check": False,
+                    "writes_seen_items": False,
+                    "writes_found_items": False,
+                    "updates_monitor": False,
+                    "enqueues_notifications": False,
+                    "sends_telegram": False,
+                    "calls_vinted": False,
+                    "reads_database": True
+                }
+            }),
+        )
 
     client = None
     try:
