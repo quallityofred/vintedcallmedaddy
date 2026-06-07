@@ -232,7 +232,69 @@ async def post_monitor_dry_run_source(
             }
             return JSONResponse(status_code=200, content=res)
 
+        elif source == "hydration_with_ssr_photos":
+            from app.scraper.catalog_ssr_parser import parse_catalog_ssr_photo_map
+            from app.scraper.hydration_parser import extract_hydration_items
+
+            # Use the existing monitor URL
+            domain_url = monitor.original_url
+            if domain:
+                domain_url = monitor.original_url.replace("vinted.pl", domain)
+
+            # Fetch HTML once
+            html = await client.fetch_catalog_html(domain_url, domain=domain or "vinted.pl")
+
+            # Parse hydration
+            hydration_items = extract_hydration_items(html, domain=domain or "vinted.pl")
+
+            # Parse SSR photo map
+            ssr_photo_map = parse_catalog_ssr_photo_map(html)
+
+            # Merge
+            merged_items = []
+            merged_with_photo_count = 0
+            for item in hydration_items:
+                item_id = str(item.get('id'))
+                if item_id in ssr_photo_map:
+                    item['photo_url'] = ssr_photo_map[item_id]
+                    merged_with_photo_count += 1
+                merged_items.append(item)
+
+            # Diagnostics
+            redacted_samples = []
+            for item in merged_items[:max_items_per_domain]:
+                redacted_item = item.copy()
+                if 'photo_url' in redacted_item:
+                    import urllib.parse
+                    parsed = urllib.parse.urlparse(redacted_item['photo_url'])
+                    redacted_item['photo_host'] = parsed.hostname
+                    del redacted_item['photo_url']
+                redacted_samples.append(redacted_item)
+
+            res = {
+                "source": "hydration_with_ssr_photos",
+                "summary": {
+                    "html_fetch_count_total": 1,
+                    "hydration_items_total": len(hydration_items),
+                    "ssr_photo_map_total": len(ssr_photo_map),
+                    "overlap_total": merged_with_photo_count,
+                    "merged_with_photo_total": merged_with_photo_count,
+                },
+                "samples": redacted_samples,
+                "side_effects": {
+                    "reads_database": True,
+                    "calls_vinted": True,
+                    "writes_seen_items": False,
+                    "writes_found_items": False,
+                    "enqueues_notifications": False,
+                    "sends_telegram": False,
+                    "runs_scheduler_check": False
+                }
+            }
+            return JSONResponse(status_code=200, content=res)
+
         res = await perform_monitor_dry_run(
+
             monitor,
             client,
             max_domains=min(max_domains, 3),

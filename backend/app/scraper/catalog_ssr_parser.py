@@ -32,7 +32,8 @@ class VintedCatalogHTMLParser(HTMLParser):
         if tag == 'div':
             self.div_depth += 1
             # Root selector: feed-grid__item is the stable root card.
-            is_card_root = 'feed-grid__item' in attr_dict.get('class', '') or attr_dict.get('data-testid') == 'item-card'
+            classes = attr_dict.get('class', '').split()
+            is_card_root = 'feed-grid__item' in classes or attr_dict.get('data-testid') == 'item-card'
             if is_card_root:
                 self.in_item_card = True
                 self.card_depth = self.div_depth
@@ -86,10 +87,12 @@ class VintedCatalogHTMLParser(HTMLParser):
                     self.in_price = False
                 elif self.div_depth == self.card_depth:
                     # Closing the root card div
+                    # Ensure we only emit if we have an item id
                     if self.current_item and self.current_item.get('id') != '0':
                         self.items.append(self.current_item)
                         self.diagnostics["cards_emitted"] += 1
                     self.in_item_card = False
+                    # IMPORTANT: Clear current_item ONLY if we closed the root card
                     self.current_item = None
                     self.diagnostics["card_end_count"] += 1
             self.div_depth -= 1
@@ -98,3 +101,17 @@ def parse_catalog_ssr_html(html: str) -> List[Dict[str, Any]]:
     parser = VintedCatalogHTMLParser()
     parser.feed(html)
     return parser.items
+
+def parse_catalog_ssr_photo_map(html: str) -> Dict[str, str]:
+    """
+    Parses catalog HTML for an item_id -> photo_url mapping.
+    """
+    items = parse_catalog_ssr_html(html)
+    # Deduplicate and return mapping.
+    # Prefer non-empty photo_url.
+    photo_map = {}
+    for item in items:
+        if item.get('id') and item.get('photo_url'):
+            if item['id'] not in photo_map:
+                photo_map[item['id']] = item['photo_url']
+    return photo_map
