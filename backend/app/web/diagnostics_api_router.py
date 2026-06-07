@@ -2,8 +2,9 @@ from __future__ import annotations
 import logging
 import dataclasses
 import json
+import fastapi
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
@@ -153,6 +154,7 @@ async def get_monitor_source_selection(
     }
 
 @router.post("/monitors/{monitor_id}/dry-run-source")
+@router.post("/monitors/{monitor_id}/dry-run-source")
 async def post_monitor_dry_run_source(
     monitor_id: int,
     max_domains: int = 1,
@@ -179,59 +181,11 @@ async def post_monitor_dry_run_source(
     rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
     client = VintedClient(rate_limiter=rate_limiter)
 
-    # If source is ssr_html_photo, we'd need to use the new parser.
-    # For now, just implement the endpoint skeleton.
-
     try:
+        # Note: ssr_html_photo diagnostic was removed to prevent timeout.
+        # Use /jobs/hydration-ssr-photo-merge for asynchronous all-domain validation.
         if source == "ssr_html_photo":
-            from app.scraper.catalog_ssr_parser import VintedCatalogHTMLParser
-
-            # Use the existing monitor URL
-            domain_url = monitor.original_url
-            if domain:
-                domain_url = monitor.original_url.replace("vinted.pl", domain)
-
-            # Fetch HTML
-            html = await client.fetch_catalog_html(domain_url, domain=domain or "vinted.pl")
-
-            # Parse
-            parser = VintedCatalogHTMLParser()
-            parser.feed(html)
-            items = parser.items
-
-            # Count evidence
-            def count_token(token):
-                return html.lower().count(token.lower())
-
-            # Redact samples
-            redacted_samples = []
-            for item in items[:max_items_per_domain]:
-                redacted_item = item.copy()
-                if 'photo_url' in redacted_item:
-                    # Keep host only
-                    import urllib.parse
-                    parsed = urllib.parse.urlparse(redacted_item['photo_url'])
-                    redacted_item['photo_host'] = parsed.hostname
-                    del redacted_item['photo_url']
-                redacted_samples.append(redacted_item)
-
-            # Return samples
-            res = {
-                "source": "ssr_html_photo",
-                "raw_cards_total": len(items),
-                "normalized_items_total": len(items),
-                "with_photo_total": len([i for i in items if i['photo_url']]),
-                "missing_photo_total": len([i for i in items if not i['photo_url']]),
-                "samples": redacted_samples,
-                "parser_diagnostics": parser.diagnostics,
-                "html_evidence": {
-                    "html_bytes": len(html),
-                    "item_path_count": count_token("/items/"),
-                    "img_tag_count": count_token("<img"),
-                    "images1_vinted_net_count": count_token("images1.vinted.net"),
-                }
-            }
-            return JSONResponse(status_code=200, content=res)
+             raise HTTPException(status_code=400, detail="Use /jobs/hydration-ssr-photo-merge instead")
 
         res = await perform_monitor_dry_run(
             monitor,
@@ -427,6 +381,41 @@ async def post_monitor_seen_baseline_no_notify(
                     monitor_id,
                     type(exc).__name__,
                 )
+
+
+@router.post("/monitors/{monitor_id}/jobs/hydration-ssr-photo-merge")
+async def post_monitor_hydration_ssr_merge_job(
+    monitor_id: int,
+    background_tasks: fastapi.BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Start an asynchronous background job for hydration+SSR photo merge."""
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+
+    job_id = f"merge_{monitor_id}_{int(datetime.now(timezone.utc).timestamp())}"
+    await registry.record_check(monitor_id, f"job_{job_id}", {}, None)
+
+    # Offload to background
+    from app.scheduler.tasks import run_hydration_ssr_merge_job
+    background_tasks.add_task(run_hydration_ssr_merge_job, monitor_id, job_id)
+
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.get("/monitors/{monitor_id}/jobs/{job_id}")
+async def get_monitor_job_status(monitor_id: int, job_id: str):
+    # Retrieve status from registry
+    check = await registry.get_check(monitor_id)
+    if not check or check.last_check_source != f"job_{job_id}":
+        return {"status": "not_found"}
+    return {"status": "completed" if check.last_error is None else "failed", "result": dataclasses.asdict(check)}
+
 
 @router.post("/monitors/{monitor_id}/start-with-baseline", response_model=None)
 async def post_monitor_start_with_baseline(
