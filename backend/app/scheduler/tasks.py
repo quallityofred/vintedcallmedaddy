@@ -1,4 +1,3 @@
-
 # Copied implementation from app/scheduler/app_scheduler_tasks.py
 import asyncio
 import inspect
@@ -26,6 +25,8 @@ from app.scheduler.found_item_values import build_found_item_values
 from app.scraper.url_parser import parse_vinted_url
 from app.telegram.notifications import send_item_notification
 from app.telegram.topic_service import ensure_monitor_topic, record_topic_send_failure
+from app.scraper.catalog_ssr_parser import parse_catalog_ssr_photo_map
+from app.scraper.hydration_parser import extract_hydration_items
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

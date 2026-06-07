@@ -233,126 +233,7 @@ async def post_monitor_dry_run_source(
             }
             return JSONResponse(status_code=200, content=res)
 
-        elif source == "hydration_with_ssr_photos":
-            from app.scraper.catalog_ssr_parser import parse_catalog_ssr_photo_map
-            from app.scraper.hydration_parser import extract_hydration_items
-            import urllib.parse
-            import time
-
-            try:
-                selected_domains = json.loads(monitor.domains_json)
-            except Exception:
-                selected_domains = []
-
-            domains_to_check = [domain] if domain else selected_domains
-            if domain is None and max_domains > 8:
-                # Increased limit to 8 to support full validation
-                return JSONResponse(status_code=400, content={"detail": "Request too large"})
-
-            res_counts = {}
-            res_samples = {}
-            res_errors = {}
-            overall_summary = {
-                "html_fetch_count_total": 0,
-                "hydration_items_total": 0,
-                "ssr_photo_map_total": 0,
-                "overlap_total": 0,
-                "merged_with_photo_total": 0,
-                "missing_photo_after_merge_total": 0,
-                "hydration_only_total": 0,
-                "ssr_photo_only_total": 0,
-                "duration_ms_total": 0
-            }
-
-            start_total = time.time()
-            for d in domains_to_check[:max_domains]:
-                start_d = time.time()
-                domain_url = monitor.original_url.replace("vinted.pl", d)
-                try:
-                    html = await client.fetch_catalog_html(domain_url, domain=d)
-
-                    hydration_items = extract_hydration_items(html, domain=d)
-                    ssr_photo_map = parse_catalog_ssr_photo_map(html)
-
-                    merged_items = []
-                    merged_with_photo_count = 0
-                    for item in hydration_items:
-                        item_id = str(item.get('id'))
-                        if item_id in ssr_photo_map:
-                            item['photo_url'] = ssr_photo_map[item_id]
-                            merged_with_photo_count += 1
-                        merged_items.append(item)
-
-                    # Update counts
-                    ssr_only_ids = [i for i in ssr_photo_map.keys() if i not in [str(item.get('id')) for item in hydration_items]]
-
-                    res_counts[d] = {
-                        "html_fetch_count": 1,
-                        "duration_ms": int((time.time() - start_d) * 1000),
-                        "hydration_items": len(hydration_items),
-                        "ssr_photo_map_items": len(ssr_photo_map),
-                        "overlap_count": merged_with_photo_count,
-                        "merged_with_photo": merged_with_photo_count,
-                        "missing_photo_after_merge": len([i for i in merged_items if not i.get('photo_url')]),
-                        "hydration_only_count": len([i for i in hydration_items if str(i.get('id')) not in ssr_photo_map]),
-                        "ssr_photo_only_count": len(ssr_only_ids),
-                        "order_preserved": True, # Assumption
-                        "photo_hosts": list(set([urllib.parse.urlparse(p).hostname for p in ssr_photo_map.values() if p]))
-                    }
-
-                    overall_summary["html_fetch_count_total"] += 1
-                    overall_summary["hydration_items_total"] += res_counts[d]["hydration_items"]
-                    overall_summary["ssr_photo_map_total"] += res_counts[d]["ssr_photo_map_items"]
-                    overall_summary["overlap_total"] += res_counts[d]["overlap_count"]
-                    overall_summary["merged_with_photo_total"] += res_counts[d]["merged_with_photo"]
-                    overall_summary["missing_photo_after_merge_total"] += res_counts[d]["missing_photo_after_merge"]
-                    overall_summary["hydration_only_total"] += res_counts[d]["hydration_only_count"]
-                    overall_summary["ssr_photo_only_total"] += res_counts[d]["ssr_photo_only_count"]
-
-                    # Redacted samples
-                    redacted_samples = []
-                    for item in merged_items[:sample_limit]:
-                        redacted_item = {
-                            "position": item.get('position', 0),
-                            "item_id": item.get('id'),
-                            "item_url_path": item.get('path', ''),
-                            "has_hydration_title": bool(item.get('title')),
-                            "title_preview": str(item.get('title', ''))[:50],
-                            "has_hydration_price": bool(item.get('price')),
-                            "price": item.get('price', 0.0),
-                            "currency": item.get('currency', 'PLN'),
-                            "has_ssr_photo": bool(item.get('photo_url')),
-                            "photo_host": urllib.parse.urlparse(item.get('photo_url', '')).hostname if item.get('photo_url') else None
-                        }
-                        redacted_samples.append(redacted_item)
-                    res_samples[d] = redacted_samples
-
-                except Exception as e:
-                    logger.exception(f"Merge failed for {d}")
-                    res_errors[d] = str(e)
-
-            overall_summary["duration_ms_total"] = int((time.time() - start_total) * 1000)
-
-            res = {
-                "source": "hydration_with_ssr_photos",
-                "domains": domains_to_check[:max_domains],
-                "summary": overall_summary,
-                "counts_by_domain": res_counts,
-                "samples_by_domain": res_samples,
-                "errors_by_domain": res_errors,
-                "side_effects": {
-                    "reads_database": True,
-                    "calls_vinted": True,
-                    "writes_seen_items": False,
-                    "writes_found_items": False,
-                    "enqueues_notifications": False,
-                    "sends_telegram": False,
-                    "runs_scheduler_check": False
-                }
-            }
-            return JSONResponse(status_code=200, content=res)
         res = await perform_monitor_dry_run(
-
             monitor,
             client,
             max_domains=min(max_domains, 3),
@@ -437,7 +318,6 @@ async def post_monitor_full_cycle_dry_run(
         rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
         client = VintedClient(rate_limiter=rate_limiter)
         dry_run = await perform_monitor_full_cycle_dry_run(
-            monitor,
             client,
             db,
             max_domains=max_domains,
@@ -513,7 +393,6 @@ async def post_monitor_seen_baseline_no_notify(
         client = VintedClient(rate_limiter=rate_limiter)
 
         dry_run_res = await perform_monitor_baseline_seen(
-            monitor,
             client,
             db,
             max_domains=max_domains,
@@ -627,7 +506,6 @@ async def post_monitor_start_with_baseline(
         client = VintedClient(rate_limiter=rate_limiter)
 
         dry_run_res = await perform_monitor_baseline_seen(
-            monitor,
             client,
             db,
             max_domains=max_domains,
