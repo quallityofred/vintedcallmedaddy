@@ -13,6 +13,8 @@ class VintedCatalogHTMLParser(HTMLParser):
         self.in_item_card = False
         self.in_title = False
         self.in_price = False
+        self.div_depth = 0
+        self.card_depth = 0
         # Diagnostics
         self.diagnostics = {
             "card_start_count": 0,
@@ -27,12 +29,15 @@ class VintedCatalogHTMLParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         attr_dict = dict(attrs)
 
-        # Root selector: feed-grid__item is the stable root card.
-        is_card_root = 'feed-grid__item' in attr_dict.get('class', '') or attr_dict.get('data-testid') == 'item-card'
-        if tag == 'div' and is_card_root:
-            self.in_item_card = True
-            self.diagnostics["card_start_count"] += 1
-            self.current_item = {'photo_url': '', 'title': 'Unknown', 'price': 0.0, 'currency': 'PLN', 'id': '0'}
+        if tag == 'div':
+            self.div_depth += 1
+            # Root selector: feed-grid__item is the stable root card.
+            is_card_root = 'feed-grid__item' in attr_dict.get('class', '') or attr_dict.get('data-testid') == 'item-card'
+            if is_card_root:
+                self.in_item_card = True
+                self.card_depth = self.div_depth
+                self.diagnostics["card_start_count"] += 1
+                self.current_item = {'photo_url': '', 'title': 'Unknown', 'price': 0.0, 'currency': 'PLN', 'id': '0'}
 
         if self.in_item_card:
             if tag == 'a' and 'href' in attr_dict and '/items/' in attr_dict['href']:
@@ -51,7 +56,7 @@ class VintedCatalogHTMLParser(HTMLParser):
 
             class_attr = attr_dict.get('class', '')
             testid_attr = attr_dict.get('data-testid', '')
-
+            
             if tag == 'div' and ('item-title' in class_attr or testid_attr == 'item-title'):
                 self.in_title = True
                 self.diagnostics["cards_with_title"] += 1
@@ -64,28 +69,30 @@ class VintedCatalogHTMLParser(HTMLParser):
         if self.in_item_card and self.current_item:
             if self.in_title:
                 self.current_item['title'] = data.strip()
-
+            
             if self.in_price:
                 price_cleaned = re.sub(r'[^0-9.]', '', data.replace(',', '.'))
                 try:
                     self.current_item['price'] = float(price_cleaned)
                 except ValueError:
                     pass
-
+    
     def handle_endtag(self, tag):
-        if self.in_item_card:
-            if self.in_title and tag == 'div':
-                self.in_title = False
-            elif self.in_price and tag == 'div':
-                self.in_price = False
-            elif tag == 'div':
-                # Assume card root closed - check if valid
-                if self.current_item and self.current_item.get('id') != '0':
-                    self.items.append(self.current_item)
-                    self.diagnostics["cards_emitted"] += 1
-                self.in_item_card = False
-                self.current_item = None
-                self.diagnostics["card_end_count"] += 1
+        if tag == 'div':
+            if self.in_item_card:
+                if self.in_title:
+                    self.in_title = False
+                elif self.in_price:
+                    self.in_price = False
+                elif self.div_depth == self.card_depth:
+                    # Closing the root card div
+                    if self.current_item and self.current_item.get('id') != '0':
+                        self.items.append(self.current_item)
+                        self.diagnostics["cards_emitted"] += 1
+                    self.in_item_card = False
+                    self.current_item = None
+                    self.diagnostics["card_end_count"] += 1
+            self.div_depth -= 1
 
 def parse_catalog_ssr_html(html: str) -> List[Dict[str, Any]]:
     parser = VintedCatalogHTMLParser()
