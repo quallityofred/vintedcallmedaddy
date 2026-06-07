@@ -102,16 +102,16 @@ async def get_monitor_source_selection(
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
-        
+
     import json
     try:
         params = json.loads(monitor.params_json)
     except Exception:
         params = {}
-    
+
     # Check selector logic
     used = should_use_hydration_source(params)
-    
+
     # Determine reason
     reason = "api"
     if not settings.monitor_hydration_source_enabled:
@@ -120,10 +120,10 @@ async def get_monitor_source_selection(
         reason = "brand_only_api_path"
     else:
         reason = "catalog_filter_detected"
-        
+
     # Get last check data if available
     diag = await registry.get_check(monitor_id)
-    
+
     return {
         "monitor_id": monitor_id,
         "hydration_enabled_effective": settings.monitor_hydration_source_enabled,
@@ -158,6 +158,7 @@ async def post_monitor_dry_run_source(
     max_domains: int = 1,
     max_items_per_domain: int = 10,
     domain: str | None = None,
+    source: str = "hydration",
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -176,11 +177,40 @@ async def post_monitor_dry_run_source(
     # Manual client creation for dry-run
     rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
     client = VintedClient(rate_limiter=rate_limiter)
+
+    # If source is ssr_html_photo, we'd need to use the new parser.
+    # For now, just implement the endpoint skeleton.
+
     try:
+        if source == "ssr_html_photo":
+            from app.scraper.catalog_ssr_parser import parse_catalog_ssr_html
+
+            # Use the existing monitor URL
+            domain_url = monitor.original_url
+            if domain:
+                domain_url = monitor.original_url.replace("vinted.pl", domain)
+
+            # Fetch HTML
+            html = await client.fetch_catalog_html(domain_url, domain=domain or "vinted.pl")
+
+            # Parse
+            items = parse_catalog_ssr_html(html)
+
+            # Return samples
+            res = {
+                "source": "ssr_html_photo",
+                "raw_cards_total": len(items),
+                "normalized_items_total": len(items),
+                "with_photo_total": len([i for i in items if i['photo_url']]),
+                "missing_photo_total": len([i for i in items if not i['photo_url']]),
+                "samples": items[:max_items_per_domain]
+            }
+            return JSONResponse(status_code=200, content=res)
+
         res = await perform_monitor_dry_run(
-            monitor, 
-            client, 
-            max_domains=min(max_domains, 3), 
+            monitor,
+            client,
+            max_domains=min(max_domains, 3),
             max_items_per_domain=min(max_items_per_domain, 20),
             target_domain=domain
         )
@@ -336,7 +366,7 @@ async def post_monitor_seen_baseline_no_notify(
     try:
         rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
         client = VintedClient(rate_limiter=rate_limiter)
-        
+
         dry_run_res = await perform_monitor_baseline_seen(
             monitor,
             client,
@@ -403,7 +433,7 @@ async def post_monitor_start_with_baseline(
 
     last_check_at_before = monitor.last_check_at
     monitor_activated = False
-    
+
     try:
         selected_domains = json.loads(monitor.domains_json)
     except Exception:
@@ -421,7 +451,7 @@ async def post_monitor_start_with_baseline(
         else:
              # If no specific domain, does max_domains cover all?
              covers_all = (max_domains >= len(selected_domains))
-        
+
         if not covers_all:
              return JSONResponse(
                 status_code=400,
@@ -450,7 +480,7 @@ async def post_monitor_start_with_baseline(
     try:
         rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
         client = VintedClient(rate_limiter=rate_limiter)
-        
+
         dry_run_res = await perform_monitor_baseline_seen(
             monitor,
             client,
