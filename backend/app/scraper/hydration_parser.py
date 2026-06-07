@@ -3,6 +3,7 @@ import json
 import re
 import logging
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -25,6 +26,41 @@ _TIMESTAMP_FIELDS = (
     "bumped_at",
     "timestamp",
 )
+
+_IMAGE_TOKEN_PATTERNS = {
+    "photo": re.compile(r"\bphoto\b", re.IGNORECASE),
+    "photos": re.compile(r"\bphotos\b", re.IGNORECASE),
+    "thumbnail": re.compile(r"\bthumbnail\b", re.IGNORECASE),
+    "thumbnails": re.compile(r"\bthumbnails\b", re.IGNORECASE),
+    "image": re.compile(r"\bimage\b", re.IGNORECASE),
+    "images": re.compile(r"\bimages\b", re.IGNORECASE),
+    "high_resolution": re.compile(r"\bhigh_resolution\b", re.IGNORECASE),
+    "webp": re.compile(r"(?:\.webp\b|\bwebp\b)", re.IGNORECASE),
+    ".jpg": re.compile(r"\.jpg\b", re.IGNORECASE),
+    ".jpeg": re.compile(r"\.jpeg\b", re.IGNORECASE),
+    ".png": re.compile(r"\.png\b", re.IGNORECASE),
+    "images1.vinted.net": re.compile(r"\bimages1\.vinted\.net\b", re.IGNORECASE),
+    "images2.vinted.net": re.compile(r"\bimages2\.vinted\.net\b", re.IGNORECASE),
+    "vinted.net": re.compile(r"\bvinted\.net\b", re.IGNORECASE),
+    "cdn": re.compile(r"\bcdn\b", re.IGNORECASE),
+}
+
+_TIMESTAMP_TOKEN_PATTERNS = {
+    "created_at": re.compile(r"\bcreated_at\b", re.IGNORECASE),
+    "updated_at": re.compile(r"\bupdated_at\b", re.IGNORECASE),
+    "uploaded_at": re.compile(r"\buploaded_at\b", re.IGNORECASE),
+    "listed_at": re.compile(r"\blisted_at\b", re.IGNORECASE),
+    "bumped_at": re.compile(r"\bbumped_at\b", re.IGNORECASE),
+    "timestamp": re.compile(r"\btimestamp\b", re.IGNORECASE),
+    "time": re.compile(r"\btime\b", re.IGNORECASE),
+    "published_at": re.compile(r"\bpublished_at\b", re.IGNORECASE),
+    "photo_high_resolution.timestamp": re.compile(
+        r"\bphoto_high_resolution\b.{0,80}\btimestamp\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+}
+
+_DISTANCE_BUCKETS = ("0-20", "21-50", "51-100", ">100", "none")
 
 
 def _empty_item_field_diagnostics() -> dict:
@@ -146,7 +182,249 @@ def extract_hydration_items(
         diagnostics.clear()
         diagnostics.update(field_sequence_diagnostics)
         diagnostics["item_field_diagnostics"] = item_field_diagnostics
+        diagnostics["media_token_diagnostics"] = collect_hydration_media_token_diagnostics(
+            chunks,
+            domain=domain,
+        )
     return normalized
+
+
+def _decoded_next_f_chunk(chunk: str) -> str:
+    return chunk.replace('\\"', '"').replace('\\\\', '\\')
+
+
+def _pattern_matches(text: str, patterns: dict[str, re.Pattern[str]]) -> list[tuple[int, str]]:
+    matches: list[tuple[int, str]] = []
+    for name, pattern in patterns.items():
+        matches.extend((match.start(), name) for match in pattern.finditer(text))
+    return sorted(matches)
+
+
+def _token_distance(text: str, first_offset: int, second_offset: int) -> int:
+    start, end = sorted((first_offset, second_offset))
+    return len(re.findall(r"/items/\d+|[A-Za-z0-9_]+", text[start:end]))
+
+
+def _distance_bucket(distance: int | None) -> str:
+    if distance is None:
+        return "none"
+    if distance <= 20:
+        return "0-20"
+    if distance <= 50:
+        return "21-50"
+    if distance <= 100:
+        return "51-100"
+    return ">100"
+
+
+def _anchor_token_diagnostics(
+    text: str,
+    anchor_offset: int,
+    matches: list[tuple[int, str]],
+) -> tuple[str, list[str]]:
+    if not matches:
+        return "none", []
+    distances = [(_token_distance(text, anchor_offset, offset), name) for offset, name in matches]
+    nearest = min(distance for distance, _ in distances)
+    nearby_names = sorted({name for distance, name in distances if distance <= 100})
+    return _distance_bucket(nearest), nearby_names
+
+
+def collect_hydration_media_token_diagnostics(
+    html_or_chunks: str | list[str],
+    *,
+    domain: str | None = None,
+    max_samples: int = 10,
+) -> dict:
+    """Return bounded media/time marker counts without returning marker values."""
+    chunks = (
+        extract_next_f_chunks(html_or_chunks)
+        if isinstance(html_or_chunks, str)
+        else list(html_or_chunks)
+    )
+    diagnostics = {
+        "chunks_scanned": len(chunks),
+        "chunks_with_item_paths": 0,
+        "chunks_with_image_tokens": 0,
+        "chunks_with_timestamp_tokens": 0,
+        "chunks_with_vinted_cdn_image_urls": 0,
+        "image_token_presence": {name: 0 for name in _IMAGE_TOKEN_PATTERNS},
+        "timestamp_token_presence": {name: 0 for name in _TIMESTAMP_TOKEN_PATTERNS},
+        "image_anchor_distance_buckets": {bucket: 0 for bucket in _DISTANCE_BUCKETS},
+        "timestamp_anchor_distance_buckets": {bucket: 0 for bucket in _DISTANCE_BUCKETS},
+        "sample_anchor_windows": [],
+    }
+    seen_item_ids: set[str] = set()
+
+    for chunk in chunks:
+        decoded = _decoded_next_f_chunk(chunk)
+        anchors = list(_ITEM_PATH_PATTERN.finditer(decoded))
+        image_matches = _pattern_matches(decoded, _IMAGE_TOKEN_PATTERNS)
+        timestamp_matches = _pattern_matches(decoded, _TIMESTAMP_TOKEN_PATTERNS)
+        diagnostics["chunks_with_item_paths"] += int(
+            bool(_ITEMS_LITERAL_PATTERN.search(decoded))
+        )
+        diagnostics["chunks_with_image_tokens"] += int(bool(image_matches))
+        diagnostics["chunks_with_timestamp_tokens"] += int(bool(timestamp_matches))
+        diagnostics["chunks_with_vinted_cdn_image_urls"] += int(
+            bool(
+                _IMAGE_TOKEN_PATTERNS["images1.vinted.net"].search(decoded)
+                or _IMAGE_TOKEN_PATTERNS["images2.vinted.net"].search(decoded)
+            )
+        )
+        for name, pattern in _IMAGE_TOKEN_PATTERNS.items():
+            diagnostics["image_token_presence"][name] += len(pattern.findall(decoded))
+        for name, pattern in _TIMESTAMP_TOKEN_PATTERNS.items():
+            diagnostics["timestamp_token_presence"][name] += len(pattern.findall(decoded))
+
+        for anchor in anchors:
+            item_id = anchor.group("id")
+            if item_id in seen_item_ids:
+                continue
+            seen_item_ids.add(item_id)
+            image_bucket, image_names = _anchor_token_diagnostics(
+                decoded,
+                anchor.start(),
+                image_matches,
+            )
+            timestamp_bucket, timestamp_names = _anchor_token_diagnostics(
+                decoded,
+                anchor.start(),
+                timestamp_matches,
+            )
+            diagnostics["image_anchor_distance_buckets"][image_bucket] += 1
+            diagnostics["timestamp_anchor_distance_buckets"][timestamp_bucket] += 1
+            if len(diagnostics["sample_anchor_windows"]) < max(0, min(max_samples, 20)):
+                diagnostics["sample_anchor_windows"].append(
+                    {
+                        "item_id": item_id,
+                        "domain": domain,
+                        "has_image_token_near_anchor": image_bucket in {"0-20", "21-50", "51-100"},
+                        "has_timestamp_token_near_anchor": timestamp_bucket in {"0-20", "21-50", "51-100"},
+                        "nearest_image_token_distance_bucket": image_bucket,
+                        "nearest_timestamp_token_distance_bucket": timestamp_bucket,
+                        "image_field_names_near_anchor": image_names,
+                        "timestamp_field_names_near_anchor": timestamp_names,
+                    }
+                )
+    return diagnostics
+
+
+class _DetailMetadataParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.meta: list[dict[str, str]] = []
+        self.json_ld: list[str] = []
+        self._in_json_ld = False
+        self._script_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {key.casefold(): value or "" for key, value in attrs}
+        if tag.casefold() == "meta":
+            self.meta.append(values)
+        elif tag.casefold() == "script" and values.get("type", "").casefold() == "application/ld+json":
+            self._in_json_ld = True
+            self._script_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_json_ld:
+            self._script_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() == "script" and self._in_json_ld:
+            self.json_ld.append("".join(self._script_parts))
+            self._in_json_ld = False
+            self._script_parts = []
+
+
+def _walk_json_objects(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_json_objects(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json_objects(child)
+
+
+def analyze_item_detail_html(html: str) -> dict:
+    """Inspect public item-page metadata without returning HTML or metadata values."""
+    parser = _DetailMetadataParser()
+    try:
+        parser.feed(html or "")
+    except Exception:
+        return {
+            "image_present": False,
+            "image_sources": [],
+            "timestamp_present": False,
+            "timestamp": None,
+            "timestamp_source": None,
+            "hydration_image_tokens_present": False,
+            "safe_error": "detail_html_parse_failed",
+        }
+
+    image_sources: set[str] = set()
+    timestamp: datetime | None = None
+    timestamp_source: str | None = None
+    timestamp_meta_names = {
+        "article:published_time",
+        "date",
+        "datepublished",
+        "datecreated",
+        "uploaddate",
+        "listed_at",
+        "uploaded_at",
+    }
+    for meta in parser.meta:
+        name = (meta.get("property") or meta.get("name") or meta.get("itemprop") or "").casefold()
+        content = meta.get("content")
+        if name == "og:image" and content:
+            image_sources.add("og:image")
+        elif name == "twitter:image" and content:
+            image_sources.add("twitter:image")
+        if timestamp is None and name in timestamp_meta_names:
+            parsed = _parse_hydration_timestamp(content)
+            if parsed is not None:
+                timestamp = parsed
+                timestamp_source = f"meta:{name}"
+
+    json_ld_timestamp_keys = {
+        "datepublished",
+        "datecreated",
+        "uploaddate",
+        "listed_at",
+        "uploaded_at",
+    }
+    for raw_json_ld in parser.json_ld:
+        try:
+            payload = json.loads(raw_json_ld)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for obj in _walk_json_objects(payload):
+            for key, value in obj.items():
+                key_text = str(key).casefold()
+                if key_text == "image" and value not in (None, "", [], {}):
+                    image_sources.add("json_ld:image")
+                if timestamp is None and key_text in json_ld_timestamp_keys:
+                    parsed = _parse_hydration_timestamp(value)
+                    if parsed is not None:
+                        timestamp = parsed
+                        timestamp_source = f"json_ld:{key_text}"
+
+    hydration_image_tokens_present = any(
+        pattern.search(html or "")
+        for name, pattern in _IMAGE_TOKEN_PATTERNS.items()
+        if name in {"photo", "photos", "image", "images", "high_resolution"}
+    )
+    return {
+        "image_present": bool(image_sources),
+        "image_sources": sorted(image_sources),
+        "timestamp_present": timestamp is not None,
+        "timestamp": timestamp.isoformat() if timestamp else None,
+        "timestamp_source": timestamp_source,
+        "hydration_image_tokens_present": hydration_image_tokens_present,
+        "safe_error": None,
+    }
 
 def _is_vinted_item(obj: dict) -> bool:
     """Strict signature check for Vinted items."""

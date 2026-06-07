@@ -84,7 +84,9 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 - After Railway redeploy, verify /monitors edit close behavior with real monitors: change draft fields, close without submit, reopen, and confirm persisted name/URL/interval/domains remain unchanged.
 - After Railway redeploy, verify monitor cards show selected target domains and long domain lists truncate without horizontal overflow.
 - After Railway redeploy, verify /settings shows classified Telegram test errors for missing/invalid credentials without exposing token or chat values.
-- Consider extracting a typed frontend API client to reduce duplicated CSRF/fetch/error handling across components.
+- Continue migrating remaining settings/topic/dashboard mutations to the typed CSRF-aware frontend API client; monitor mutations now use it.
+- After explicit deployment approval, inspect monitor 22 full-cycle `item_field_diagnostics` to determine whether catalog hydration actually contains supported photo or timestamp fields. Do not infer listing freshness when timestamp counters remain zero.
+- After explicit deployment approval, inspect monitor 22 `media_token_diagnostics` per domain. Only add catalog photo extraction when a marker/value can be structurally tied to the same `/items/<id>` record; otherwise evaluate optional detail-page enrichment behind a feature flag.
 - After explicit deployment approval, rerun monitor 22 dry-run for `vinted.pl`. Success requires normalized hydration records near the unique item-path count, canonical IDs matching `/items/<id>`, no duplicate URLs with different IDs, `after_filters > 0`, and all side-effect flags false.
 - After explicit deployment approval, call `POST /api/v1/diagnostics/monitors/22/dry-run-full-cycle` before enabling a real scheduler check; review per-domain seen/found/new counts and require all side-effect flags to remain false.
 - Deployment gate for full-cycle diagnostics: verify `/api/health`, then run monitor 22 with `max_domains=8`, `max_items_per_domain=96`, and `sample_limit=10`; treat `safe_error=full_cycle_dry_run_failed` or any domain error as a blocker for a real monitor check.

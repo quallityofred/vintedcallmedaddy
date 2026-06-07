@@ -100,6 +100,7 @@ class FetchDiagnostics:
     literal_marker_samples: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     literal_marker_chunk_summary: Dict[str, Any] = field(default_factory=dict)
     item_field_diagnostics: Dict[str, Any] = field(default_factory=dict)
+    media_token_diagnostics: Dict[str, Any] = field(default_factory=dict)
     safe_error: Optional[str] = None
 
 @dataclass
@@ -299,6 +300,10 @@ async def perform_monitor_dry_run(
                         "item_field_diagnostics",
                         {},
                     ),
+                    media_token_diagnostics=parser_diagnostics.get(
+                        "media_token_diagnostics",
+                        {},
+                    ),
                     safe_error=literal_diag.get("safe_error"),
                 )
             else:
@@ -344,6 +349,10 @@ async def perform_monitor_dry_run(
                     ),
                     "item_field_diagnostics": parser_diagnostics.get(
                         "item_field_diagnostics",
+                        {},
+                    ),
+                    "media_token_diagnostics": parser_diagnostics.get(
+                        "media_token_diagnostics",
                         {},
                     ),
                 })

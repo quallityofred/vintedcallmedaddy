@@ -79,8 +79,13 @@ async def test_full_cycle_dry_run_exposes_safe_hydration_field_diagnostics():
         )
 
     fields = result.pipeline_counts_by_domain["vinted.pl"]["item_field_diagnostics"]
+    media = result.pipeline_counts_by_domain["vinted.pl"]["media_token_diagnostics"]
     assert fields["photo_url_missing"] == 1
     assert fields["timestamp_field_presence"]["listed_at"] == 1
+    assert media["chunks_scanned"] == 1
+    assert media["chunks_with_item_paths"] == 1
+    assert media["chunks_with_timestamp_tokens"] == 1
+    assert media["sample_anchor_windows"][0]["item_id"] == "9100000001"
     sample = result.samples_by_domain["vinted.pl"][0]
     assert sample.has_photo is False
     assert sample.timestamp == "2026-06-07T12:34:56+00:00"
