@@ -33,13 +33,25 @@ class VintedCatalogHTMLParser(HTMLParser):
         self.in_title = False
         self.in_price = False
         self.current_tag = None
+        # Diagnostics
+        self.diagnostics = {
+            "card_start_count": 0,
+            "card_end_count": 0,
+            "cards_with_item_link": 0,
+            "cards_with_photo": 0,
+            "cards_with_title": 0,
+            "cards_with_price": 0,
+            "cards_emitted": 0,
+        }
 
     def handle_starttag(self, tag, attrs):
         self.current_tag = tag
         attr_dict = dict(attrs)
 
-        if tag == 'div' and attr_dict.get('data-testid') == 'item-card':
+        # Support both new and test structures
+        if tag == 'div' and ('new-item-box' in attr_dict.get('class', '') or attr_dict.get('data-testid') == 'item-card'):
             self.in_item_card = True
+            self.diagnostics["card_start_count"] += 1
             self.current_item = {'photo_url': '', 'title': 'Unknown', 'price': 0.0, 'currency': 'PLN'}
 
         if self.in_item_card:
@@ -49,16 +61,23 @@ class VintedCatalogHTMLParser(HTMLParser):
                 self.current_item['url'] = f"https://www.vinted.pl{url}"
                 match = re.search(r'/items/(\d+)-', url)
                 self.current_item['id'] = match.group(1) if match else "0"
+                self.diagnostics["cards_with_item_link"] += 1
 
             if tag == 'img' and 'src' in attr_dict:
                 self.current_item['photo_url'] = attr_dict['src']
+                self.diagnostics["cards_with_photo"] += 1
 
-            if tag == 'div' and attr_dict.get('data-testid') == 'item-title':
+            # Support both new and test selectors
+            class_attr = attr_dict.get('class', '')
+            testid_attr = attr_dict.get('data-testid', '')
+
+            if tag == 'div' and ('item-title' in class_attr or testid_attr == 'item-title'):
                 self.in_title = True
+                self.diagnostics["cards_with_title"] += 1
 
-            if tag == 'div' and attr_dict.get('data-testid') == 'item-price':
+            if tag == 'div' and ('item-price' in class_attr or testid_attr == 'item-price'):
                 self.in_price = True
-
+                self.diagnostics["cards_with_price"] += 1
     def handle_data(self, data):
         if self.in_item_card:
             if self.in_title:
@@ -79,8 +98,10 @@ class VintedCatalogHTMLParser(HTMLParser):
                 self.in_price = False
             else:
                 self.items.append(self.current_item)
+                self.diagnostics["cards_emitted"] += 1
                 self.in_item_card = False
                 self.current_item = None
+                self.diagnostics["card_end_count"] += 1
 
 def parse_catalog_ssr_html(html: str) -> List[Dict[str, Any]]:
     parser = VintedCatalogHTMLParser()
