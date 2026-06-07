@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.scheduler.dry_run import (
     perform_monitor_dry_run,
     perform_monitor_full_cycle_dry_run,
+    perform_monitor_baseline_seen,
 )
 from app.scraper.client import VintedClient, TokenBucketLimiter
 
@@ -277,26 +278,54 @@ async def post_monitor_seen_baseline_no_notify(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
         
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.models import SeenItem
+    from datetime import datetime, timezone
+
     client = None
     try:
         rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
         client = VintedClient(rate_limiter=rate_limiter)
         
-        dry_run_res = await perform_monitor_full_cycle_dry_run(
+        dry_run_res = await perform_monitor_baseline_seen(
             monitor,
             client,
             db,
             max_domains=max_domains,
             max_items_per_domain=max_items_per_domain,
             target_domain=domain,
-            include_samples=True,
-            sample_limit=20,
-            telegram_enabled=False,
+            dry_run=dry_run,
         )
+        
+        created_seen_items_total = 0
+        if not dry_run:
+            now = datetime.now(timezone.utc)
+            seen_items_to_insert = []
+            for d, items in dry_run_res.get("samples_by_domain", {}).items():
+                for item in items:
+                    seen_items_to_insert.append({
+                        "monitor_id": monitor_id,
+                        "user_id": monitor.user_id,
+                        "vinted_item_id": int(item["id"]),
+                        "domain": d,
+                        "seen_at": now,
+                    })
+            if seen_items_to_insert:
+                stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(
+                    index_elements=["monitor_id", "vinted_item_id", "domain"]
+                )
+                res = await db.execute(stmt)
+                created_seen_items_total = res.rowcount
+            await db.commit()
 
+        # Add SeenItem write count to summary if needed
+        # perform_monitor_baseline_seen already returns a dict, no asdict() needed
+        res_dict = dry_run_res
+        res_dict["summary"]["created_seen_items_total"] = created_seen_items_total
+        res_dict["side_effects"] = {"writes_seen_items": (created_seen_items_total > 0)}
         return JSONResponse(
             status_code=200,
-            content=jsonable_encoder(dataclasses.asdict(dry_run_res)),
+            content=jsonable_encoder(res_dict),
         )
     except Exception as exc:
         logger.exception("Baseline seen failed")
