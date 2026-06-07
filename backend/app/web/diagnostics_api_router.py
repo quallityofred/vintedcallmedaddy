@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Optional
@@ -11,7 +11,7 @@ from app.models import User, Monitor
 from app.scheduler.diagnostics import registry
 from app.scraper.source_selector import should_use_hydration_source
 from app.config import get_settings
-from app.scheduler.dry_run import perform_monitor_dry_run
+from app.scheduler.dry_run import perform_monitor_dry_run, perform_monitor_full_cycle_dry_run
 from app.scraper.client import VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 
@@ -121,5 +121,50 @@ async def post_monitor_dry_run_source(
     except Exception as e:
         logger.exception("Dry-run failed")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await client.close()
+
+
+@router.post("/monitors/{monitor_id}/dry-run-full-cycle")
+async def post_monitor_full_cycle_dry_run(
+    monitor_id: int,
+    domain: str | None = None,
+    max_domains: int = Query(default=8, ge=1, le=8),
+    max_items_per_domain: int = Query(default=96, ge=1, le=120),
+    include_samples: bool = True,
+    sample_limit: int = Query(default=10, ge=0, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Simulate a complete monitor cycle without scheduler or database side effects."""
+    settings = get_settings()
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+
+    rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
+    client = VintedClient(rate_limiter=rate_limiter)
+    try:
+        dry_run = await perform_monitor_full_cycle_dry_run(
+            monitor,
+            client,
+            db,
+            max_domains=max_domains,
+            max_items_per_domain=max_items_per_domain,
+            target_domain=domain,
+            include_samples=include_samples,
+            sample_limit=sample_limit,
+            telegram_enabled=bool(user.is_telegram_enabled),
+        )
+        import dataclasses
+        return dataclasses.asdict(dry_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        logger.exception("Full-cycle dry-run failed")
+        raise HTTPException(status_code=500, detail="Full-cycle dry-run failed")
     finally:
         await client.close()

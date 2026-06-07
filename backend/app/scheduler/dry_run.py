@@ -3,7 +3,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
-from app.models import Monitor
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import FoundItem, Monitor, SeenItem
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
@@ -113,6 +116,54 @@ class MonitorDryRunResult:
         "enqueues_notifications": False,
         "sends_telegram": False,
         "calls_vinted": True
+    })
+
+
+@dataclass
+class FullCycleDomainCounts:
+    raw_fetched: int
+    converted: int
+    after_filters: int
+    already_seen: int = 0
+    already_found: int = 0
+    would_create_seen_items: int = 0
+    would_create_found_items: int = 0
+    would_enqueue_notifications: int = 0
+    would_send_telegram: int = 0
+    would_be_new_items: int = 0
+    seen_boundary_hit: bool = False
+    stopped_at_seen_item_id: Optional[str] = None
+
+
+@dataclass
+class FullCycleSimulationSamples:
+    sample_already_seen: List[DryRunItem] = field(default_factory=list)
+    sample_already_found: List[DryRunItem] = field(default_factory=list)
+    sample_would_be_new: List[DryRunItem] = field(default_factory=list)
+
+
+@dataclass
+class MonitorFullCycleDryRunResult:
+    monitor_id: int
+    selected_source: str
+    reason: str
+    selected_domains: List[str]
+    dry_run_domains: List[str]
+    summary: Dict[str, int]
+    counts_by_domain: Dict[str, FullCycleDomainCounts]
+    pipeline_counts_by_domain: Dict[str, Dict[str, Any]]
+    seen_found_simulation_by_domain: Dict[str, FullCycleSimulationSamples]
+    samples_by_domain: Dict[str, List[DryRunItem]]
+    errors_by_domain: Dict[str, str]
+    side_effects: Dict[str, bool] = field(default_factory=lambda: {
+        "runs_scheduler_check": False,
+        "writes_seen_items": False,
+        "writes_found_items": False,
+        "updates_monitor": False,
+        "enqueues_notifications": False,
+        "sends_telegram": False,
+        "calls_vinted": True,
+        "reads_database": True,
     })
 
 async def perform_monitor_dry_run(
@@ -292,7 +343,8 @@ async def perform_monitor_dry_run(
 
         except Exception as e:
             logger.exception("Dry-run failed for domain=%s", domain)
-            errors_by_domain[domain] = str(e)
+            safe_error = type(e).__name__
+            errors_by_domain[domain] = safe_error
             if domain not in fetch_diagnostics_by_domain:
                  fetch_diagnostics_by_domain[domain] = FetchDiagnostics(
                     requested_domain=domain,
@@ -311,7 +363,7 @@ async def perform_monitor_dry_run(
                     chunks_with_items_path_marker=0,
                     candidate_item_objects_count=0,
                     parser_strategy_used="none",
-                    safe_error=str(e)
+                    safe_error=safe_error
                 )
 
     reason = "catalog_filter_detected" if source == "hydration" else "brand_only_api_path"
@@ -330,4 +382,152 @@ async def perform_monitor_dry_run(
         errors_by_domain=errors_by_domain,
         pipeline_counts_by_domain=pipeline_counts_by_domain,
         fetch_diagnostics_by_domain=fetch_diagnostics_by_domain
+    )
+
+
+async def _load_existing_item_ids(
+    db: AsyncSession,
+    *,
+    monitor_id: int,
+    domain: str,
+    item_ids: set[int],
+) -> tuple[set[int], set[int]]:
+    """Read existing delta state without attaching or mutating ORM objects."""
+    if not item_ids:
+        return set(), set()
+
+    seen_result = await db.execute(
+        select(SeenItem.vinted_item_id).where(
+            SeenItem.monitor_id == monitor_id,
+            SeenItem.domain == domain,
+            SeenItem.vinted_item_id.in_(item_ids),
+        )
+    )
+    found_result = await db.execute(
+        select(FoundItem.vinted_item_id).where(
+            FoundItem.monitor_id == monitor_id,
+            FoundItem.vinted_item_id.in_(item_ids),
+        )
+    )
+    return (
+        {int(row[0]) for row in seen_result.fetchall()},
+        {int(row[0]) for row in found_result.fetchall()},
+    )
+
+
+async def perform_monitor_full_cycle_dry_run(
+    monitor: Monitor,
+    client: VintedClient,
+    db: AsyncSession,
+    *,
+    max_domains: int = 8,
+    max_items_per_domain: int = 96,
+    target_domain: Optional[str] = None,
+    include_samples: bool = True,
+    sample_limit: int = 10,
+    telegram_enabled: bool = False,
+) -> MonitorFullCycleDryRunResult:
+    """Simulate scheduler delta decisions using fetches and read-only DB queries."""
+    source_result = await perform_monitor_dry_run(
+        monitor,
+        client,
+        max_domains=max_domains,
+        max_items_per_domain=max_items_per_domain,
+        target_domain=target_domain,
+    )
+
+    counts_by_domain: Dict[str, FullCycleDomainCounts] = {}
+    simulations: Dict[str, FullCycleSimulationSamples] = {}
+    samples_by_domain: Dict[str, List[DryRunItem]] = {}
+    found_ids_across_domains: set[int] = set()
+
+    summary = {
+        "domains_checked": len(source_result.dry_run_domains),
+        "raw_fetched_total": 0,
+        "after_filters_total": 0,
+        "already_seen_total": 0,
+        "already_found_total": 0,
+        "would_create_seen_items_total": 0,
+        "would_create_found_items_total": 0,
+        "would_enqueue_notifications_total": 0,
+        "would_send_telegram_total": 0,
+    }
+
+    for domain in source_result.dry_run_domains:
+        pipeline = source_result.pipeline_counts_by_domain.get(domain, {})
+        domain_items = source_result.samples_by_domain.get(domain, [])[:max_items_per_domain]
+        item_ids = {int(item.id) for item in domain_items}
+        seen_ids, found_ids = await _load_existing_item_ids(
+            db,
+            monitor_id=monitor.id,
+            domain=domain,
+            item_ids=item_ids,
+        )
+        found_ids_across_domains.update(found_ids)
+
+        counts = FullCycleDomainCounts(
+            raw_fetched=int(pipeline.get("raw_fetched", 0)),
+            converted=int(pipeline.get("converted", 0)),
+            after_filters=int(pipeline.get("after_filters", 0)),
+        )
+        simulation = FullCycleSimulationSamples()
+        is_cold_start = monitor.last_check_at is None
+
+        for item in domain_items:
+            item_id = int(item.id)
+            if item_id in seen_ids:
+                counts.already_seen += 1
+                if len(simulation.sample_already_seen) < sample_limit:
+                    simulation.sample_already_seen.append(item)
+                if not is_cold_start:
+                    counts.seen_boundary_hit = True
+                    counts.stopped_at_seen_item_id = item.id
+                    break
+                continue
+
+            if item_id in found_ids_across_domains:
+                counts.already_found += 1
+                counts.would_create_seen_items += 1
+                if len(simulation.sample_already_found) < sample_limit:
+                    simulation.sample_already_found.append(item)
+                continue
+
+            counts.would_create_seen_items += 1
+            if is_cold_start:
+                continue
+
+            found_ids_across_domains.add(item_id)
+            counts.would_be_new_items += 1
+            counts.would_create_found_items += 1
+            counts.would_enqueue_notifications += 1
+            if telegram_enabled:
+                counts.would_send_telegram += 1
+            if len(simulation.sample_would_be_new) < sample_limit:
+                simulation.sample_would_be_new.append(item)
+
+        counts_by_domain[domain] = counts
+        simulations[domain] = simulation
+        samples_by_domain[domain] = domain_items[:sample_limit] if include_samples else []
+
+        summary["raw_fetched_total"] += counts.raw_fetched
+        summary["after_filters_total"] += counts.after_filters
+        summary["already_seen_total"] += counts.already_seen
+        summary["already_found_total"] += counts.already_found
+        summary["would_create_seen_items_total"] += counts.would_create_seen_items
+        summary["would_create_found_items_total"] += counts.would_create_found_items
+        summary["would_enqueue_notifications_total"] += counts.would_enqueue_notifications
+        summary["would_send_telegram_total"] += counts.would_send_telegram
+
+    return MonitorFullCycleDryRunResult(
+        monitor_id=monitor.id,
+        selected_source=source_result.selected_source,
+        reason=source_result.reason,
+        selected_domains=source_result.selected_domains,
+        dry_run_domains=source_result.dry_run_domains,
+        summary=summary,
+        counts_by_domain=counts_by_domain,
+        pipeline_counts_by_domain=source_result.pipeline_counts_by_domain,
+        seen_found_simulation_by_domain=simulations,
+        samples_by_domain=samples_by_domain,
+        errors_by_domain=source_result.errors_by_domain,
     )

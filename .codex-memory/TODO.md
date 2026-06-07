@@ -86,6 +86,7 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 - After Railway redeploy, verify /settings shows classified Telegram test errors for missing/invalid credentials without exposing token or chat values.
 - Consider extracting a typed frontend API client to reduce duplicated CSRF/fetch/error handling across components.
 - After explicit deployment approval, rerun monitor 22 dry-run for `vinted.pl`. Success requires normalized hydration records near the unique item-path count, canonical IDs matching `/items/<id>`, no duplicate URLs with different IDs, `after_filters > 0`, and all side-effect flags false.
+- After explicit deployment approval, call `POST /api/v1/diagnostics/monitors/22/dry-run-full-cycle` before enabling a real scheduler check; review per-domain seen/found/new counts and require all side-effect flags to remain false.
 
 ## Graph Metadata Validation
 

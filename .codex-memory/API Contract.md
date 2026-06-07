@@ -315,3 +315,10 @@ Core Next-ready endpoints are implemented for auth/register/CSRF, settings/Teleg
 - Backend `/` service JSON also includes `health_schema_version` and `code_version` when it returns JSON instead of redirecting to `FRONTEND_URL`.
 - `GET /health` remains a minimal liveness probe with `status` and `service` only, so Railway can check liveness without waiting for optional background startup work.
 - If production `/api/health` returns only the old `status`, `scheduler_jobs`, and `bots_running` shape, the public backend is not serving the current readiness build.
+
+## [2026-06-07] Update: Full-cycle monitor dry-run diagnostics
+
+- `POST /api/v1/diagnostics/monitors/{monitor_id}/dry-run-full-cycle` is authenticated and owner-scoped like the existing monitor diagnostics endpoints.
+- Query parameters: optional `domain`, `max_domains` (default/max `8`), `max_items_per_domain` (default `96`, max `120`), `include_samples` (default `true`), and `sample_limit` (default `10`, max `20`).
+- The response reports source selection, per-domain fetch/filter pipeline counts, domain-aware already-seen rows, monitor-scoped already-found rows, cold-start/seen-boundary simulation, would-create/would-enqueue counts, bounded public item samples, and safe per-domain errors.
+- This endpoint calls Vinted and reads the database, but never runs the scheduler check, writes seen/found rows, updates the monitor, enqueues notifications, or sends Telegram.

@@ -256,6 +256,7 @@ tags:
 - 2026-06-06: Updated scraper/filter regression tests so missing `brand_id` is skipped for brand monitors. Added detail-fetch HTTP budget coverage in `backend/tests/test_scraper_http_budget.py` and config default/env tests for the detail guard settings.
 - 2026-06-06: Verification snapshot for candidate detail guard: focused requested backend tests passed. `poetry run pytest -q --ignore=tests/test_full_reset_create_admin.py --ignore=test_api_keys.py --ignore=test_api_keys_v2.py --ignore=tests/test_telegram_topics.py` -> 192 passed. Raw full run still fails on two untracked local API-key artifacts and two out-of-scope Telegram topic send-failure status assertions.
 - 2026-06-07: Added synthetic path-ID hydration fallback coverage for mismatched generic IDs, duplicate paths/URLs, missing required fields, unknown titles, malformed prices, multiple-record ordering, structured JSON compatibility, and normalizer canonicalization. Dry-run tests now assert field-sequence counters, read-only side effects, lazy optional diagnostics, and backend import safety; the endpoint client mock was corrected so tests no longer make an unintended public Vinted request.
+- 2026-06-07: Added full-cycle dry-run tests for auth, unselected domains, domain-aware seen boundaries, existing found rows, cold-start seen-only simulation, no monitor mutation, explicit side-effect flags, and a Telegram send tripwire. The known `test_seen_lookup_is_domain_aware` in-memory SQLite fixture can still fail before test logic with `no such table: users`.
 
 ## Related Frontend Notes
 
