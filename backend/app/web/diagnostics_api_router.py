@@ -1,6 +1,9 @@
 from __future__ import annotations
 import logging
+import dataclasses
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Optional
@@ -15,8 +18,7 @@ from app.scheduler.dry_run import (
     perform_monitor_dry_run,
     perform_monitor_full_cycle_dry_run,
 )
-from app.scraper.client import VintedClient
-from app.scraper.rate_limiter import TokenBucketLimiter
+from app.scraper.client import VintedClient, TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
@@ -143,8 +145,7 @@ async def post_monitor_dry_run_source(
             max_items_per_domain=min(max_items_per_domain, 20),
             target_domain=domain
         )
-        import dataclasses
-        return dataclasses.asdict(res)
+        return JSONResponse(status_code=200, content=jsonable_encoder(dataclasses.asdict(res)))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -154,7 +155,7 @@ async def post_monitor_dry_run_source(
         await client.close()
 
 
-@router.post("/monitors/{monitor_id}/dry-run-full-cycle")
+@router.post("/monitors/{monitor_id}/dry-run-full-cycle", response_model=None)
 async def post_monitor_full_cycle_dry_run(
     monitor_id: int,
     domain: str | None = None,
@@ -189,8 +190,10 @@ async def post_monitor_full_cycle_dry_run(
             sample_limit=sample_limit,
             telegram_enabled=bool(user.is_telegram_enabled),
         )
-        import dataclasses
-        return dataclasses.asdict(dry_run)
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder(dataclasses.asdict(dry_run)),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -199,7 +202,10 @@ async def post_monitor_full_cycle_dry_run(
             monitor_id,
             type(exc).__name__,
         )
-        return _create_failed_full_cycle_response(monitor_id, exc)
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder(_create_failed_full_cycle_response(monitor_id, exc)),
+        )
     finally:
         if client is not None:
             try:
