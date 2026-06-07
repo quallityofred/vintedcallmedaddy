@@ -257,3 +257,53 @@ async def post_monitor_full_cycle_dry_run(
                     monitor_id,
                     type(exc).__name__,
                 )
+
+@router.post("/monitors/{monitor_id}/baseline-seen-no-notify", response_model=None)
+async def post_monitor_seen_baseline_no_notify(
+    monitor_id: int,
+    domain: str | None = None,
+    max_domains: int = Query(default=1, ge=1, le=2),
+    max_items_per_domain: int = Query(default=96, ge=1, le=120),
+    dry_run: bool = True,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Create SeenItem entries for monitor results without creating FoundItems or notifications."""
+    settings = get_settings()
+    result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+        
+    client = None
+    try:
+        rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
+        client = VintedClient(rate_limiter=rate_limiter)
+        
+        dry_run_res = await perform_monitor_full_cycle_dry_run(
+            monitor,
+            client,
+            db,
+            max_domains=max_domains,
+            max_items_per_domain=max_items_per_domain,
+            target_domain=domain,
+            include_samples=True,
+            sample_limit=20,
+            telegram_enabled=False,
+        )
+
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder(dataclasses.asdict(dry_run_res)),
+        )
+    except Exception as exc:
+        logger.exception("Baseline seen failed")
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder(_create_failed_full_cycle_response(monitor_id, exc)),
+        )
+    finally:
+        if client is not None:
+            await client.close()
