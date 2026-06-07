@@ -209,7 +209,7 @@ async def test_baseline_seen_then_full_cycle_reports_already_seen(route_context)
 
     with patch("app.web.diagnostics_api_router.VintedClient") as client_class, patch(
         "app.scheduler.dry_run.perform_monitor_dry_run",
-        return_value=one_item_result,
+        side_effect=lambda *args, **kwargs: one_item_result,
     ):
         client_class.return_value.close = AsyncMock()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

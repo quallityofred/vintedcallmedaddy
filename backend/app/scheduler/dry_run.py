@@ -185,7 +185,10 @@ async def perform_monitor_dry_run(
     client: VintedClient,
     max_domains: int = 1,
     max_items_per_domain: int = 10,
-    target_domain: Optional[str] = None
+    target_domain: Optional[str] = None,
+    include_media_diagnostics: bool = False,
+    media_diag_max_items: int = 10,
+    media_diag_max_chunks: int = 20,
 ) -> MonitorDryRunResult:
     """
     Perform a safe dry-run of a monitor check.
@@ -232,11 +235,17 @@ async def perform_monitor_dry_run(
                 
                 chunks = extract_next_f_chunks(html)
                 parser_diagnostics: Dict[str, Any] = {}
+                
+                # Bounded hydration diagnostics
                 hydration_items = extract_hydration_items(
                     html,
                     domain=domain,
                     diagnostics=parser_diagnostics,
+                    include_media_diagnostics=include_media_diagnostics,
+                    media_diag_max_items=media_diag_max_items,
+                    media_diag_max_chunks=media_diag_max_chunks,
                 )
+                
                 analysis = analyze_hydration_html(html)
                 candidate_samples = get_candidate_samples(html, max_samples=5)
                 if not candidate_samples:
@@ -246,6 +255,11 @@ async def perform_monitor_dry_run(
 
                 raw_count = len(hydration_items)
                 items = [hydration_record_to_vinted_item(r, domain) for r in hydration_items]
+                
+                media_token_diagnostics = parser_diagnostics.get(
+                    "media_token_diagnostics",
+                    {"enabled": False},
+                )
                 
                 # Fetch diagnostics
                 fetch_diagnostics_by_domain[domain] = FetchDiagnostics(
@@ -300,10 +314,7 @@ async def perform_monitor_dry_run(
                         "item_field_diagnostics",
                         {},
                     ),
-                    media_token_diagnostics=parser_diagnostics.get(
-                        "media_token_diagnostics",
-                        {},
-                    ),
+                    media_token_diagnostics=media_token_diagnostics,
                     safe_error=literal_diag.get("safe_error"),
                 )
             else:
@@ -353,7 +364,7 @@ async def perform_monitor_dry_run(
                     ),
                     "media_token_diagnostics": parser_diagnostics.get(
                         "media_token_diagnostics",
-                        {},
+                        {"enabled": False},
                     ),
                 })
             
@@ -458,6 +469,9 @@ async def perform_monitor_full_cycle_dry_run(
     target_domain: Optional[str] = None,
     include_samples: bool = True,
     sample_limit: int = 10,
+    include_media_diagnostics: bool = False,
+    media_diag_max_items: int = 10,
+    media_diag_max_chunks: int = 20,
     telegram_enabled: bool = False,
 ) -> MonitorFullCycleDryRunResult:
     """Simulate scheduler delta decisions using fetches and read-only DB queries."""
@@ -467,6 +481,9 @@ async def perform_monitor_full_cycle_dry_run(
         max_domains=max_domains,
         max_items_per_domain=max_items_per_domain,
         target_domain=target_domain,
+        include_media_diagnostics=include_media_diagnostics,
+        media_diag_max_items=media_diag_max_items,
+        media_diag_max_chunks=media_diag_max_chunks,
     )
 
     counts_by_domain: Dict[str, FullCycleDomainCounts] = {}

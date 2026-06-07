@@ -85,9 +85,9 @@ def test_media_token_diagnostics_handles_no_photo_no_timestamp():
 def test_media_token_diagnostics_limits_samples():
     chunk = " ".join(f'"path":"/items/{9000 + index}-item"' for index in range(15))
     diagnostics = collect_hydration_media_token_diagnostics(
-        _flight_html(chunk),
-        max_samples=3,
-    )
+            _flight_html(chunk),
+            max_items=3,
+        )
 
     assert len(diagnostics["sample_anchor_windows"]) == 3
 

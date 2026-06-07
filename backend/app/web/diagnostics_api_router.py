@@ -202,6 +202,9 @@ async def post_monitor_full_cycle_dry_run(
     max_items_per_domain: int = Query(default=96, ge=1, le=120),
     include_samples: bool = True,
     sample_limit: int = Query(default=10, ge=0, le=20),
+    include_media_diagnostics: bool = False,
+    media_diag_max_items: int = Query(default=10, ge=1, le=20),
+    media_diag_max_chunks: int = Query(default=20, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -267,6 +270,9 @@ async def post_monitor_full_cycle_dry_run(
             target_domain=domain,
             include_samples=include_samples,
             sample_limit=sample_limit,
+            include_media_diagnostics=include_media_diagnostics,
+            media_diag_max_items=media_diag_max_items,
+            media_diag_max_chunks=media_diag_max_chunks,
             telegram_enabled=bool(user.is_telegram_enabled),
         )
         return JSONResponse(

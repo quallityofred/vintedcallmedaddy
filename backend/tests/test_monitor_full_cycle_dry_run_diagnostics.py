@@ -76,12 +76,14 @@ async def test_full_cycle_dry_run_exposes_safe_hydration_field_diagnostics():
             ClientStub(),
             target_domain="vinted.pl",
             max_items_per_domain=10,
+            include_media_diagnostics=True,
         )
 
     fields = result.pipeline_counts_by_domain["vinted.pl"]["item_field_diagnostics"]
     media = result.pipeline_counts_by_domain["vinted.pl"]["media_token_diagnostics"]
     assert fields["photo_url_missing"] == 1
     assert fields["timestamp_field_presence"]["listed_at"] == 1
+    assert media["enabled"] is True
     assert media["chunks_scanned"] == 1
     assert media["chunks_with_item_paths"] == 1
     assert media["chunks_with_timestamp_tokens"] == 1
@@ -93,3 +95,69 @@ async def test_full_cycle_dry_run_exposes_safe_hydration_field_diagnostics():
     assert "self.__next_f" not in serialized
     assert "Synthetic Nike shoe" in serialized
     assert "https://images" not in serialized
+
+@pytest.mark.asyncio
+async def test_full_cycle_dry_run_media_diagnostics_disabled_by_default():
+    app = create_test_app()
+    mock_user = User(id=1, username='qwerty')
+    app.dependency_overrides[require_api_user] = lambda: mock_user
+    
+    mock_db = AsyncMock()
+    mock_monitor = MagicMock()
+    mock_monitor.id = 22
+    mock_monitor.user_id = 1
+    mock_monitor.domains_json = json.dumps(['vinted.pl'])
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_monitor
+    mock_db.execute = AsyncMock(return_value=mock_result)
+    app.dependency_overrides[get_db] = lambda: mock_db
+    
+    with patch("app.web.diagnostics_api_router.perform_monitor_full_cycle_dry_run", new_callable=AsyncMock) as mock_helper:
+        mock_helper.return_value = MagicMock()
+        
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url='http://test') as client:
+            response = await client.post('/api/v1/diagnostics/monitors/22/dry-run-full-cycle?max_domains=1')
+
+            # Print response text if it failed
+            if response.status_code != 200:
+                print(response.text)
+            assert response.status_code == 200
+
+            mock_helper.assert_called_once()
+            _, kwargs = mock_helper.call_args
+            assert kwargs['include_media_diagnostics'] is False
+
+@pytest.mark.asyncio
+async def test_full_cycle_dry_run_media_diagnostics_enabled_with_caps():
+    app = create_test_app()
+    mock_user = User(id=1, username='qwerty')
+    app.dependency_overrides[require_api_user] = lambda: mock_user
+    
+    mock_db = AsyncMock()
+    mock_monitor = MagicMock()
+    mock_monitor.id = 22
+    mock_monitor.user_id = 1
+    mock_monitor.domains_json = json.dumps(['vinted.pl'])
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_monitor
+    mock_db.execute = AsyncMock(return_value=mock_result)
+    app.dependency_overrides[get_db] = lambda: mock_db
+    
+    with patch("app.web.diagnostics_api_router.perform_monitor_full_cycle_dry_run", new_callable=AsyncMock) as mock_helper:
+        mock_helper.return_value = MagicMock()
+        
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url='http://test') as client:
+            response = await client.post('/api/v1/diagnostics/monitors/22/dry-run-full-cycle?include_media_diagnostics=true&max_domains=1&media_diag_max_items=5&media_diag_max_chunks=10')
+
+            if response.status_code != 200:
+                print(response.text)
+            assert response.status_code == 200
+
+            mock_helper.assert_called_once()
+            _, kwargs = mock_helper.call_args
+            assert kwargs['include_media_diagnostics'] is True
+            assert kwargs['media_diag_max_items'] == 5
+            assert kwargs['media_diag_max_chunks'] == 10
+

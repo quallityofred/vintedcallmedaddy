@@ -110,6 +110,9 @@ def extract_hydration_items(
     html: str,
     domain: str = "vinted.pl",
     diagnostics: dict | None = None,
+    include_media_diagnostics: bool = False,
+    media_diag_max_items: int = 10,
+    media_diag_max_chunks: int = 20,
 ) -> list[dict]:
     chunks = extract_next_f_chunks(html)
     candidate_items: list[dict] = []
@@ -182,10 +185,19 @@ def extract_hydration_items(
         diagnostics.clear()
         diagnostics.update(field_sequence_diagnostics)
         diagnostics["item_field_diagnostics"] = item_field_diagnostics
-        diagnostics["media_token_diagnostics"] = collect_hydration_media_token_diagnostics(
-            chunks,
-            domain=domain,
-        )
+        if include_media_diagnostics:
+            try:
+                diagnostics["media_token_diagnostics"] = collect_hydration_media_token_diagnostics(
+                    chunks,
+                    domain=domain,
+                    max_items=media_diag_max_items,
+                    max_chunks=media_diag_max_chunks,
+                )
+            except Exception as exc:
+                logger.warning("media_diagnostics_failed domain=%s exception=%s", domain, exc)
+                diagnostics["media_token_diagnostics"] = {"enabled": False, "error": str(exc)}
+        else:
+            diagnostics["media_token_diagnostics"] = {"enabled": False}
     return normalized
 
 
@@ -234,7 +246,8 @@ def collect_hydration_media_token_diagnostics(
     html_or_chunks: str | list[str],
     *,
     domain: str | None = None,
-    max_samples: int = 10,
+    max_items: int = 10,
+    max_chunks: int = 20,
 ) -> dict:
     """Return bounded media/time marker counts without returning marker values."""
     chunks = (
@@ -242,7 +255,12 @@ def collect_hydration_media_token_diagnostics(
         if isinstance(html_or_chunks, str)
         else list(html_or_chunks)
     )
+    
+    # Apply chunk bound
+    chunks = chunks[:max_chunks]
+    
     diagnostics = {
+        "enabled": True,
         "chunks_scanned": len(chunks),
         "chunks_with_item_paths": 0,
         "chunks_with_image_tokens": 0,
@@ -294,7 +312,7 @@ def collect_hydration_media_token_diagnostics(
             )
             diagnostics["image_anchor_distance_buckets"][image_bucket] += 1
             diagnostics["timestamp_anchor_distance_buckets"][timestamp_bucket] += 1
-            if len(diagnostics["sample_anchor_windows"]) < max(0, min(max_samples, 20)):
+            if len(diagnostics["sample_anchor_windows"]) < max_items:
                 diagnostics["sample_anchor_windows"].append(
                     {
                         "item_id": item_id,
