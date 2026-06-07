@@ -11,6 +11,7 @@ from app.models import FoundItem, Monitor, SeenItem
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
+from app.scheduler.found_item_values import inspect_found_item_insert_readiness
 from app.scraper.hydration_parser import (
     hydration_record_to_vinted_item,
     analyze_hydration_html,
@@ -68,6 +69,7 @@ class DryRunItem:
     url: str
     domain: str
     source: str
+    has_photo: bool = False
 
 @dataclass
 class FetchDiagnostics:
@@ -134,6 +136,13 @@ class FullCycleDomainCounts:
     would_be_new_items: int = 0
     seen_boundary_hit: bool = False
     stopped_at_seen_item_id: Optional[str] = None
+    found_item_insert_ready: int = 0
+    found_item_insert_missing_photo_url: int = 0
+    found_item_insert_missing_title: int = 0
+    found_item_insert_missing_url: int = 0
+    found_item_insert_missing_price: int = 0
+    found_item_insert_missing_currency: int = 0
+    would_fail_found_item_insert_before_fix: int = 0
 
 
 @dataclass
@@ -338,7 +347,8 @@ async def perform_monitor_dry_run(
                     currency=item.currency or "",
                     url=item.item_url or "",
                     domain=domain,
-                    source=source
+                    source=source,
+                    has_photo=bool(item.photo_url),
                 ))
             samples_by_domain[domain] = samples
 
@@ -453,6 +463,9 @@ async def perform_monitor_full_cycle_dry_run(
         "would_create_found_items_total": 0,
         "would_enqueue_notifications_total": 0,
         "would_send_telegram_total": 0,
+        "found_item_insert_ready_total": 0,
+        "found_item_insert_missing_photo_url_total": 0,
+        "would_fail_found_item_insert_before_fix_total": 0,
     }
 
     for domain in source_result.dry_run_domains:
@@ -525,6 +538,24 @@ async def perform_monitor_full_cycle_dry_run(
             counts.would_be_new_items += 1
             counts.would_create_found_items += 1
             counts.would_enqueue_notifications += 1
+            readiness = inspect_found_item_insert_readiness(item)
+            counts.found_item_insert_ready += int(readiness["ready"])
+            counts.found_item_insert_missing_photo_url += int(
+                readiness["missing_photo_url"]
+            )
+            counts.found_item_insert_missing_title += int(
+                readiness["missing_title"]
+            )
+            counts.found_item_insert_missing_url += int(readiness["missing_url"])
+            counts.found_item_insert_missing_price += int(
+                readiness["missing_price"]
+            )
+            counts.found_item_insert_missing_currency += int(
+                readiness["missing_currency"]
+            )
+            counts.would_fail_found_item_insert_before_fix += int(
+                readiness["would_fail_before_fix"]
+            )
             if telegram_enabled:
                 counts.would_send_telegram += 1
             if len(simulation.sample_would_be_new) < sample_limit:
@@ -542,6 +573,13 @@ async def perform_monitor_full_cycle_dry_run(
         summary["would_create_found_items_total"] += counts.would_create_found_items
         summary["would_enqueue_notifications_total"] += counts.would_enqueue_notifications
         summary["would_send_telegram_total"] += counts.would_send_telegram
+        summary["found_item_insert_ready_total"] += counts.found_item_insert_ready
+        summary["found_item_insert_missing_photo_url_total"] += (
+            counts.found_item_insert_missing_photo_url
+        )
+        summary["would_fail_found_item_insert_before_fix_total"] += (
+            counts.would_fail_found_item_insert_before_fix
+        )
 
     return MonitorFullCycleDryRunResult(
         monitor_id=monitor.id,

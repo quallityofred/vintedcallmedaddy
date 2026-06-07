@@ -186,6 +186,48 @@ def _path_item_id(value: str | None) -> str | None:
     return match.group("id") if match else None
 
 
+def _extract_photo_url(item: dict) -> str:
+    """Extract the first supported public image URL, or an empty string."""
+    direct = item.get("photo_url")
+    if isinstance(direct, str) and direct:
+        return direct
+
+    def from_photo(value: Any) -> str:
+        if not isinstance(value, dict):
+            return ""
+        high_resolution = value.get("high_resolution")
+        candidates = [
+            value.get("url"),
+            value.get("full_size_url"),
+            value.get("thumbnail_url"),
+            high_resolution.get("url")
+            if isinstance(high_resolution, dict)
+            else None,
+        ]
+        return next(
+            (
+                candidate
+                for candidate in candidates
+                if isinstance(candidate, str) and candidate
+            ),
+            "",
+        )
+
+    for key in ("photo", "photo_high_resolution", "image"):
+        candidate = from_photo(item.get(key))
+        if candidate:
+            return candidate
+
+    for key in ("photos", "thumbnails"):
+        values = item.get(key)
+        if isinstance(values, list):
+            for value in values:
+                candidate = from_photo(value)
+                if candidate:
+                    return candidate
+    return ""
+
+
 def _extract_items_from_field_sequence(
     chunk: str,
     diagnostics: dict | None = None,
@@ -512,7 +554,7 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
             "path": normalized_path or raw_path,
             "price": price_amount,
             "currency": currency,
-            "photo_url": i.get("photo", {}).get("url") if isinstance(i.get("photo"), dict) else None,
+            "photo_url": _extract_photo_url(i),
             "user_id": str(user.get("id")) if isinstance(user, dict) and user.get("id") else None,
             "user_login": user.get("login") if isinstance(user, dict) else None,
             "raw_source": "hydration"
@@ -529,7 +571,7 @@ def hydration_record_to_vinted_item(record: dict, domain: str) -> VintedItem:
         brand=record.get("brand_title", ""),
         size="",
         condition="",
-        photo_url=record.get("photo_url", ""),
+        photo_url=str(record.get("photo_url") or ""),
         item_url=record.get("url") or "",
         domain=domain,
         seller_id=0,

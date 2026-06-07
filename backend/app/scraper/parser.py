@@ -56,10 +56,12 @@ def _extract_photo(item: dict) -> str:
     if isinstance(photos, list) and len(photos) > 0:
         first_photo = photos[0]
         if isinstance(first_photo, dict):
-            return first_photo.get("url", first_photo.get("full_size_url", ""))
+            return str(
+                first_photo.get("url") or first_photo.get("full_size_url") or ""
+            )
     photo = item.get("photo")
     if isinstance(photo, dict):
-        return photo.get("full_size_url", photo.get("url", ""))
+        return str(photo.get("full_size_url") or photo.get("url") or "")
     return ""
 
 

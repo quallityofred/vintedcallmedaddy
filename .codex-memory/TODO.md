@@ -88,6 +88,8 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 - After explicit deployment approval, rerun monitor 22 dry-run for `vinted.pl`. Success requires normalized hydration records near the unique item-path count, canonical IDs matching `/items/<id>`, no duplicate URLs with different IDs, `after_filters > 0`, and all side-effect flags false.
 - After explicit deployment approval, call `POST /api/v1/diagnostics/monitors/22/dry-run-full-cycle` before enabling a real scheduler check; review per-domain seen/found/new counts and require all side-effect flags to remain false.
 - Deployment gate for full-cycle diagnostics: verify `/api/health`, then run monitor 22 with `max_domains=8`, `max_items_per_domain=96`, and `sample_limit=10`; treat `safe_error=full_cycle_dry_run_failed` or any domain error as a blocker for a real monitor check.
+- Deployment gate for SeenItem baseline: wait for explicit commit/push approval, verify `/api/health`, run `baseline-seen-no-notify` with `dry_run=true` for one selected domain, then run once with `dry_run=false` and confirm a second run creates zero while full-cycle reports the same items as already seen.
+- Deployment gate for missing-photo FoundItem fix: wait for explicit approval, verify `/api/health`, inspect full-cycle `found_item_insert_*` counters for monitor 22, then run one controlled real check and confirm missing-photo items persist and notify through text-only Telegram without a scheduler IntegrityError.
 
 ## Graph Metadata Validation
 

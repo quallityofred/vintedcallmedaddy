@@ -76,7 +76,7 @@ def test_extract_hydration_item_tolerates_missing_optional_fields():
     items = extract_hydration_items(_hydration_html({"items": {"items": [item]}}))
     normalized = items[0]
     assert normalized["price"] == 0.0
-    assert normalized["photo_url"] is None
+    assert normalized["photo_url"] == ""
     assert normalized["user_id"] is None
 
 

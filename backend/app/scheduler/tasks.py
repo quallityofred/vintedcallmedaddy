@@ -22,6 +22,7 @@ from app.models import FoundItem, HiddenSeller, Monitor, MonitorTelegramTopic, S
 from app.scraper.client import DomainSearchResult, VintedClient
 from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters, item_matches_monitor_filters
 from app.scraper.parser import VintedItem
+from app.scheduler.found_item_values import build_found_item_values
 from app.scraper.url_parser import parse_vinted_url
 from app.telegram.notifications import send_item_notification
 from app.telegram.topic_service import ensure_monitor_topic, record_topic_send_failure
@@ -916,23 +917,13 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 								continue
 							found_vinted_ids.add(item.id)
 
-							found_items_to_insert.append({
-								"monitor_id": monitor_id,
-								"vinted_item_id": item.id,
-								"domain": item.domain,
-								"title": item.title,
-								"price": item.price,
-								"currency": item.currency,
-								"brand": item.brand,
-								"brand_id": item.brand_id,
-								"size": item.size,
-								"condition": item.condition,
-								"photo_url": item.photo_url,
-								"item_url": item.item_url,
-								"seller_id": item.seller_id,
-								"found_at": now,
-								"notified": False,
-							})
+							found_items_to_insert.append(
+								build_found_item_values(
+									monitor_id=monitor_id,
+									item=item,
+									found_at=now,
+								)
+							)
 							new_items_to_notify.append(item)
 
 					if seen_items_to_insert:
