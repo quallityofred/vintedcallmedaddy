@@ -159,6 +159,7 @@ async def post_monitor_dry_run_source(
     max_items_per_domain: int = 10,
     domain: str | None = None,
     source: str = "hydration",
+    sample_limit: int = Query(default=10, ge=0, le=20),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -235,52 +236,97 @@ async def post_monitor_dry_run_source(
         elif source == "hydration_with_ssr_photos":
             from app.scraper.catalog_ssr_parser import parse_catalog_ssr_photo_map
             from app.scraper.hydration_parser import extract_hydration_items
+            import urllib.parse
 
-            # Use the existing monitor URL
-            domain_url = monitor.original_url
-            if domain:
-                domain_url = monitor.original_url.replace("vinted.pl", domain)
+            try:
+                selected_domains = json.loads(monitor.domains_json)
+            except Exception:
+                selected_domains = []
 
-            # Fetch HTML once
-            html = await client.fetch_catalog_html(domain_url, domain=domain or "vinted.pl")
+            domains_to_check = [domain] if domain else selected_domains
+            if domain is None and max_domains > 2:
+                # Same guard as other diagnostics
+                return JSONResponse(status_code=400, content={"detail": "Request too large"})
 
-            # Parse hydration
-            hydration_items = extract_hydration_items(html, domain=domain or "vinted.pl")
+            res_counts = {}
+            res_samples = {}
+            res_errors = {}
+            overall_summary = {
+                "html_fetch_count_total": 0,
+                "hydration_items_total": 0,
+                "ssr_photo_map_total": 0,
+                "overlap_total": 0,
+                "merged_with_photo_total": 0,
+                "missing_photo_after_merge_total": 0,
+                "hydration_only_total": 0,
+                "ssr_photo_only_total": 0
+            }
 
-            # Parse SSR photo map
-            ssr_photo_map = parse_catalog_ssr_photo_map(html)
+            for d in domains_to_check[:max_domains]:
+                domain_url = monitor.original_url.replace("vinted.pl", d)
+                html = await client.fetch_catalog_html(domain_url, domain=d)
 
-            # Merge
-            merged_items = []
-            merged_with_photo_count = 0
-            for item in hydration_items:
-                item_id = str(item.get('id'))
-                if item_id in ssr_photo_map:
-                    item['photo_url'] = ssr_photo_map[item_id]
-                    merged_with_photo_count += 1
-                merged_items.append(item)
+                hydration_items = extract_hydration_items(html, domain=d)
+                ssr_photo_map = parse_catalog_ssr_photo_map(html)
 
-            # Diagnostics
-            redacted_samples = []
-            for item in merged_items[:max_items_per_domain]:
-                redacted_item = item.copy()
-                if 'photo_url' in redacted_item:
-                    import urllib.parse
-                    parsed = urllib.parse.urlparse(redacted_item['photo_url'])
-                    redacted_item['photo_host'] = parsed.hostname
-                    del redacted_item['photo_url']
-                redacted_samples.append(redacted_item)
+                merged_items = []
+                merged_with_photo_count = 0
+                for item in hydration_items:
+                    item_id = str(item.get('id'))
+                    if item_id in ssr_photo_map:
+                        item['photo_url'] = ssr_photo_map[item_id]
+                        merged_with_photo_count += 1
+                    merged_items.append(item)
+
+                # Update counts
+                ssr_only = [i for i in ssr_photo_map.keys() if i not in [str(item.get('id')) for item in hydration_items]]
+
+                res_counts[d] = {
+                    "html_fetch_count": 1,
+                    "hydration_items": len(hydration_items),
+                    "ssr_photo_map_items": len(ssr_photo_map),
+                    "overlap_count": merged_with_photo_count,
+                    "merged_with_photo": merged_with_photo_count,
+                    "missing_photo_after_merge": len([i for i in merged_items if not i.get('photo_url')]),
+                    "hydration_only_count": len([i for i in hydration_items if str(i.get('id')) not in ssr_photo_map]),
+                    "ssr_photo_only_count": len(ssr_only),
+                    "photo_hosts": list(set([urllib.parse.urlparse(p).hostname for p in ssr_photo_map.values() if p]))
+                }
+
+                overall_summary["html_fetch_count_total"] += 1
+                overall_summary["hydration_items_total"] += res_counts[d]["hydration_items"]
+                overall_summary["ssr_photo_map_total"] += res_counts[d]["ssr_photo_map_items"]
+                overall_summary["overlap_total"] += res_counts[d]["overlap_count"]
+                overall_summary["merged_with_photo_total"] += res_counts[d]["merged_with_photo"]
+                overall_summary["missing_photo_after_merge_total"] += res_counts[d]["missing_photo_after_merge"]
+                overall_summary["hydration_only_total"] += res_counts[d]["hydration_only_count"]
+                overall_summary["ssr_photo_only_total"] += res_counts[d]["ssr_photo_only_count"]
+
+                # Redacted samples
+                redacted_samples = []
+                for item in merged_items[:sample_limit]:
+                    redacted_item = {
+                        "position": item.get('position', 0),
+                        "item_id": item.get('id'),
+                        "item_url_path": item.get('path', ''),
+                        "has_hydration_title": bool(item.get('title')),
+                        "title_preview": str(item.get('title', ''))[:50],
+                        "has_hydration_price": bool(item.get('price')),
+                        "price": item.get('price', 0.0),
+                        "currency": item.get('currency', 'PLN'),
+                        "has_ssr_photo": bool(item.get('photo_url')),
+                        "photo_host": urllib.parse.urlparse(item.get('photo_url', '')).hostname if item.get('photo_url') else None
+                    }
+                    redacted_samples.append(redacted_item)
+                res_samples[d] = redacted_samples
 
             res = {
                 "source": "hydration_with_ssr_photos",
-                "summary": {
-                    "html_fetch_count_total": 1,
-                    "hydration_items_total": len(hydration_items),
-                    "ssr_photo_map_total": len(ssr_photo_map),
-                    "overlap_total": merged_with_photo_count,
-                    "merged_with_photo_total": merged_with_photo_count,
-                },
-                "samples": redacted_samples,
+                "domains": domains_to_check[:max_domains],
+                "summary": overall_summary,
+                "counts_by_domain": res_counts,
+                "samples_by_domain": res_samples,
+                "errors_by_domain": res_errors,
                 "side_effects": {
                     "reads_database": True,
                     "calls_vinted": True,
