@@ -11,7 +11,7 @@ from app.models import User, Monitor
 from app.scheduler.diagnostics import registry
 from app.scraper.source_selector import should_use_hydration_source
 from app.config import get_settings
-from app.scheduler.dry_run import perform_monitor_dry_run, perform_monitor_full_cycle_dry_run
+from app.scheduler.dry_run import perform_monitor_dry_run, perform_monitor_full_cycle_dry_run, _create_failed_full_cycle_result
 from app.scraper.client import VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 
@@ -165,6 +165,6 @@ async def post_monitor_full_cycle_dry_run(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception:
         logger.exception("Full-cycle dry-run failed")
-        raise HTTPException(status_code=500, detail="Full-cycle dry-run failed")
+        return _create_failed_full_cycle_result(monitor_id, "InternalServerError")
     finally:
         await client.close()
