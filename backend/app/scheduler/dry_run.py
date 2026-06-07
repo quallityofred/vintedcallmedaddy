@@ -439,6 +439,7 @@ async def perform_monitor_full_cycle_dry_run(
     counts_by_domain: Dict[str, FullCycleDomainCounts] = {}
     simulations: Dict[str, FullCycleSimulationSamples] = {}
     samples_by_domain: Dict[str, List[DryRunItem]] = {}
+    errors_by_domain = dict(source_result.errors_by_domain)
     found_ids_across_domains: set[int] = set()
 
     summary = {
@@ -456,21 +457,44 @@ async def perform_monitor_full_cycle_dry_run(
     for domain in source_result.dry_run_domains:
         pipeline = source_result.pipeline_counts_by_domain.get(domain, {})
         domain_items = source_result.samples_by_domain.get(domain, [])[:max_items_per_domain]
-        item_ids = {int(item.id) for item in domain_items}
-        seen_ids, found_ids = await _load_existing_item_ids(
-            db,
-            monitor_id=monitor.id,
-            domain=domain,
-            item_ids=item_ids,
-        )
-        found_ids_across_domains.update(found_ids)
-
         counts = FullCycleDomainCounts(
             raw_fetched=int(pipeline.get("raw_fetched", 0)),
             converted=int(pipeline.get("converted", 0)),
             after_filters=int(pipeline.get("after_filters", 0)),
         )
         simulation = FullCycleSimulationSamples()
+        if domain in errors_by_domain:
+            counts_by_domain[domain] = counts
+            simulations[domain] = simulation
+            samples_by_domain[domain] = []
+            summary["raw_fetched_total"] += counts.raw_fetched
+            summary["after_filters_total"] += counts.after_filters
+            continue
+
+        item_ids = {int(item.id) for item in domain_items}
+        try:
+            seen_ids, found_ids = await _load_existing_item_ids(
+                db,
+                monitor_id=monitor.id,
+                domain=domain,
+                item_ids=item_ids,
+            )
+        except Exception as exc:
+            errors_by_domain[domain] = type(exc).__name__
+            counts_by_domain[domain] = counts
+            simulations[domain] = simulation
+            samples_by_domain[domain] = []
+            summary["raw_fetched_total"] += counts.raw_fetched
+            summary["after_filters_total"] += counts.after_filters
+            logger.warning(
+                "full_cycle_domain_simulation_failed monitor_id=%s domain=%s exception_type=%s",
+                monitor.id,
+                domain,
+                type(exc).__name__,
+            )
+            continue
+
+        found_ids_across_domains.update(found_ids)
         is_cold_start = monitor.last_check_at is None
 
         for item in domain_items:
@@ -529,5 +553,5 @@ async def perform_monitor_full_cycle_dry_run(
         pipeline_counts_by_domain=source_result.pipeline_counts_by_domain,
         seen_found_simulation_by_domain=simulations,
         samples_by_domain=samples_by_domain,
-        errors_by_domain=source_result.errors_by_domain,
+        errors_by_domain=errors_by_domain,
     )

@@ -11,7 +11,10 @@ from app.models import User, Monitor
 from app.scheduler.diagnostics import registry
 from app.scraper.source_selector import should_use_hydration_source
 from app.config import get_settings
-from app.scheduler.dry_run import perform_monitor_dry_run, perform_monitor_full_cycle_dry_run
+from app.scheduler.dry_run import (
+    perform_monitor_dry_run,
+    perform_monitor_full_cycle_dry_run,
+)
 from app.scraper.client import VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 
@@ -21,7 +24,7 @@ router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
 def _create_failed_full_cycle_response(monitor_id: int, exc: Exception) -> dict:
     return {
         "monitor_id": monitor_id,
-        "selected_source": "unknown",
+        "selected_source": None,
         "reason": "full_cycle_dry_run_failed",
         "selected_domains": [],
         "dry_run_domains": [],
@@ -40,8 +43,8 @@ def _create_failed_full_cycle_response(monitor_id: int, exc: Exception) -> dict:
             "enqueues_notifications": False,
             "sends_telegram": False,
             "calls_vinted": False,
-            "reads_database": False
-        }
+            "reads_database": True,
+        },
     }
 
 @router.get("/monitors/{monitor_id}/source-selection")
@@ -171,9 +174,10 @@ async def post_monitor_full_cycle_dry_run(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
 
-    rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
-    client = VintedClient(rate_limiter=rate_limiter)
+    client = None
     try:
+        rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
+        client = VintedClient(rate_limiter=rate_limiter)
         dry_run = await perform_monitor_full_cycle_dry_run(
             monitor,
             client,
@@ -189,8 +193,20 @@ async def post_monitor_full_cycle_dry_run(
         return dataclasses.asdict(dry_run)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as e:
-        logger.exception("Full-cycle dry-run failed")
-        return _create_failed_full_cycle_response(monitor_id, e)
+    except Exception as exc:
+        logger.warning(
+            "full_cycle_dry_run_failed monitor_id=%s exception_type=%s",
+            monitor_id,
+            type(exc).__name__,
+        )
+        return _create_failed_full_cycle_response(monitor_id, exc)
     finally:
-        await client.close()
+        if client is not None:
+            try:
+                await client.close()
+            except Exception as exc:
+                logger.warning(
+                    "full_cycle_dry_run_client_close_failed monitor_id=%s exception_type=%s",
+                    monitor_id,
+                    type(exc).__name__,
+                )

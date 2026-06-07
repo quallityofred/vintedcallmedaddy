@@ -87,6 +87,7 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 - Consider extracting a typed frontend API client to reduce duplicated CSRF/fetch/error handling across components.
 - After explicit deployment approval, rerun monitor 22 dry-run for `vinted.pl`. Success requires normalized hydration records near the unique item-path count, canonical IDs matching `/items/<id>`, no duplicate URLs with different IDs, `after_filters > 0`, and all side-effect flags false.
 - After explicit deployment approval, call `POST /api/v1/diagnostics/monitors/22/dry-run-full-cycle` before enabling a real scheduler check; review per-domain seen/found/new counts and require all side-effect flags to remain false.
+- Deployment gate for full-cycle diagnostics: verify `/api/health`, then run monitor 22 with `max_domains=8`, `max_items_per_domain=96`, and `sample_limit=10`; treat `safe_error=full_cycle_dry_run_failed` or any domain error as a blocker for a real monitor check.
 
 ## Graph Metadata Validation
 
