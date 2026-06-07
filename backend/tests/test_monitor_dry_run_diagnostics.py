@@ -26,7 +26,7 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
     app = create_test_app()
     mock_user = User(id=1, username="qwerty")
     app.dependency_overrides[require_api_user] = lambda: mock_user
-    
+
     mock_db = AsyncMock()
     mock_monitor = MagicMock()
     mock_monitor.id = 22
@@ -35,7 +35,7 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
     mock_monitor.params_json = '{"catalog[]": ["1231"]}'
     mock_monitor.domains_json = '["vinted.pl"]'
     mock_monitor.original_url = "https://www.vinted.pl/catalog?catalog[]=1231"
-    
+
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = mock_monitor
     mock_db.execute = AsyncMock(return_value=mock_result)
@@ -47,17 +47,17 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
          patch("app.scheduler.dry_run.analyze_hydration_html") as mock_analyze, \
          patch("app.scheduler.dry_run.get_candidate_samples") as mock_samples, \
          patch("app.scheduler.dry_run.collect_redacted_candidate_structures") as mock_fallback_samples:
-        
+
         mock_settings = MagicMock()
         mock_settings.monitor_hydration_source_enabled = True
         mock_settings.rate_limit_per_minute = "60"
         mock_settings.monitor_detail_guard_enabled = False
         mock_settings.monitor_detail_category_guard_enabled = False
         mock_settings.monitor_detail_freshness_guard_enabled = False
-        
+
         mock_settings_func.return_value = mock_settings
         mock_sel_settings_func.return_value = mock_settings
-        
+
         mock_client = AsyncMock()
         field_sequence = (
             '"id":999,"title":"Nike Air max 95","brand_title":"Nike",'
@@ -69,7 +69,7 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
             return_value=f'self.__next_f.push([1,"{escaped_sequence}"])'
         )
         mock_client_cls.return_value = mock_client
-        
+
         mock_analyze.return_value = {
             "html_contains_next_f": True,
             "next_f_chunks": 1,
@@ -92,7 +92,7 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
                 "redacted_skeleton": {"fragment_contains": ["items_path", "brand_title", "price"], "likely_encoding": "react_flight_string_segment"}
             }
         ]
-        
+
         mock_client.fetch_catalog_hydration_items = AsyncMock(return_value=[])
 
         transport = ASGITransport(app=app)
@@ -144,3 +144,29 @@ def test_literal_marker_diagnostics_remain_lazy_optional():
         "brand_title": [],
         "price": [],
     }
+
+@pytest.mark.asyncio
+async def test_post_monitor_dry_run_source_ssr_html_photo_no_name_error():
+    app = create_test_app()
+    mock_user = User(id=1, username="admin")
+    mock_user.token = "secret"
+    app.dependency_overrides[require_api_user] = lambda: mock_user
+
+    mock_db = AsyncMock()
+    mock_monitor = MagicMock()
+    mock_monitor.id = 22
+    mock_monitor.user_id = 1
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_monitor
+    mock_db.execute = AsyncMock(return_value=mock_result)
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/diagnostics/monitors/{mock_monitor.id}/dry-run-source?source=ssr_html_photo",
+            headers={"Authorization": "Bearer secret"}
+        )
+        # We expect a failure because Vinted client/network is not mocked,
+        # but we are testing for a NameError.
+        assert response.status_code != 500 or "NameError" not in response.json().get("detail", "")

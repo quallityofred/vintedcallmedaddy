@@ -183,7 +183,7 @@ async def post_monitor_dry_run_source(
 
     try:
         if source == "ssr_html_photo":
-            from app.scraper.catalog_ssr_parser import parse_catalog_ssr_html
+            from app.scraper.catalog_ssr_parser import VintedCatalogHTMLParser
 
             # Use the existing monitor URL
             domain_url = monitor.original_url
