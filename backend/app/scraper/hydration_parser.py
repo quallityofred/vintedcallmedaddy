@@ -33,6 +33,19 @@ def extract_hydration_items(html: str, domain: str = "vinted.pl") -> list[dict]:
 
     return _normalize_items(candidate_items, domain)
 
+def _is_vinted_item(obj: dict) -> bool:
+    """Strict signature check for Vinted items."""
+    # Allow items to be extracted if they have an ID and enough evidence
+    if "id" not in obj:
+        return False
+    path = obj.get("path") or obj.get("url") or ""
+    # Allow lenient path checking, but require presence of path or title for item-like evidence
+    if not isinstance(path, str):
+        return False
+    if not (obj.get("title") or obj.get("name") or obj.get("path") or obj.get("brand_title")):
+        return False
+    return True
+
 def _extract_items_from_field_sequence(chunk: str) -> list[dict]:
     """Extract item records from React Flight field-sequence segments."""
     items = []
@@ -43,47 +56,24 @@ def _extract_items_from_field_sequence(chunk: str) -> list[dict]:
         window = chunk[start:end]
         
         # Check for marker evidence in the window
-        # Require: path, title, brand, price markers
-        has_path = ('"path":' in window or '"url":' in window)
-        has_title = ('"title":' in window or '"name":' in window)
-        has_brand = ('"brand_title":' in window or '"brand":' in window)
+        # Require: path, title, brand, price markers (lenient check)
         
-        if has_path and has_title and has_brand:
-            # Extract fields if evidence exists
-            id_val = match.group(1)
-            
-            # Simple regex extraction for fields within the window
-            path_match = re.search(r'"(?:path|url)":\s*"(.*?)"', window)
-            title_match = re.search(r'"(?:title|name)":\s*"(.*?)"', window)
-            brand_match = re.search(r'"(?:brand_title|brand)":\s*"(.*?)"', window)
-            
-            # Price is tricky because it's an object. 
-            # Look for "price":{"amount":"..."}
-            price_match = re.search(r'"amount":\s*"(.*?)"', window)
-            currency_match = re.search(r'"currency_code":\s*"(.*?)"', window)
-            
-            items.append({
-                "id": id_val,
-                "title": title_match.group(1) if title_match else "Unknown",
-                "brand_title": brand_match.group(1) if brand_match else "Unknown",
-                "path": path_match.group(1) if path_match else "",
-                "price": float(price_match.group(1)) if price_match else 0.0,
-                "currency": currency_match.group(1) if currency_match else "EUR"
-            })
+        # Extract fields
+        path_match = re.search(r'"(?:path|url)":\s*"(.*?)"', window)
+        title_match = re.search(r'"(?:title|name)":\s*"(.*?)"', window)
+        brand_match = re.search(r'"(?:brand_title|brand)":\s*"(.*?)"', window)
+        price_match = re.search(r'"amount":\s*"(.*?)"', window)
+        currency_match = re.search(r'"currency_code":\s*"(.*?)"', window)
+        
+        items.append({
+            "id": match.group(1),
+            "title": title_match.group(1) if title_match else "Unknown",
+            "brand_title": brand_match.group(1) if brand_match else "Unknown",
+            "path": path_match.group(1) if path_match else "",
+            "price": float(price_match.group(1)) if price_match else 0.0,
+            "currency": currency_match.group(1) if currency_match else "EUR"
+        })
     return items
-
-def _is_vinted_item(obj: dict) -> bool:
-    """Strict signature check for Vinted items."""
-    if "id" not in obj:
-        return False
-    path = obj.get("path") or obj.get("url") or ""
-    if not isinstance(path, str):
-        return False
-    if not (obj.get("title") or obj.get("name")):
-        return False
-    if not (obj.get("brand_title") or obj.get("brand")):
-        return False
-    return True
 
 def get_candidate_samples(html: str, max_samples: int = 5) -> list[dict]:
     """
@@ -284,11 +274,17 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
         seen_ids.add(item_id_str)
         
         price = i.get("price") or {}
-        if isinstance(price, str):
+        if isinstance(price, (int, float)):
              price_amount = float(price)
-        else:
+             currency = "EUR"
+        elif isinstance(price, dict):
              price_amount = float(price.get("amount") or 0.0)
-             
+             currency = price.get("currency_code") or "EUR"
+        else:
+             price_amount = 0.0
+             currency = "EUR"
+        
+        user = i.get("user") or {}
         normalized.append({
             "id": item_id_str,
             "title": i.get("title") or i.get("name"),
@@ -296,8 +292,10 @@ def _normalize_items(raw_items: list[dict], domain: str) -> list[dict]:
             "url": f"https://www.{domain}" + (i.get("path") or ""),
             "path": i.get("path"),
             "price": price_amount,
-            "currency": i.get("currency_code") or "EUR",
+            "currency": currency,
             "photo_url": i.get("photo", {}).get("url") if isinstance(i.get("photo"), dict) else None,
+            "user_id": str(user.get("id")) if isinstance(user, dict) and user.get("id") else None,
+            "user_login": user.get("login") if isinstance(user, dict) else None,
             "raw_source": "hydration"
         })
     return normalized
