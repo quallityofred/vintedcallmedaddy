@@ -435,10 +435,10 @@ async def _load_existing_item_ids(
     monitor_id: int,
     domain: str,
     item_ids: set[int],
-) -> tuple[set[int], set[int]]:
+) -> tuple[set[int], dict[int, str]]:
     """Read existing delta state without attaching or mutating ORM objects."""
     if not item_ids:
-        return set(), set()
+        return set(), {}
 
     seen_result = await db.execute(
         select(SeenItem.vinted_item_id).where(
@@ -448,14 +448,14 @@ async def _load_existing_item_ids(
         )
     )
     found_result = await db.execute(
-        select(FoundItem.vinted_item_id).where(
+        select(FoundItem.vinted_item_id, FoundItem.domain).where(
             FoundItem.monitor_id == monitor_id,
             FoundItem.vinted_item_id.in_(item_ids),
         )
     )
     return (
         {int(row[0]) for row in seen_result.fetchall()},
-        {int(row[0]) for row in found_result.fetchall()},
+        {int(row[0]): row[1] for row in found_result.fetchall()},
     )
 
 
@@ -490,7 +490,7 @@ async def perform_monitor_full_cycle_dry_run(
     simulations: Dict[str, FullCycleSimulationSamples] = {}
     samples_by_domain: Dict[str, List[DryRunItem]] = {}
     errors_by_domain = dict(source_result.errors_by_domain)
-    found_ids_across_domains: set[int] = set()
+    found_domains_across_domains: dict[int, str] = {}
 
     summary = {
         "domains_checked": len(source_result.dry_run_domains),
@@ -526,7 +526,7 @@ async def perform_monitor_full_cycle_dry_run(
 
         item_ids = {int(item.id) for item in domain_items}
         try:
-            seen_ids, found_ids = await _load_existing_item_ids(
+            seen_ids, found_domains = await _load_existing_item_ids(
                 db,
                 monitor_id=monitor.id,
                 domain=domain,
@@ -547,7 +547,7 @@ async def perform_monitor_full_cycle_dry_run(
             )
             continue
 
-        found_ids_across_domains.update(found_ids)
+        found_domains_across_domains.update(found_domains)
         is_cold_start = monitor.last_check_at is None
 
         for item in domain_items:
@@ -562,18 +562,25 @@ async def perform_monitor_full_cycle_dry_run(
                     break
                 continue
 
-            if item_id in found_ids_across_domains:
+            if item_id in found_domains_across_domains:
                 counts.already_found += 1
                 counts.would_create_seen_items += 1
                 if len(simulation.sample_already_found) < sample_limit:
                     simulation.sample_already_found.append(item)
+                if (
+                    not is_cold_start
+                    and found_domains_across_domains[item_id] == domain
+                ):
+                    counts.seen_boundary_hit = True
+                    counts.stopped_at_seen_item_id = item.id
+                    break
                 continue
 
             counts.would_create_seen_items += 1
             if is_cold_start:
                 continue
 
-            found_ids_across_domains.add(item_id)
+            found_domains_across_domains[item_id] = domain
             counts.would_be_new_items += 1
             counts.would_create_found_items += 1
             counts.would_enqueue_notifications += 1

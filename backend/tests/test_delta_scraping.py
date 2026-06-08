@@ -202,6 +202,47 @@ async def test_seen_lookup_is_domain_aware(db_session):
     await _run_check(db_session, monitor, client)
 
     found = (await db_session.execute(select(FoundItem).where(FoundItem.monitor_id == monitor.id))).scalars().all()
-    # Item 777 was seen on vinted.fr, so it should NOT be found on vinted.fr.
-    # But it should be found on vinted.de because it's a DIFFERENT domain boundary.
-    assert [(item.vinted_item_id, item.domain) for item in found] == [(777, "vinted.de")]
+    # Stable Vinted IDs are deduped per monitor for FoundItem history even when seen
+    # boundaries remain domain-scoped.
+    assert [(item.vinted_item_id, item.domain) for item in found] == []
+
+
+@pytest.mark.asyncio
+async def test_existing_found_without_seen_is_not_requeued_and_backfills_seen(db_session):
+    user = await _user(db_session, "delta_found_without_seen_user")
+    monitor = await _monitor(db_session, user)
+    existing = FoundItem(
+        monitor_id=monitor.id,
+        vinted_item_id=888,
+        domain="vinted.fr",
+        title="Already found item",
+        price=12.0,
+        currency="EUR",
+        brand="Brand",
+        brand_id=123,
+        size="L",
+        condition="New",
+        photo_url="",
+        item_url="https://www.vinted.fr/items/888-item",
+        seller_id=1,
+        notified=True,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+
+    client = FakeDomainClient({"vinted.fr": [_item(888), _item(889)]})
+    await _run_check(db_session, monitor, client)
+
+    found = (
+        await db_session.execute(
+            select(FoundItem).where(FoundItem.monitor_id == monitor.id).order_by(FoundItem.vinted_item_id)
+        )
+    ).scalars().all()
+    seen = (
+        await db_session.execute(
+            select(SeenItem).where(SeenItem.monitor_id == monitor.id).order_by(SeenItem.vinted_item_id)
+        )
+    ).scalars().all()
+
+    assert [(item.vinted_item_id, item.notified) for item in found] == [(888, True)]
+    assert [(item.vinted_item_id, item.domain) for item in seen] == [(888, "vinted.fr")]

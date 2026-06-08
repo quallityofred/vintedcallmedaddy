@@ -30,6 +30,7 @@ tags:
 - `test_notification_diagnostic.py` uses the route's actual overridden test DB session and verifies admin/CSRF guards, required monitor scope, dry-run read-only behavior, bounded deterministic apply behavior, idempotency, redaction, and no Telegram/monitor/SeenItem side effects.
 - `test_scraper_engine_v2.py` verifies the flag defaults off, legacy source selection remains unchanged, all selected domains are preserved, and the adapter performs one catalog fetch per domain with no item-detail calls.
 - `test_notification_pipeline_v2.py` verifies the flag defaults off, the live processor remains unchanged, only successful attempts are acknowledged, failures remain retryable, and redaction omits sensitive delivery data.
+- 2026-06-08 delta repair coverage verifies Found-without-Seen history is not requeued, missing Seen memory is repaired, same-domain and cross-domain boundaries remain distinct, all domains are preserved, baseline routes write real Seen rows, and Found-to-Seen repair is read-only by default, bounded, monitor-scoped, idempotent, admin/CSRF protected, and Telegram-free. Full backend result: 395 passed.
 
 ## Current Snapshot
 

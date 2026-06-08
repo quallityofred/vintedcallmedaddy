@@ -395,6 +395,28 @@ async def _load_seen_item_ids(db, monitor_id: int, domain: str, item_ids: set[in
 	return {int(row[0]) for row in result.fetchall()}
 
 
+async def _load_found_item_ids(
+	db,
+	monitor_id: int,
+	domain: str,
+	item_ids: set[int],
+) -> tuple[set[int], set[int]]:
+	if not item_ids:
+		return set(), set()
+	result = await db.execute(
+		select(FoundItem.vinted_item_id, FoundItem.domain)
+		.where(
+			FoundItem.monitor_id == monitor_id,
+			FoundItem.vinted_item_id.in_(item_ids),
+		)
+	)
+	rows = result.fetchall()
+	return (
+		{int(row[0]) for row in rows},
+		{int(row[0]) for row in rows if row[1] == domain},
+	)
+
+
 async def _fetch_domain_results(
 	client: VintedClient,
 	*,
@@ -524,8 +546,16 @@ async def _select_domain_delta_items(
 		accepted_ids.add(item.id)
 
 	seen_ids = await _load_seen_item_ids(db, context.monitor_id, result.domain, accepted_ids)
+	found_ids, found_ids_in_domain = await _load_found_item_ids(
+		db,
+		context.monitor_id,
+		result.domain,
+		accepted_ids,
+	)
+	known_ids = seen_ids | found_ids
 	new_items: list[VintedItem] = []
 	baseline_items: list[VintedItem] = []
+	seen_only_items: list[VintedItem] = []
 	seen_boundary_hit = False
 	stopped_at_seen_item_id: int | None = None
 	defer_summary_seen_boundary = (
@@ -539,7 +569,11 @@ async def _select_domain_delta_items(
 			if item.id not in seen_ids:
 				baseline_items.append(item)
 			continue
-		if item.id in seen_ids:
+		if item.id in known_ids:
+			if item.id in found_ids and item.id not in seen_ids:
+				seen_only_items.append(item)
+			if item.id in found_ids and item.id not in found_ids_in_domain and item.id not in seen_ids:
+				continue
 			if defer_summary_seen_boundary:
 				continue
 			seen_boundary_hit = True
@@ -561,7 +595,7 @@ async def _select_domain_delta_items(
 		error=result.error,
 		new_items=new_items,
 		baseline_items=baseline_items,
-		seen_only_items=[],
+		seen_only_items=seen_only_items,
 	)
 
 

@@ -15,8 +15,12 @@ from typing import Any, Optional
 from app.web.api_dependencies import require_api_user
 from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
-from app.models import User, Monitor
+from app.models import User, Monitor, FoundItem, SeenItem
 from app.scheduler.diagnostics import registry
+from app.scheduler.dry_run import (
+    perform_monitor_baseline_seen,
+    perform_monitor_full_cycle_dry_run,
+)
 from app.scraper.source_selector import (
     should_use_hydration_source,
     should_use_hydration_ssr_photo_merge,
@@ -281,6 +285,7 @@ async def post_monitor_full_cycle_dry_run(
         rate_limiter = TokenBucketLimiter(rate=float(settings.rate_limit_per_minute), per=60.0)
         client = VintedClient(rate_limiter=rate_limiter)
         dry_run = await perform_monitor_full_cycle_dry_run(
+            monitor,
             client,
             db,
             max_domains=max_domains,
@@ -356,6 +361,7 @@ async def post_monitor_seen_baseline_no_notify(
         client = VintedClient(rate_limiter=rate_limiter)
 
         dry_run_res = await perform_monitor_baseline_seen(
+            monitor,
             client,
             db,
             max_domains=max_domains,
@@ -586,6 +592,7 @@ async def post_monitor_start_with_baseline(
         client = VintedClient(rate_limiter=rate_limiter)
 
         dry_run_res = await perform_monitor_baseline_seen(
+            monitor,
             client,
             db,
             max_domains=max_domains,
@@ -751,6 +758,132 @@ async def get_notification_job_status(job_id: str, user: User = Depends(require_
         res["side_effects"] = result.get("side_effects", result.get("side_effects", res["side_effects"]))
 
     return JSONResponse(status_code=200, content=jsonable_encoder(res))
+
+
+@router.post("/monitors/{monitor_id}/backfill-seen-from-found-items", dependencies=[Depends(require_api_csrf)])
+async def backfill_seen_from_found_items(
+    monitor_id: int,
+    dry_run: bool = True,
+    limit: int = Query(default=1000, ge=1, le=5000),
+    sample_limit: int = Query(default=10, ge=0, le=50),
+    reason: str = Query(default="manual_seen_backfill_from_found_items", min_length=1, max_length=80),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Backfill missing SeenItem rows from existing FoundItem history without Telegram."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    monitor = await db.get(Monitor, monitor_id)
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+
+    missing_seen = ~select(SeenItem.id).where(
+        SeenItem.monitor_id == FoundItem.monitor_id,
+        SeenItem.vinted_item_id == FoundItem.vinted_item_id,
+        SeenItem.domain == FoundItem.domain,
+    ).exists()
+    found_items_total = int(
+        await db.scalar(
+            select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor_id)
+        )
+        or 0
+    )
+    missing_total = int(
+        await db.scalar(
+            select(func.count(FoundItem.id)).where(
+                FoundItem.monitor_id == monitor_id,
+                missing_seen,
+            )
+        )
+        or 0
+    )
+    missing_items = (
+        await db.execute(
+            select(FoundItem)
+            .where(FoundItem.monitor_id == monitor_id, missing_seen)
+            .order_by(FoundItem.found_at.asc(), FoundItem.id.asc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    inserted_seen = 0
+
+    if not dry_run and missing_items:
+        rows = [
+            {
+                "monitor_id": monitor_id,
+                "user_id": monitor.user_id,
+                "vinted_item_id": int(item.vinted_item_id),
+                "domain": item.domain,
+                "seen_at": item.found_at,
+            }
+            for item in missing_items
+        ]
+        dialect_name = db.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        elif dialect_name == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert
+        else:
+            raise RuntimeError("Unsupported database dialect for conflict-safe seen backfill")
+
+        await db.execute(
+            insert(SeenItem).values(rows).on_conflict_do_nothing(
+                index_elements=["monitor_id", "vinted_item_id", "domain"]
+            )
+        )
+        await db.commit()
+
+        remaining_missing = int(
+            await db.scalar(
+                select(func.count(FoundItem.id)).where(
+                    FoundItem.monitor_id == monitor_id,
+                    missing_seen,
+                )
+            )
+            or 0
+        )
+        inserted_seen = missing_total - remaining_missing
+
+    missing_after_if_applied = max(
+        0,
+        missing_total - (inserted_seen if not dry_run else len(missing_items)),
+    )
+    return JSONResponse(
+        status_code=200,
+        content=jsonable_encoder(
+            {
+                "monitor_id": monitor_id,
+                "dry_run": dry_run,
+                "reason": reason,
+                "found_items_scanned": found_items_total,
+                "already_seen": found_items_total - missing_total,
+                "missing_total": missing_total,
+                "would_insert_seen": len(missing_items),
+                "inserted_seen": inserted_seen,
+                "missing_after_if_applied": missing_after_if_applied,
+                "samples": [
+                    {
+                        "found_item_id": item.id,
+                        "vinted_item_id": str(item.vinted_item_id),
+                        "domain": item.domain,
+                        "title_preview": item.title[:80],
+                        "notified": bool(item.notified),
+                    }
+                    for item in missing_items[:sample_limit]
+                ],
+                "side_effects": {
+                    "reads_database": True,
+                    "writes_seen_items": bool(inserted_seen),
+                    "writes_found_items": False,
+                    "updates_monitor": False,
+                    "enqueues_notifications": False,
+                    "sends_telegram": False,
+                    "runs_scheduler_check": False,
+                },
+            }
+        ),
+    )
 
 @router.post("/notifications/ack-pending-no-notify", dependencies=[Depends(require_api_csrf)])
 async def ack_pending_notifications_no_notify(

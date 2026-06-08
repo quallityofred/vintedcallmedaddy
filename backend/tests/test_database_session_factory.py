@@ -154,9 +154,9 @@ def test_monitor_check_backpressure_defaults_are_conservative():
     assert settings.monitor_check_max_pages_per_domain == 1
     assert settings.monitor_candidate_detail_max_per_check == 10
     assert settings.monitor_freshness_grace_seconds == 600
-    assert settings.monitor_detail_guard_enabled is True
-    assert settings.monitor_detail_category_guard_enabled is True
-    assert settings.monitor_detail_freshness_guard_enabled is True
+    assert settings.monitor_detail_guard_enabled is False
+    assert settings.monitor_detail_category_guard_enabled is False
+    assert settings.monitor_detail_freshness_guard_enabled is False
 
 
 def test_monitor_check_backpressure_env_overrides(monkeypatch):

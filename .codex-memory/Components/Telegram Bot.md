@@ -27,6 +27,7 @@ tags:
 - Cleanup is idempotent, monitor-scoped, redacted, and does not touch `SeenItem`, monitor state, scraper execution, or notification delivery code. Status: `issue/fixed`.
 - `backend/app/telegram/pipeline_v2.py` defines a default-off future delivery contract. It preserves success-only acknowledgement and retryable failures but is not wired into the live worker while `NOTIFICATION_PIPELINE_V2_ENABLED=false`.
 - Future durable notification jobs should be DB-backed and restart-safe; no migration or runtime switch is included in the current skeleton.
+- `ack-pending-no-notify` changes only `FoundItem.notified`; scheduler dedupe independently consults Found/Seen history, so acknowledging a backlog cannot make those items eligible for rediscovery. No Telegram delivery behavior changed.
 
 ## Runtime Flow
 
