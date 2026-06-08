@@ -143,3 +143,67 @@ async def run_pending_notifications_dry_run(
 
 def _update_stats(stats: Dict[str, int], bucket: str):
     stats[bucket] += 1
+
+async def run_pending_notifications_ack_no_notify(
+    db: AsyncSession,
+    dry_run: bool = True,
+    monitor_ids: Optional[List[int]] = None,
+    domains: Optional[List[str]] = None,
+    older_than_minutes: int = 1440,
+    include_inactive: bool = True,
+    include_active: bool = False,
+    sample_limit: int = 10
+) -> Dict[str, Any]:
+    
+    # 1. Base Query
+    # Note: Using FoundItem alias to allow easier updates later
+    stmt = select(FoundItem).join(Monitor, FoundItem.monitor_id == Monitor.id)
+    
+    stmt = stmt.where(FoundItem.notified == False)
+    
+    if monitor_ids:
+        stmt = stmt.where(FoundItem.monitor_id.in_(monitor_ids))
+    if domains:
+        stmt = stmt.where(FoundItem.domain.in_(domains))
+        
+    # Active/Inactive filters
+    if not include_inactive and not include_active:
+        # Should not happen, but safe default: exclude all
+        stmt = stmt.where(False)
+    elif not include_inactive:
+        stmt = stmt.where(Monitor.is_active == True)
+    elif not include_active:
+        stmt = stmt.where(Monitor.is_active == False)
+        
+    # Age filter
+    now = utc_now()
+    if older_than_minutes:
+        cutoff = now - timedelta(minutes=older_than_minutes)
+        stmt = stmt.where(FoundItem.found_at < cutoff)
+        
+    result = await db.execute(stmt)
+    eligible_items = result.scalars().all()
+    
+    total_eligible = len(eligible_items)
+    acked_count = 0
+    
+    if not dry_run:
+        for item in eligible_items:
+            item.notified = True
+            acked_count += 1
+        await db.commit()
+        
+    return {
+        "dry_run": dry_run,
+        "eligible_to_ack": total_eligible,
+        "acked_count": acked_count if not dry_run else 0,
+        "side_effects": {
+            "marks_notified": not dry_run and acked_count > 0,
+            "deletes_found_items": False,
+            "deletes_seen_items": False,
+            "sends_telegram": False,
+            "calls_vinted": False,
+            "runs_baseline": False,
+            "runs_check": False
+        }
+    }
