@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,6 +78,24 @@ class TelegramDeliveryTarget:
 	message_thread_id: int | None = None
 	topic_id: int | None = None
 	used_fallback: bool = False
+
+
+@dataclass(frozen=True)
+class PendingNotificationCandidate:
+	found_item_id: int
+	monitor_id: int
+	vinted_item_id: int
+	domain: str
+	title: str
+	price: float
+	currency: str
+	brand: str
+	size: str
+	condition: str
+	photo_url: str
+	item_url: str
+	seller_id: int
+	found_at: datetime
 
 
 @dataclass
@@ -1047,92 +1065,270 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 
 
 
-async def process_pending_notifications(limit: int = 50) -> None:
-	"""Send pending Telegram notifications for newly found items."""
-	async with _notification_lock:
-		async with _new_session() as db:
-			query = (
+def _pending_conditions(monitor_id: int | None) -> list[object]:
+	conditions: list[object] = [FoundItem.notified == False]  # noqa: E712
+	if monitor_id is not None:
+		conditions.append(FoundItem.monitor_id == monitor_id)
+	return conditions
+
+
+async def _count_pending_notifications(monitor_id: int | None) -> int:
+	async with _new_session() as db:
+		result = await db.execute(
+			select(func.count(FoundItem.id)).where(*_pending_conditions(monitor_id))
+		)
+		return int(result.scalar_one())
+
+
+async def collect_pending_notification_candidates(
+	*,
+	monitor_id: int | None = None,
+	limit: int = 50,
+) -> tuple[list[PendingNotificationCandidate], dict[str, object]]:
+	"""Read a bounded pending notification batch without mutating database state."""
+	conditions = _pending_conditions(monitor_id)
+	async with _new_session() as db:
+		pending_total = int(
+			(await db.execute(select(func.count(FoundItem.id)).where(*conditions))).scalar_one()
+		)
+		rows = (
+			await db.execute(
 				select(FoundItem)
-				.where(FoundItem.notified == False)  # noqa: E712
-				.order_by(FoundItem.found_at.asc())
+				.where(*conditions)
+				.order_by(FoundItem.found_at.asc(), FoundItem.id.asc())
 				.limit(limit)
 			)
+		).scalars().all()
+		candidates = [
+			PendingNotificationCandidate(
+				found_item_id=row.id,
+				monitor_id=row.monitor_id,
+				vinted_item_id=row.vinted_item_id,
+				domain=row.domain,
+				title=row.title,
+				price=row.price,
+				currency=row.currency,
+				brand=row.brand,
+				size=row.size,
+				condition=row.condition,
+				photo_url=row.photo_url,
+				item_url=row.item_url,
+				seller_id=row.seller_id,
+				found_at=row.found_at,
+			)
+			for row in rows
+		]
 
-			if not settings.is_sqlite():
-				query = query.with_for_update(skip_locked=True)
+		monitor_ids = {candidate.monitor_id for candidate in candidates}
+		if monitor_id is not None:
+			monitor_ids.add(monitor_id)
+		users: list[User] = []
+		if monitor_ids:
+			monitors = (
+				await db.execute(select(Monitor).where(Monitor.id.in_(monitor_ids)))
+			).scalars().all()
+			user_ids = {monitor.user_id for monitor in monitors if monitor.user_id is not None}
+			if user_ids:
+				users = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
 
-			result = await db.execute(query)
-			pending_items = result.scalars().all()
+	bot_configured = bool(users) and all(bool(user.telegram_bot_token) for user in users)
+	chat_configured = bool(users) and all(
+		bool(user.telegram_topics_chat_id if user.telegram_topics_enabled else user.telegram_chat_id)
+		for user in users
+	)
+	uses_group_rate = False
+	for user in users:
+		configured_chat = user.telegram_topics_chat_id if user.telegram_topics_enabled else user.telegram_chat_id
+		try:
+			uses_group_rate = uses_group_rate or user.telegram_topics_enabled or int(configured_chat or 0) < 0
+		except (TypeError, ValueError):
+			# Unknown chat types use the safer private/unknown limiter.
+			pass
+	metadata: dict[str, object] = {
+		"pending_total": pending_total,
+		"telegram_bot_configured": bot_configured,
+		"telegram_chat_configured": chat_configured,
+		"uses_group_rate": uses_group_rate,
+	}
+	return candidates, metadata
 
-			if not pending_items:
-				return
 
-			for fi in pending_items:
+def _pending_sample(candidate: PendingNotificationCandidate) -> dict[str, object]:
+	return {
+		"found_item_id": candidate.found_item_id,
+		"vinted_item_id": str(candidate.vinted_item_id),
+		"domain": candidate.domain,
+		"title_preview": candidate.title[:80],
+		"has_photo_url": bool(candidate.photo_url),
+		"notified": False,
+		"found_at": candidate.found_at.isoformat(),
+	}
+
+
+async def process_pending_notifications(
+	limit: int = 50,
+	*,
+	monitor_id: int | None = None,
+	dry_run: bool = False,
+	sample_limit: int = 10,
+) -> dict[str, object]:
+	"""Audit or deliver a bounded pending batch; only successful sends are acknowledged."""
+	started = time.monotonic()
+	async with _notification_lock:
+		candidates, metadata = await collect_pending_notification_candidates(
+			monitor_id=monitor_id,
+			limit=limit,
+		)
+		with_photo = sum(1 for candidate in candidates if candidate.photo_url)
+		base_result: dict[str, object] = {
+			"dry_run": dry_run,
+			"monitor_id": monitor_id,
+			"limit": limit,
+			"pending_total": metadata["pending_total"],
+			"pending_before": metadata["pending_total"],
+			"selected_for_processing": len(candidates),
+			"with_photo_url": with_photo,
+			"without_photo_url": len(candidates) - with_photo,
+			"estimated_seconds_private_chat": len(candidates),
+			"estimated_seconds": len(candidates) * (3 if metadata["uses_group_rate"] else 1),
+			"telegram_bot_configured": metadata["telegram_bot_configured"],
+			"telegram_chat_configured": metadata["telegram_chat_configured"],
+			"samples": [_pending_sample(candidate) for candidate in candidates[:sample_limit]],
+			"errors_sample": [],
+		}
+		if dry_run:
+			base_result.update(
+				{
+					"sent_photo_count": 0,
+					"sent_text_count": 0,
+					"fallback_text_count": 0,
+					"failed_count": 0,
+					"rate_limited_count": 0,
+					"marked_notified_count": 0,
+					"pending_after": metadata["pending_total"],
+					"duration_ms": int((time.monotonic() - started) * 1000),
+					"side_effects": {
+						"reads_database": True,
+						"writes_found_items": False,
+						"sends_telegram": False,
+					},
+				}
+			)
+			return base_result
+
+		sent_photo_count = 0
+		sent_text_count = 0
+		fallback_text_count = 0
+		failed_count = 0
+		rate_limited_count = 0
+		marked_notified_count = 0
+		send_attempt_count = 0
+		errors_sample: list[dict[str, object]] = []
+
+		for candidate in candidates:
+			delivery_target: TelegramDeliveryTarget | None = None
+			try:
+				async with _new_session() as db:
+					monitor = await db.get(Monitor, candidate.monitor_id)
+					user = await db.get(User, monitor.user_id) if monitor and monitor.user_id else None
+					if monitor is None or user is None:
+						raise RuntimeError("notification_owner_missing")
+					monitor_name = monitor.name
+					delivery_target = await resolve_telegram_delivery_target(db, user=user, monitor=monitor)
+				if not delivery_target.ok or delivery_target.bot is None or delivery_target.chat_id is None:
+					failed_count += 1
+					if len(errors_sample) < sample_limit:
+						errors_sample.append(
+							{"found_item_id": candidate.found_item_id, "code": delivery_target.code}
+						)
+					continue
+
 				item = VintedItem(
-					id=fi.vinted_item_id,
-					title=fi.title,
-					price=fi.price,
-					currency=fi.currency,
-					brand=fi.brand,
-					size=fi.size,
-					condition=fi.condition,
-					photo_url=fi.photo_url,
-					item_url=fi.item_url,
-					domain=fi.domain,
-					seller_id=fi.seller_id,
+					id=candidate.vinted_item_id,
+					title=candidate.title,
+					price=candidate.price,
+					currency=candidate.currency,
+					brand=candidate.brand,
+					size=candidate.size,
+					condition=candidate.condition,
+					photo_url=candidate.photo_url,
+					item_url=candidate.item_url,
+					domain=candidate.domain,
+					seller_id=candidate.seller_id,
+				)
+				send_attempt_count += 1
+				delivery_mode = await send_item_notification(
+					delivery_target.bot,
+					delivery_target.chat_id,
+					item,
+					monitor_name=monitor_name,
+					message_thread_id=delivery_target.message_thread_id,
+				)
+				async with _new_session() as db:
+					found_item = await db.get(FoundItem, candidate.found_item_id)
+					if found_item is not None and not found_item.notified:
+						found_item.notified = True
+						await db.commit()
+						marked_notified_count += 1
+				if delivery_mode == "photo":
+					sent_photo_count += 1
+				elif delivery_mode == "fallback_text":
+					fallback_text_count += 1
+				else:
+					sent_text_count += 1
+			except Exception as exc:
+				failed_count += 1
+				if type(exc).__name__ == "TelegramRetryAfter":
+					rate_limited_count += 1
+				if delivery_target and delivery_target.topic_id is not None:
+					try:
+						async with _new_session() as db:
+							topic = await db.get(MonitorTelegramTopic, delivery_target.topic_id)
+							if topic is not None:
+								await record_topic_send_failure(db, topic=topic, exc=exc)
+					except Exception as record_exc:
+						logger.warning(
+							"Telegram topic failure record failed item_id=%s exception_type=%s",
+							candidate.vinted_item_id,
+							type(record_exc).__name__,
+						)
+				if len(errors_sample) < sample_limit:
+					errors_sample.append(
+						{
+							"found_item_id": candidate.found_item_id,
+							"code": "telegram_rate_limited"
+							if type(exc).__name__ == "TelegramRetryAfter"
+							else "telegram_send_failed",
+							"exception_type": type(exc).__name__,
+						}
+					)
+				logger.warning(
+					"Notification failed monitor_id=%s item_id=%s exception_type=%s",
+					candidate.monitor_id,
+					candidate.vinted_item_id,
+					type(exc).__name__,
 				)
 
-				delivery_target: TelegramDeliveryTarget | None = None
-				try:
-					async with _new_session() as db2:
-						monitor_name = None
-						monitor = await db2.get(Monitor, fi.monitor_id)
-						if monitor and monitor.user_id:
-							monitor_name = monitor.name
-							user = await db2.get(User, monitor.user_id)
-							if user:
-								delivery_target = await resolve_telegram_delivery_target(
-									db2,
-									user=user,
-									monitor=monitor,
-								)
-								if not delivery_target.ok:
-									continue
-							else:
-								continue
-
-					if delivery_target and delivery_target.bot and delivery_target.chat_id is not None:
-						await send_item_notification(
-							delivery_target.bot,
-							delivery_target.chat_id,
-							item,
-							monitor_name=monitor_name,
-							message_thread_id=delivery_target.message_thread_id,
-						)
-						# Mark as notified immediately and commit
-						fi.notified = True
-						await db.commit()
-						logger.info("Telegram notification sent for item %s", fi.vinted_item_id)
-				except Exception as exc:
-					# Restore error handling logic for Telegram topic failures
-					if delivery_target and delivery_target.topic_id is not None:
-						try:
-							async with _new_session() as db3:
-								topic = await db3.get(MonitorTelegramTopic, delivery_target.topic_id)
-								if topic is not None:
-									info = await record_topic_send_failure(db3, topic=topic, exc=exc)
-									logger.warning(
-										"Telegram topic notification failed: code=%s monitor_id=%s item_id=%s",
-										info.code,
-										fi.monitor_id,
-										fi.vinted_item_id,
-									)
-						except Exception:
-							logger.exception(
-								"Failed to record Telegram topic notification error for item %s",
-								fi.vinted_item_id,
-							)
-					logger.exception("Notification failed for item %s", fi.vinted_item_id)
+		pending_after = await _count_pending_notifications(monitor_id)
+		base_result.update(
+			{
+				"sent_photo_count": sent_photo_count,
+				"sent_text_count": sent_text_count,
+				"fallback_text_count": fallback_text_count,
+				"failed_count": failed_count,
+				"rate_limited_count": rate_limited_count,
+				"marked_notified_count": marked_notified_count,
+				"pending_after": pending_after,
+				"duration_ms": int((time.monotonic() - started) * 1000),
+				"errors_sample": errors_sample,
+				"side_effects": {
+					"reads_database": True,
+					"writes_found_items": marked_notified_count > 0,
+					"sends_telegram": send_attempt_count > 0,
+				},
+			}
+		)
+		return base_result
 
 
 class MonitorScheduler:

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Optional
 
 from app.web.api_dependencies import require_api_user
+from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
 from app.models import User, Monitor
 from app.scheduler.diagnostics import registry
@@ -636,20 +637,26 @@ async def post_monitor_start_with_baseline(
             await client.close()
 
 
-@router.post("/notifications/process-pending")
+@router.post(
+    "/notifications/process-pending",
+    dependencies=[Depends(require_api_csrf)],
+)
 async def process_notifications_diagnostic(
     dry_run: bool = True,
+    monitor_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
+    sample_limit: int = Query(default=10, ge=0, le=20),
     user: User = Depends(require_api_user),
 ):
-    """Manually trigger notification processing for pending items."""
+    """Audit or process a bounded pending Telegram notification batch."""
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
     from app.scheduler.tasks import process_pending_notifications
 
-    if dry_run:
-        return {"message": "Dry run: notification processing would be triggered with limit", "limit": limit}
-
-    await process_pending_notifications(limit=limit)
-    return {"message": "Notification processing triggered."}
+    return await process_pending_notifications(
+        limit=limit,
+        monitor_id=monitor_id,
+        dry_run=dry_run,
+        sample_limit=sample_limit,
+    )

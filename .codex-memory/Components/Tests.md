@@ -264,6 +264,7 @@ tags:
 - 2026-06-07: Added synthetic hydration media discovery coverage for image/time token counts, canonical item-anchor distance buckets, sample caps, no-media cases, and raw URL/chunk redaction. Added pure detail-HTML tests for OG image, JSON-LD image, and published timestamp detection.
 - 2026-06-08: Added route and worker coverage for async hydration+SSR merge jobs: full flattened completed status, structured unknown-job/auth responses, eight selected domains, concurrent execution, one fetch per domain, shared HTML identity across parsers, item-ID-only merge, hydration ordering/field authority, SSR-only exclusion, per-domain error isolation, no writes, and photo URL redaction.
 - 2026-06-08: Added shared-service and scheduler flag coverage for hydration+SSR photo enrichment: default-off path isolation, same-HTML parser identity, one fetch per selected domain, concurrent all-domain execution, item-ID-only merge, hydration field/order preservation, SSR-only exclusion, hydration fallback after SSR parser failure, no implicit item cap/detail fetch, persisted FoundItem photo, and Telegram photo/text behavior.
+- 2026-06-08: Added pending-notification diagnostics and limiter coverage: real SQLite monitor scoping/counts, bounded dry-run with no writes/sends, explicit batch success/failure/fallback behavior, retryable failed rows, redaction, admin/CSRF/limit guards, default-off worker guard, private/group/global rate limits, rate-limited photo/text fallback, and Telegram `retry_after` handling.
 
 ## Related Frontend Notes
 

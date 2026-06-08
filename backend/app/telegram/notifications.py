@@ -1,7 +1,7 @@
 import asyncio
 import html
 import logging
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -99,29 +99,18 @@ async def send_item_notification(
     *,
     monitor_name: str | None = None,
     message_thread_id: int | None = None,
-) -> None:
+) -> Literal["photo", "text", "fallback_text"]:
     from aiogram.exceptions import TelegramRetryAfter
 
     caption = _build_caption(item, monitor_name=monitor_name)
     keyboard = _build_keyboard(item)
-    last_error: BaseException | None = None
+    is_group = message_thread_id is not None or chat_id < 0
 
-    for _attempt in range(3):
-        try:
-            # Apply rate limiting before sending
-            await rate_limiter.acquire(chat_id)
-
-            thread_kwargs = {"message_thread_id": message_thread_id} if message_thread_id is not None else {}
-            if item.photo_url:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=item.photo_url,
-                    caption=caption,
-                    parse_mode="HTML",
-                    reply_markup=keyboard,
-                    **thread_kwargs,
-                )
-            else:
+    async def send_text(*, fallback: bool) -> Literal["text", "fallback_text"]:
+        last_error: BaseException | None = None
+        for _attempt in range(3):
+            try:
+                await rate_limiter.acquire(chat_id, is_group=is_group)
                 await bot.send_message(
                     chat_id=chat_id,
                     text=caption,
@@ -130,14 +119,48 @@ async def send_item_notification(
                     disable_web_page_preview=False,
                     **thread_kwargs,
                 )
-            return
+                return "fallback_text" if fallback else "text"
+            except TelegramRetryAfter as exc:
+                last_error = exc
+                logger.warning("Telegram flood control, retrying after %d seconds", exc.retry_after)
+                await asyncio.sleep(exc.retry_after)
+            except Exception as exc:
+                logger.warning(
+                    "Telegram text notification failed item_id=%d exception_type=%s",
+                    item.id,
+                    type(exc).__name__,
+                )
+                raise
+        _raise_last_failure(last_error)
+
+    thread_kwargs = {"message_thread_id": message_thread_id} if message_thread_id is not None else {}
+    if not item.photo_url:
+        return await send_text(fallback=False)
+
+    last_error: BaseException | None = None
+    for _attempt in range(3):
+        try:
+            await rate_limiter.acquire(chat_id, is_group=is_group)
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=item.photo_url,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                **thread_kwargs,
+            )
+            return "photo"
         except TelegramRetryAfter as exc:
             last_error = exc
             logger.warning("Telegram flood control, retrying after %d seconds", exc.retry_after)
             await asyncio.sleep(exc.retry_after)
         except Exception as exc:
-            logger.exception("Failed to send Telegram notification for item_id=%d", item.id)
-            raise exc
+            logger.warning(
+                "Telegram photo notification failed; using text fallback item_id=%d exception_type=%s",
+                item.id,
+                type(exc).__name__,
+            )
+            return await send_text(fallback=True)
 
     _raise_last_failure(last_error)
 
