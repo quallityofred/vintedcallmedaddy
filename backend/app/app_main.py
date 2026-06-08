@@ -264,6 +264,7 @@ def create_app() -> FastAPI:
     from app.web.settings_api_router import router as settings_api_router
     from app.web.system_api_router import router as system_api_router
     from app.web.diagnostics_api_router import router as diagnostics_api_router
+    from app.web.full_cycle_api_router import router as full_cycle_api_router
 
     app.include_router(admin_api_router)
     app.include_router(auth_api_router)
@@ -273,6 +274,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_api_router)
     app.include_router(system_api_router)
     app.include_router(diagnostics_api_router)
+    app.include_router(full_cycle_api_router)
 
     # в”Ђв”Ђ Exception handlers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     @app.exception_handler(RequireLoginException)

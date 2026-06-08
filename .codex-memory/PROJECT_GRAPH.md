@@ -121,6 +121,7 @@ tags:
 - 2026-06-04: CF Worker routing mode persistence was hardened with startup user-column migrations, explicit `cf_worker_mode` PATCH/GET tests, frontend payload/error handling tests, and a fixed monitor debug trigger.
 - 2026-06-05: Frontend action buttons now use a shared exact-key async action model. Monitor mutations update local state from returned API data where available, same-monitor conflicting actions are disabled, unrelated monitor/seller/settings actions keep independent loading state, and stale monitor poll responses are ignored after newer mutations.
 - 2026-06-05: Monitor checks now use per-domain delta scraping: every selected domain is checked, runtime params force `newest_first`, page 1 is the default, wrong/missing-brand items do not act as a boundary, and each domain stops at its first accepted seen item.
+- 2026-06-08: Promoted monitor full-cycle workflows to production core. Added `monitor_full_cycle.py` shared service for orchestrated cleanup, cold baseline, scoped check, and sequential batch notification sending. Added `POST /api/v1/monitors/{id}/full-cycle-jobs` and `POST /api/v1/monitors/{id}/notifications/send-pending-jobs` production routes with background job status polling. Verified with 411 passed tests covering orchestration, monitor-scoping, and safety invariants.
 
 ## Recommended Obsidian Graph Groups
 

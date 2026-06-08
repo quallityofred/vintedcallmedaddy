@@ -1665,3 +1665,31 @@ async def run_pending_notifications_job(
     except Exception as e:
         logger.exception(f'Pending notification job failed: {job_id}')
         await registry.fail_job(job_id, type(e).__name__)
+
+async def run_monitor_full_cycle_job_task(
+    job_id: str,
+    monitor_id: int,
+    **kwargs,
+):
+    from app.scheduler.diagnostics import registry
+    from app.scheduler.monitor_full_cycle import run_monitor_full_cycle_job
+    try:
+        result = await run_monitor_full_cycle_job(monitor_id=monitor_id, **kwargs)
+        await registry.complete_job(job_id, result)
+    except Exception as e:
+        logger.exception(f'Monitor full cycle job failed: {job_id}')
+        await registry.fail_job(job_id, type(e).__name__)
+
+async def run_monitor_send_all_pending_job_task(
+    job_id: str,
+    monitor_id: int,
+    **kwargs,
+):
+    from app.scheduler.diagnostics import registry
+    from app.scheduler.monitor_full_cycle import send_all_pending_for_monitor
+    try:
+        result = await send_all_pending_for_monitor(monitor_id=monitor_id, **kwargs)
+        await registry.complete_job(job_id, result)
+    except Exception as e:
+        logger.exception(f'Monitor send all pending job failed: {job_id}')
+        await registry.fail_job(job_id, type(e).__name__)

@@ -105,4 +105,23 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 ## Graph Metadata Validation
 
 - 2026-06-02: No remaining issue graph metadata problems after normalization scan.
-- **Monitor Repair Release:** After deploy, use POST /api/v1/diagnostics/monitors/22/repair-stale-status?dry_run=true to verify monitor 22's stale state, then run with dry_run=false to clear it. Verify GET /api/v1/monitors/22/debug reports effective status ailed (not unning) and is_stale_running=false. Confirm check-now is available and not blocked by the previous stale state.
+- **Monitor Repair Release:** After deploy, use POST /api/v1/diagnostics/monitors/22/repair-stale-status?dry_run=true to verify monitor 22's stale state, then run with dry_run=false to clear it. Verify GET /api/v1/monitors/22/debug reports effective status ailed (not unning) and is_stale_running=false. Confirm check-now is available and not blocked by the previous stale state.
+
+## Telegram Output Enhancement
+
+- **Beautiful Telegram Output TODO:** After the production core rollout is verified, enhance the Telegram notification formatting for better visual impact and usability:
+    - Large item photo at top.
+    - Clear label "🆕 New Vinted item found".
+    - Monitor name.
+    - Item title.
+    - Price plus approximate USD (already exists, keep clean).
+    - Brand.
+    - Size.
+    - Condition.
+    - Seller name.
+    - Source domain.
+    - Inline buttons: "Open on Vinted" and "Hide seller".
+    - Text fallback if no photo_url.
+    - No raw long URLs if buttons are available.
+    - Use Telegram HTML/Markdown safe formatting.
+
