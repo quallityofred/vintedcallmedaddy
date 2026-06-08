@@ -1,4 +1,4 @@
----
+﻿---
 type: todo
 project: vintedbot
 tags:
@@ -102,3 +102,4 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 ## Graph Metadata Validation
 
 - 2026-06-02: No remaining issue graph metadata problems after normalization scan.
+- **Monitor Repair Release:** After deploy, use POST /api/v1/diagnostics/monitors/22/repair-stale-status?dry_run=true to verify monitor 22's stale state, then run with dry_run=false to clear it. Verify GET /api/v1/monitors/22/debug reports effective status ailed (not unning) and is_stale_running=false. Confirm check-now is available and not blocked by the previous stale state.

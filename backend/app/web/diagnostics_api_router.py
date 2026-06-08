@@ -827,3 +827,83 @@ async def ack_pending_notifications_no_notify(
         )
 
     return JSONResponse(status_code=200, content=jsonable_encoder(res))
+
+
+@router.post("/monitors/{monitor_id}/repair-stale-status", dependencies=[Depends(require_api_csrf)])
+async def repair_monitor_stale_status(
+    monitor_id: int,
+    dry_run: bool = True,
+    reason: str = Query(default="manual_stale_status_repair", min_length=1, max_length=80),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Safely repair stale 'running' status or inconsistent timestamps for a monitor."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+    monitor = result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+
+    from app.scheduler.tasks import is_monitor_check_running
+    is_running_in_registry = is_monitor_check_running(monitor_id)
+    
+    from app.scheduler.monitor_status import reconcile_monitor_check_status
+    recon = reconcile_monitor_check_status(monitor, is_running_in_registry)
+
+
+    # Protection: never repair if it's actually running in memory
+    if is_running_in_registry:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot repair status while a check is actively running in memory."
+        )
+
+    would_repair = recon["is_stale_running"] or recon["is_inconsistent_check_state"]
+    proposed_updates: dict[str, Any] = {}
+
+    if recon["is_stale_running"]:
+        proposed_updates["last_check_status"] = "failed"
+        proposed_updates["last_error"] = f"Repair: cleared stale running status ({reason})"
+
+    if recon["is_inconsistent_check_state"]:
+        # started > completed. Sync completed to started to resolve inconsistency.
+        proposed_updates["last_check_completed_at"] = monitor.last_check_started_at
+
+    res = {
+        "monitor_id": monitor_id,
+        "dry_run": dry_run,
+        "raw_db_status": monitor.last_check_status,
+        "raw_db_started_at": monitor.last_check_started_at,
+        "raw_db_completed_at": monitor.last_check_completed_at,
+        "reconciled_status": recon["effective_status"],
+        "is_stale_running": recon["is_stale_running"],
+        "is_inconsistent_check_state": recon["is_inconsistent_check_state"],
+        "would_repair": would_repair,
+        "proposed_updates": proposed_updates,
+        "reason": reason,
+        "side_effects": {
+            "updates_monitor": not dry_run and would_repair,
+            "reads_database": True,
+        }
+    }
+
+    if not dry_run and would_repair:
+        if "last_check_status" in proposed_updates:
+            monitor.last_check_status = proposed_updates["last_check_status"]
+        if "last_error" in proposed_updates:
+            monitor.last_error = proposed_updates["last_error"]
+        if "last_check_completed_at" in proposed_updates:
+            monitor.last_check_completed_at = proposed_updates["last_check_completed_at"]
+
+        await db.commit()
+        await db.refresh(monitor)
+        
+        # Add after-repair state
+        res["after_repair"] = {
+            "last_check_status": monitor.last_check_status,
+            "last_check_completed_at": monitor.last_check_completed_at,
+        }
+
+    return JSONResponse(status_code=200, content=jsonable_encoder(res))

@@ -36,6 +36,7 @@ class MonitorResponse(BaseModel):
     last_check_at: Optional[datetime] = None
     last_check_status: Optional[str] = None
     is_stale_running: bool = False
+    is_inconsistent_check_state: bool = False
     created_at: datetime
     updated_at: datetime
     items_found_count: int
@@ -91,6 +92,9 @@ def _monitor_domains(monitor: Monitor) -> List[str]:
 
 
 def _monitor_response(monitor: Monitor, items_found_count: int | None = None, is_running_in_registry: bool = False) -> dict[str, object]:
+    from app.scheduler.monitor_status import reconcile_monitor_check_status
+    recon = reconcile_monitor_check_status(monitor, is_running_in_registry)
+
     return {
         "id": monitor.id,
         "name": monitor.name,
@@ -98,8 +102,9 @@ def _monitor_response(monitor: Monitor, items_found_count: int | None = None, is
         "interval_sec": monitor.interval_sec,
         "is_active": monitor.is_active,
         "last_check_at": monitor.last_check_at,
-        "last_check_status": "failed" if (monitor.last_check_status == "running" and not is_running_in_registry) else monitor.last_check_status,
-        "is_stale_running": (monitor.last_check_status == "running" and not is_running_in_registry),
+        "last_check_status": recon["effective_status"],
+        "is_stale_running": recon["is_stale_running"],
+        "is_inconsistent_check_state": recon["is_inconsistent_check_state"],
         "created_at": monitor.created_at,
         "updated_at": monitor.updated_at,
         "items_found_count": items_found_count if items_found_count is not None else monitor.items_found_count,
@@ -569,7 +574,10 @@ async def check_monitor_now(
     # Cooldown: 30 seconds
     now = datetime.now(timezone.utc)
     if monitor.last_check_started_at:
-        elapsed = (now - monitor.last_check_started_at).total_seconds()
+        started_at = monitor.last_check_started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        elapsed = (now - started_at).total_seconds()
         if elapsed < 30:
             return JSONResponse(
                 {
@@ -627,15 +635,8 @@ async def debug_monitor(
     from app.scheduler.tasks import is_monitor_check_running
     is_running_in_registry = is_monitor_check_running(monitor_id)
 
-    status_notes = {
-        None: "This monitor has not been checked yet.",
-        "running": "Check is currently running." if is_running_in_registry else "Check was marked running but no active process found (stale).",
-        "baseline_created": "Tracking baseline initialized. Future new items will appear here.",
-        "success_zero_items": "Checked successfully, but scraper returned 0 items.",
-        "success_no_new_items": "Checked successfully. No new items found.",
-        "success_new_items": "Checked successfully. New items were found.",
-        "failed": f"Check failed: {monitor.last_error or 'Unknown error'}",
-    }
+    from app.scheduler.monitor_status import reconcile_monitor_check_status
+    recon = reconcile_monitor_check_status(monitor, is_running_in_registry)
 
     live_found_count = await db.scalar(
         select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
@@ -650,12 +651,13 @@ async def debug_monitor(
         "last_check_at": monitor.last_check_at,
         "last_check_started_at": monitor.last_check_started_at,
         "last_check_completed_at": monitor.last_check_completed_at,
-        "last_check_status": "failed" if (monitor.last_check_status == "running" and not is_running_in_registry) else monitor.last_check_status,
+        "last_check_status": recon["effective_status"],
         "last_error": monitor.last_error,
         "items_found_count": live_found_count or 0,
         "scheduler": job_info,
-        "explanation": status_notes.get(monitor.last_check_status, "Status unknown."),
-        "is_stale_running": (monitor.last_check_status == "running" and not is_running_in_registry),
+        "explanation": recon["explanation"],
+        "is_stale_running": recon["is_stale_running"],
+        "is_inconsistent_check_state": recon["is_inconsistent_check_state"],
         "cf_worker": {
             "mode": user.cf_worker_mode if user.cf_worker_mode in ["auto", "manual", "off"] else "auto",
             "configured": bool(user.cf_worker_url),

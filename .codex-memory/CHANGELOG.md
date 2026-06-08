@@ -1,4 +1,4 @@
----
+﻿---
 type: changelog
 project: vintedbot
 tags:
@@ -98,3 +98,7 @@ tags:
 - 2026-06-08: Prepared default-off scheduler integration for hydration+SSR photo merging in the local working tree. A shared one-fetch service now powers both diagnostics and the eligible hydration scheduler branch, preserves hydration fields/order, adds only item-ID-matched SSR photos, falls back to hydration-only on photo parsing errors, and exposes safe per-domain counters without changing production behavior while `MONITOR_SSR_PHOTO_MERGE_ENABLED=false`.
 - 2026-06-08: Hardened pending Telegram processing in the local working tree. The admin diagnostic endpoint now performs a real monitor-scoped dry-run audit, controlled sends return complete redacted counts, successful delivery is the only path that marks `FoundItem.notified`, photo failures use a separately rate-limited text fallback, and the periodic worker remains default-off.
 - 2026-06-08: Fixed the admin-only `ack-pending-no-notify` diagnostic endpoint and its route-level SQLite coverage. Dry-run is monitor-scoped and read-only; apply mode deterministically marks only the selected pending `FoundItem` rows as notified without Telegram, scraper, `SeenItem`, or monitor-state side effects. Added default-off scraper-engine-v2 and notification-pipeline-v2 architecture skeletons; neither is wired into production runtime selection.
+- 2026-06-08: Optimized notification dry-run diagnostics by bypassing the global notification lock for read-only requests. This ensures diagnostics remain responsive and do not time out during heavy background backlog processing. Added a database index on the 
+otified column of the ound_items table to further improve pending query performance.
+- 2026-06-08: Centralized and hardened monitor check status reconciliation. A new helper detects stale 'running' states (DB says running but registry says inactive) and inconsistent timestamps (started after completed); effective status is correctly reported as 'failed' for stale checks, and check-now is no longer blocked by stale DB statuses.
+- 2026-06-08: Added a safe admin diagnostic endpoint epair-stale-status for monitors. The endpoint allows manually clearing stale 'running' status and resolving timestamp inconsistencies in a dry-run safe and CSRF-protected manner; repairs are rejected if a check is actively running in memory.
