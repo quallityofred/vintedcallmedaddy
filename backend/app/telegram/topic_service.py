@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from aiogram import Bot
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +34,16 @@ FINAL_OR_BLOCKED_STATUSES = {
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
 WHITESPACE = re.compile(r"\s+")
 MAX_TOPIC_NAME_LENGTH = 128
+
+# In-memory locks to serialize topic creation for the same monitor/chat within the same process.
+_topic_creation_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _get_creation_lock(monitor_id: int, chat_id: str) -> asyncio.Lock:
+    key = (monitor_id, chat_id)
+    if key not in _topic_creation_locks:
+        _topic_creation_locks[key] = asyncio.Lock()
+    return _topic_creation_locks[key]
 
 
 @dataclass(frozen=True)
@@ -314,13 +325,15 @@ async def get_topic_mapping(
     *,
     monitor_id: int,
     chat_id: str,
+    for_update: bool = False,
 ) -> MonitorTelegramTopic | None:
-    result = await db.execute(
-        select(MonitorTelegramTopic).where(
-            MonitorTelegramTopic.monitor_id == monitor_id,
-            MonitorTelegramTopic.chat_id == chat_id,
-        )
+    stmt = select(MonitorTelegramTopic).where(
+        MonitorTelegramTopic.monitor_id == monitor_id,
+        MonitorTelegramTopic.chat_id == chat_id,
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -348,8 +361,10 @@ async def _create_pending_mapping(
         if existing is not None:
             return existing, False
         raise
-    await db.refresh(mapping)
-    return mapping, True
+
+    # Re-fetch to ensure we have a fresh, attached object
+    existing = await get_topic_mapping(db, monitor_id=monitor.id, chat_id=chat_id)
+    return existing, True
 
 
 async def create_monitor_topic(
@@ -361,7 +376,29 @@ async def create_monitor_topic(
     chat_id: str,
 ) -> TelegramTopicResult:
     chat_id = str(chat_id or "").strip()
+    lock = _get_creation_lock(monitor.id, chat_id)
+
+    async with lock:
+        return await _create_monitor_topic_internal(
+            db,
+            bot=bot,
+            user=user,
+            monitor=monitor,
+            chat_id=chat_id,
+        )
+
+
+async def _create_monitor_topic_internal(
+    db: AsyncSession,
+    *,
+    bot: Bot,
+    user: User,
+    monitor: Monitor,
+    chat_id: str,
+) -> TelegramTopicResult:
     topic_name = normalize_topic_name(monitor)
+
+    # 1. Initial check (fast, no lock)
     mapping = await get_topic_mapping(db, monitor_id=monitor.id, chat_id=chat_id)
 
     if mapping and mapping.status == TOPIC_STATUS_ACTIVE and mapping.message_thread_id:
@@ -383,15 +420,59 @@ async def create_monitor_topic(
             chat_id_masked=mask_identifier(chat_id),
             topic=mapping,
         )
-    if mapping is None:
-        mapping, created_mapping = await _create_pending_mapping(
-            db,
-            user=user,
-            monitor=monitor,
-            chat_id=chat_id,
-            topic_name=topic_name,
+
+    # 2. Claim creation or refresh with lock
+    for _retry in range(3):
+        if mapping is None:
+            mapping, created = await _create_pending_mapping(
+                db,
+                user=user,
+                monitor=monitor,
+                chat_id=chat_id,
+                topic_name=topic_name,
+            )
+            if created:
+                # Successfully created via INSERT and status is already CREATING
+                break
+            # Fallthrough to re-check if not created (raced)
+
+        # Mapping exists. Try to claim it if not active/creating.
+        # We use an atomic update to handle races.
+        stmt = (
+            update(MonitorTelegramTopic)
+            .where(
+                MonitorTelegramTopic.id == mapping.id,
+                MonitorTelegramTopic.status == mapping.status,
+            )
+            .values(
+                status=TOPIC_STATUS_CREATING,
+                topic_name=topic_name,
+                last_error=None,
+                last_error_code=None,
+            )
         )
-        if not created_mapping and mapping.status == TOPIC_STATUS_CREATING:
+        res = await db.execute(stmt)
+        if res.rowcount > 0:
+            await db.commit()
+            # Successfully claimed! Re-fetch to continue.
+            mapping = await get_topic_mapping(db, monitor_id=monitor.id, chat_id=chat_id)
+            if mapping:
+                break
+
+        # Someone else changed it or claim failed.
+        # Re-fetch and re-evaluate status in the next iteration.
+        mapping = await get_topic_mapping(db, monitor_id=monitor.id, chat_id=chat_id)
+        if mapping and mapping.status == TOPIC_STATUS_ACTIVE and mapping.message_thread_id:
+            await sync_active_topic_name(db, bot=bot, mapping=mapping, desired_topic_name=topic_name)
+            return TelegramTopicResult(
+                ok=True,
+                code="active",
+                message="Telegram topic is already active.",
+                status=mapping.status,
+                chat_id_masked=mask_identifier(chat_id),
+                topic=mapping,
+            )
+        if mapping and mapping.status == TOPIC_STATUS_CREATING:
             return TelegramTopicResult(
                 ok=False,
                 code="topic_creation_in_progress",
@@ -400,14 +481,17 @@ async def create_monitor_topic(
                 chat_id_masked=mask_identifier(chat_id),
                 topic=mapping,
             )
+    else:
+        return TelegramTopicResult(
+            ok=False,
+            code="concurrency_error",
+            message="Could not claim Telegram topic creation due to concurrent updates.",
+            status=getattr(mapping, "status", TOPIC_STATUS_FAILED),
+            chat_id_masked=mask_identifier(chat_id),
+            topic=mapping,
+        )
 
-    mapping.status = TOPIC_STATUS_CREATING
-    mapping.topic_name = topic_name
-    mapping.last_error = None
-    mapping.last_error_code = None
-    await db.commit()
-    await db.refresh(mapping)
-
+    # 3. Perform Telegram API call (we have the claim)
     try:
         topic = await bot.create_forum_topic(chat_id=chat_id, name=topic_name)
         mapping.message_thread_id = int(getattr(topic, "message_thread_id"))

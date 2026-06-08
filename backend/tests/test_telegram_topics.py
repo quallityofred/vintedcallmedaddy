@@ -363,7 +363,7 @@ async def test_ensure_topic_creates_idempotent_mapping(db_session):
     assert len(bot.created_topics) == 1
     assert bot.created_topics[0][1] == "Nike Deals"
 
-    rows = (await db_session.execute(select(MonitorTelegramTopic))).scalars().all()
+    rows = (await db_session.execute(select(MonitorTelegramTopic).where(MonitorTelegramTopic.monitor_id == monitor.id))).scalars().all()
     assert len(rows) == 1
     assert rows[0].topic_name == "Nike Deals"
 

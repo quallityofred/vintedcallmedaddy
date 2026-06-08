@@ -41,7 +41,15 @@ tags:
 - Failed notification sends leave the `FoundItem` pending for retry instead of marking it notified.
 - Telegram forum topic routing has backend foundations only. It is per-user, disabled by default, stores mappings in `monitor_telegram_topics`, and returns only masked chat/thread identifiers through APIs.
 - Topic mappings include monitor/user/chat/thread, topic name, status, safe error code/message, created/updated timestamps, and last verification time. `telegram_topics_recreate_deleted` defaults to false to avoid recreating deleted topics without an explicit user choice.
-- Topic creation uses a unique `(monitor_id, chat_id)` mapping plus a `creating` status to avoid duplicate DB rows and suppress duplicate Telegram topic creation during concurrent ensure calls. If Telegram creates a topic but the DB commit fails, an orphan Telegram topic can still occur.
+- Topic creation uses a unique `(monitor_id, chat_id)` mapping plus a `creating` status to avoid duplicate DB rows and suppress duplicate Telegram topic creation during concurrent ensure calls.
+- **Strict Invariant**: 1 monitor = 1 Telegram topic/thread.
+- **Idempotency Strategy**:
+  - An in-memory `asyncio.Lock` per `(monitor_id, chat_id)` serializes concurrent calls within the same process.
+  - An atomic "compare-and-swap" `UPDATE` (using `WHERE status=...`) claims the creation task in the DB, ensuring cross-process safety and handling races on non-locking databases like SQLite.
+  - `create_monitor_topic` (public) wraps `_create_monitor_topic_internal` with the lock.
+- If Telegram creates a topic but the DB commit fails, an orphan Telegram topic can still occur, but the system will not use it for subsequent sends. Existing duplicate Telegram UI topics created before this fix may require manual cleanup.
+- Invalid topic recovery (e.g. if a thread is deleted) is partially handled by the classification logic but full automatic recreation during a send batch is deferred to minimize delivery complexity.
+- Verified by concurrent race tests in `backend/tests/test_telegram_topic_idempotency.py`.
 - Topic titles are based only on the cleaned monitor name. The service does not append marketplace/domain or `#monitor_id`; empty names fall back to `Monitor`.
 - When an active mapping has an old verbose stored name, ensure/sending attempts to rename the Telegram topic with `editForumTopic` while preserving the same `message_thread_id`. Rename failures store a safe error but do not block notification delivery to the existing thread.
 - Automatic notification routing now resolves a target in `process_pending_notifications()`: disabled users are skipped; topic-disabled users use the existing main chat with no topic lookup; topic-enabled users ensure/reuse a monitor topic and send with `message_thread_id`; main-chat fallback is used only when `telegram_topics_fallback_to_main_chat` is true.

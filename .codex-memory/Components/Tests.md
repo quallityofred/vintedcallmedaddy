@@ -23,6 +23,7 @@ tags:
 - `backend/tests/test_migration.py`
 - `backend/tests/test_overhaul.py`
 - `backend/tests/test_stress.py`
+- `backend/tests/test_telegram_topic_idempotency.py`
 - `frontend/tests/e2e/landing.spec.ts`
 
 ## 2026-06-08 Cleanup And V2 Skeleton Coverage

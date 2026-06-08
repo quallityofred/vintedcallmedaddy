@@ -29,7 +29,7 @@ tags:
     4. If backend health is stable but proxy resets continue, prefer Railway private/internal backend URL for frontend BACKEND_URL.
     5. Verify API endpoints through frontend while logged in.
 - **Scraper Verification:** After deploying the candidate detail guard, keep Telegram disabled and verify one controlled category+brand monitor. First check should baseline silently; later checks should skip stale items and wrong-category items without `FoundItem` spam. If Vinted detail remains blocked with 403 in production, confirm the fallback counters show detail failures and no unchecked notifications.
-- **Telegram Topics Follow-up:** `tests/test_telegram_topics.py` still has out-of-scope failures around topic send-failure status updates staying `active` instead of `missing`/`failed`. Fix in a Telegram-specific task, not in scraper correctness work.
+- **Telegram Topics Follow-up**: Idempotent creation is fixed with in-memory locks and atomic DB updates. Existing duplicate Telegram UI topics created before this fix may require one-time manual cleanup.
 
 ## Frontend Migration
 
