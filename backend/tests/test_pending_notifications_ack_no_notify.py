@@ -1,7 +1,7 @@
 import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 import uuid
 
 from app.models import FoundItem, Monitor, User, utc_now
