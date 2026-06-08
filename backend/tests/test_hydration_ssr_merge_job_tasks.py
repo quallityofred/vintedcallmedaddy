@@ -6,6 +6,10 @@ import pytest
 
 from app.scheduler.diagnostics import registry
 from app.scheduler.tasks import run_hydration_ssr_merge_job
+from app.scraper.hydration_ssr_merge import (
+    HydrationSsrMergeResult,
+    HydrationSsrMergeStats,
+)
 
 
 def _monitor(domains: list[str]):
@@ -90,10 +94,10 @@ async def test_hydration_ssr_merge_job_processes_selected_domains_and_fetches_on
         "app.scheduler.tasks.VintedClient",
         return_value=client,
     ), patch(
-        "app.scheduler.tasks.extract_hydration_items",
+        "app.scraper.hydration_ssr_merge.extract_hydration_items",
         side_effect=parse_hydration,
     ), patch(
-        "app.scheduler.tasks.parse_catalog_ssr_photo_map",
+        "app.scraper.hydration_ssr_merge.parse_catalog_ssr_photo_map",
         side_effect=parse_ssr,
     ):
         result = await run_hydration_ssr_merge_job(
@@ -145,9 +149,9 @@ async def test_hydration_ssr_merge_job_processes_all_eight_selected_domains():
     with session_patch, patch(
         "app.scheduler.tasks.VintedClient", return_value=client
     ), patch(
-        "app.scheduler.tasks.extract_hydration_items", return_value=[]
+        "app.scraper.hydration_ssr_merge.extract_hydration_items", return_value=[]
     ), patch(
-        "app.scheduler.tasks.parse_catalog_ssr_photo_map", return_value={}
+        "app.scraper.hydration_ssr_merge.parse_catalog_ssr_photo_map", return_value={}
     ):
         result = await run_hydration_ssr_merge_job(
             22,
@@ -177,9 +181,9 @@ async def test_hydration_ssr_merge_job_explicit_domain_processes_only_that_domai
     with session_patch, patch(
         "app.scheduler.tasks.VintedClient", return_value=client
     ), patch(
-        "app.scheduler.tasks.extract_hydration_items", return_value=[]
+        "app.scraper.hydration_ssr_merge.extract_hydration_items", return_value=[]
     ), patch(
-        "app.scheduler.tasks.parse_catalog_ssr_photo_map", return_value={}
+        "app.scraper.hydration_ssr_merge.parse_catalog_ssr_photo_map", return_value={}
     ):
         result = await run_hydration_ssr_merge_job(
             22,
@@ -210,10 +214,10 @@ async def test_hydration_ssr_merge_job_passes_max_domains_and_merges_by_item_id_
     with session_patch, patch(
         "app.scheduler.tasks.VintedClient", return_value=client
     ), patch(
-        "app.scheduler.tasks.extract_hydration_items",
+        "app.scraper.hydration_ssr_merge.extract_hydration_items",
         side_effect=lambda html, *, domain: _hydration_items(domain),
     ), patch(
-        "app.scheduler.tasks.parse_catalog_ssr_photo_map",
+        "app.scraper.hydration_ssr_merge.parse_catalog_ssr_photo_map",
         return_value={
             "102": "https://images1.vinted.net/102.webp",
             "999": "https://images1.vinted.net/ssr-only.webp",
@@ -260,10 +264,10 @@ async def test_hydration_ssr_merge_job_side_effects_false_and_redacts_photo_urls
     with session_patch, patch(
         "app.scheduler.tasks.VintedClient", return_value=client
     ), patch(
-        "app.scheduler.tasks.extract_hydration_items",
+        "app.scraper.hydration_ssr_merge.extract_hydration_items",
         return_value=_hydration_items("vinted.pl"),
     ), patch(
-        "app.scheduler.tasks.parse_catalog_ssr_photo_map",
+        "app.scraper.hydration_ssr_merge.parse_catalog_ssr_photo_map",
         return_value={"101": full_photo_url},
     ):
         result = await run_hydration_ssr_merge_job(22, job_id)
@@ -301,10 +305,10 @@ async def test_hydration_ssr_merge_job_reports_domain_errors_without_hiding_succ
     with session_patch, patch(
         "app.scheduler.tasks.VintedClient", return_value=client
     ), patch(
-        "app.scheduler.tasks.extract_hydration_items",
+        "app.scraper.hydration_ssr_merge.extract_hydration_items",
         side_effect=lambda html, *, domain: _hydration_items(domain),
     ), patch(
-        "app.scheduler.tasks.parse_catalog_ssr_photo_map",
+        "app.scraper.hydration_ssr_merge.parse_catalog_ssr_photo_map",
         return_value={"101": "https://images1.vinted.net/101.webp"},
     ):
         result = await run_hydration_ssr_merge_job(22, job_id)
@@ -320,3 +324,31 @@ async def test_hydration_ssr_merge_job_reports_domain_errors_without_hiding_succ
     assert stored is not None
     assert stored.status == "completed"
     assert stored.result == result
+
+
+@pytest.mark.asyncio
+async def test_async_diagnostic_job_uses_shared_merge_service():
+    monitor = _monitor(["vinted.pl"])
+    _, session_patch = _session_patches(monitor)
+    shared_result = HydrationSsrMergeResult(
+        records=_hydration_items("vinted.pl"),
+        stats=HydrationSsrMergeStats(
+            html_fetch_count=1,
+            hydration_items=2,
+            missing_photo_after_merge=2,
+        ),
+    )
+    job_id = "merge_22_shared_service"
+    await registry.start_job(job_id, 22, "hydration_with_ssr_photos")
+    with session_patch, patch(
+        "app.scheduler.tasks.VintedClient", return_value=AsyncMock()
+    ), patch(
+        "app.scraper.hydration_ssr_merge.fetch_and_parse_hydration_ssr_photos",
+        new=AsyncMock(return_value=shared_result),
+    ) as merge_service:
+        result = await run_hydration_ssr_merge_job(22, job_id)
+
+    assert result is not None
+    merge_service.assert_awaited_once()
+    assert result["summary"]["hydration_items_total"] == 2
+    assert result["side_effects"]["writes_found_items"] is False

@@ -16,7 +16,10 @@ from app.web.api_dependencies import require_api_user
 from app.web.dependencies import get_db
 from app.models import User, Monitor
 from app.scheduler.diagnostics import registry
-from app.scraper.source_selector import should_use_hydration_source
+from app.scraper.source_selector import (
+    should_use_hydration_source,
+    should_use_hydration_ssr_photo_merge,
+)
 from app.config import get_settings
 from app.scheduler.dry_run import (
     perform_monitor_dry_run,
@@ -113,6 +116,7 @@ async def get_monitor_source_selection(
 
     # Check selector logic
     used = should_use_hydration_source(params)
+    merge_used = should_use_hydration_ssr_photo_merge(params)
 
     # Determine reason
     reason = "api"
@@ -129,7 +133,15 @@ async def get_monitor_source_selection(
     return {
         "monitor_id": monitor_id,
         "hydration_enabled_effective": settings.monitor_hydration_source_enabled,
-        "selected_source": "hydration" if used else "api",
+        "hydration_ssr_photo_merge_enabled": settings.monitor_ssr_photo_merge_enabled,
+        "hydration_ssr_photo_merge_eligible": merge_used,
+        "selected_source": (
+            "hydration_ssr_photo_merge"
+            if merge_used
+            else "hydration"
+            if used
+            else "api"
+        ),
         "reason": reason,
         "has_catalog_filter": any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_id", "catalog"]),
         "has_brand_filter": "brand_ids[]" in params or "brand_ids" in params,
@@ -142,6 +154,7 @@ async def get_monitor_source_selection(
             "at": diag.last_check_at if diag else None,
             "source": diag.last_check_source if diag else None,
             "items_found_count_by_domain": diag.items_found_count_by_domain if diag else {},
+            "source_details_by_domain": diag.source_details_by_domain if diag else {},
         },
         "side_effects": {
             "runs_monitor_check": False,

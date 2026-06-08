@@ -101,6 +101,7 @@ class DomainSearchResult:
     request_count: int = 1
     duration_ms: int = 0
     error: str | None = None
+    source_diagnostics: dict | None = None
 
 
 class CloudflareFallback:

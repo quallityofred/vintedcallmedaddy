@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     monitor_detail_category_guard_enabled: bool = False
     monitor_detail_freshness_guard_enabled: bool = False
     monitor_hydration_source_enabled: bool = False
+    monitor_ssr_photo_merge_enabled: bool = False
     scraper_global_http_concurrency: int = Field(default=8, ge=1)
     scraper_domain_http_concurrency: int = Field(default=1, ge=1)
     scraper_domain_cooldown_seconds: int = Field(default=300, ge=0)

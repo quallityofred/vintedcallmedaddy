@@ -11,6 +11,7 @@ class MonitorDiagnostics:
     last_check_source: str = "unknown"
     domains_processed: List[str] = field(default_factory=list)
     items_found_count_by_domain: Dict[str, int] = field(default_factory=dict)
+    source_details_by_domain: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     last_error: Optional[str] = None
 
 
@@ -31,7 +32,14 @@ class DiagnosticsRegistry:
         self._jobs: Dict[str, DiagnosticJob] = {}
         self._lock = asyncio.Lock()
 
-    async def record_check(self, monitor_id: int, source: str, domain_counts: Dict[str, int], error: Optional[str] = None):
+    async def record_check(
+        self,
+        monitor_id: int,
+        source: str,
+        domain_counts: Dict[str, int],
+        error: Optional[str] = None,
+        source_details_by_domain: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
         async with self._lock:
             self._diagnostics[monitor_id] = MonitorDiagnostics(
                 monitor_id=monitor_id,
@@ -39,6 +47,7 @@ class DiagnosticsRegistry:
                 last_check_source=source,
                 domains_processed=list(domain_counts.keys()),
                 items_found_count_by_domain=domain_counts,
+                source_details_by_domain=source_details_by_domain or {},
                 last_error=error
             )
 

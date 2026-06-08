@@ -93,6 +93,7 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 - Deployment gate for SeenItem baseline: wait for explicit commit/push approval, verify `/api/health`, run `baseline-seen-no-notify` with `dry_run=true` for one selected domain, then run once with `dry_run=false` and confirm a second run creates zero while full-cycle reports the same items as already seen.
 - Deployment gate for missing-photo FoundItem fix: wait for explicit approval, verify `/api/health`, inspect full-cycle `found_item_insert_*` counters for monitor 22, then run one controlled real check and confirm missing-photo items persist and notify through text-only Telegram without a scheduler IntegrityError.
 - Deployment gate for the async hydration+SSR merge diagnostic: wait for explicit approval, verify `/api/health`, start the eight-domain job, poll by returned job ID, and require `domains_processed_total=8`, `html_fetch_count_total=8`, no domain errors, and complete top-level summary/count/sample fields before planning scheduler integration.
+- Hydration+SSR scheduler release: deploy the integration code with `MONITOR_SSR_PHOTO_MERGE_ENABLED=false`, validate health and the eight-domain async job, then enable the flag only in a separately approved release. Roll back by restoring the flag to `false`; do not add per-item detail fetching or notification caps.
 
 ## Graph Metadata Validation
 

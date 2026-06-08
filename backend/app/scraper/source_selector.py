@@ -1,5 +1,10 @@
 from __future__ import annotations
+from typing import Any
+
 from app.config import get_settings
+
+
+_CATEGORY_KEYS = ("catalog[]", "catalog_ids[]", "catalog_id", "catalog")
 
 def should_use_hydration_source(params: dict[str, Any]) -> bool:
     """
@@ -11,5 +16,14 @@ def should_use_hydration_source(params: dict[str, Any]) -> bool:
         return False
         
     # Check for category indicators: catalog, catalog_ids, or their bracketed variants
-    category_keys = ["catalog[]", "catalog_ids[]", "catalog_id", "catalog"]
-    return any(key in params for key in category_keys)
+    return any(key in params for key in _CATEGORY_KEYS)
+
+
+def should_use_hydration_ssr_photo_merge(params: dict[str, Any]) -> bool:
+    """Return whether the default-off SSR photo enrichment path is eligible."""
+    settings = get_settings()
+    return (
+        settings.monitor_ssr_photo_merge_enabled
+        and settings.monitor_hydration_source_enabled
+        and any(key in params for key in _CATEGORY_KEYS)
+    )

@@ -26,8 +26,6 @@ from app.scheduler.found_item_values import build_found_item_values
 from app.scraper.url_parser import parse_vinted_url
 from app.telegram.notifications import send_item_notification
 from app.telegram.topic_service import ensure_monitor_topic, record_topic_send_failure
-from app.scraper.catalog_ssr_parser import parse_catalog_ssr_photo_map
-from app.scraper.hydration_parser import extract_hydration_items
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -385,7 +383,10 @@ async def _fetch_domain_results(
 	context: MonitorCheckContext,
 	mode: str,
 ) -> list[DomainSearchResult]:
-	from app.scraper.source_selector import should_use_hydration_source
+	from app.scraper.source_selector import (
+		should_use_hydration_source,
+		should_use_hydration_ssr_photo_merge,
+	)
 	from app.scraper.hydration_parser import hydration_record_to_vinted_item
 
 	search_params = _runtime_search_params(context.params)
@@ -399,6 +400,58 @@ async def _fetch_domain_results(
 	# Hydration Source Branch
 	if should_use_hydration_source(context.params):
 		logger.info("Using hydration source for monitor=%s", context.monitor_id)
+		if should_use_hydration_ssr_photo_merge(context.params):
+			from app.scraper.hydration_ssr_merge import fetch_and_parse_hydration_ssr_photos
+
+			async def fetch_merged_domain(domain: str) -> DomainSearchResult:
+				domain_url = _catalog_url_for_domain(context.original_url, domain)
+				try:
+					merge_result = await fetch_and_parse_hydration_ssr_photos(
+						client,
+						domain_url,
+						domain=domain,
+					)
+					items = [
+						hydration_record_to_vinted_item(record, domain)
+						for record in merge_result.records
+					]
+					stats = merge_result.stats.to_safe_dict()
+					if merge_result.stats.photo_merge_fallback_used:
+						logger.warning(
+							"hydration_ssr_photo_merge_fallback monitor_id=%s domain=%s exception_type=%s",
+							context.monitor_id,
+							domain,
+							merge_result.stats.photo_merge_error,
+						)
+					return DomainSearchResult(
+						domain=domain,
+						items=items,
+						request_count=merge_result.stats.html_fetch_count,
+						duration_ms=merge_result.stats.duration_ms,
+						source_diagnostics=stats,
+					)
+				except Exception as exc:
+					logger.warning(
+						"hydration_ssr_photo_merge_domain_failed monitor_id=%s domain=%s exception_type=%s",
+						context.monitor_id,
+						domain,
+						type(exc).__name__,
+					)
+					return DomainSearchResult(
+						domain=domain,
+						items=[],
+						request_count=1,
+						error=type(exc).__name__,
+						source_diagnostics={
+							"source_used": "hydration_ssr_photo_merge",
+							"safe_error": type(exc).__name__,
+						},
+					)
+
+			return await asyncio.gather(
+				*(fetch_merged_domain(domain) for domain in context.domains)
+			)
+
 		by_domain: dict[str, list[VintedItem]] = {domain: [] for domain in context.domains}
 		for domain in context.domains:
 			# Use client to fetch per domain
@@ -769,10 +822,28 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 
 				# Record diagnostics
 				from app.scheduler.diagnostics import registry
-				from app.scraper.source_selector import should_use_hydration_source
+				from app.scraper.source_selector import (
+					should_use_hydration_source,
+					should_use_hydration_ssr_photo_merge,
+				)
 				domain_counts = {r.domain: len(r.items or []) for r in domain_results}
-				source = "hydration" if should_use_hydration_source(context.params) else "api"
-				await registry.record_check(context.monitor_id, source, domain_counts)
+				if should_use_hydration_ssr_photo_merge(context.params):
+					source = "hydration_ssr_photo_merge"
+				elif should_use_hydration_source(context.params):
+					source = "hydration"
+				else:
+					source = "api"
+				source_details = {
+					result.domain: result.source_diagnostics
+					for result in domain_results
+					if result.source_diagnostics
+				}
+				await registry.record_check(
+					context.monitor_id,
+					source,
+					domain_counts,
+					source_details_by_domain=source_details,
+				)
 				raw_result_count = sum(len(result.items or []) for result in domain_results)
 				domain_deltas: list[DomainDeltaResult] = []
 				if domain_results and raw_result_count > 0:
@@ -1163,6 +1234,7 @@ async def run_hydration_ssr_merge_job(
 ) -> dict | None:
     """Run a read-only one-fetch-per-domain hydration/SSR merge diagnostic."""
     from app.scheduler.diagnostics import registry
+    from app.scraper.hydration_ssr_merge import fetch_and_parse_hydration_ssr_photos
 
     started_at = datetime.now(timezone.utc)
     total_started = time.monotonic()
@@ -1201,25 +1273,18 @@ async def run_hydration_ssr_merge_job(
         client = VintedClient(rate_limiter=rate_limiter)
 
         async def process_domain(domain: str):
-            domain_started = time.monotonic()
-            fetch_started = time.monotonic()
             domain_url = _catalog_url_for_domain(monitor.original_url, domain)
-            html = await client.fetch_catalog_html(domain_url, domain=domain)
-            fetch_duration_ms = int((time.monotonic() - fetch_started) * 1000)
-
-            parse_started = time.monotonic()
-            hydration_items = extract_hydration_items(html, domain=domain)[
-                :max_items_per_domain
-            ]
-            ssr_photo_map = parse_catalog_ssr_photo_map(html)
-            parse_duration_ms = int((time.monotonic() - parse_started) * 1000)
-
-            hydration_ids = {str(item.get("id")) for item in hydration_items}
-            overlap_ids = hydration_ids.intersection(ssr_photo_map)
+            merge_result = await fetch_and_parse_hydration_ssr_photos(
+                client,
+                domain_url,
+                domain=domain,
+                max_items=max_items_per_domain,
+            )
             samples = []
-            for position, item in enumerate(hydration_items[:sample_limit]):
+            for position, item in enumerate(merge_result.records[:sample_limit]):
                 item_id = str(item.get("id"))
-                photo_url = ssr_photo_map.get(item_id, "")
+                photo_url = item.get("photo_url") or ""
+                has_ssr_photo = item_id in merge_result.ssr_photo_item_ids
                 samples.append(
                     {
                         "position": position,
@@ -1231,36 +1296,14 @@ async def run_hydration_ssr_merge_job(
                         "title_preview": str(item.get("title") or "")[:50],
                         "has_hydration_price": item.get("price") is not None,
                         "currency": str(item.get("currency") or ""),
-                        "has_ssr_photo": bool(photo_url),
+                        "has_ssr_photo": has_ssr_photo,
                         "photo_host": urllib.parse.urlsplit(photo_url).hostname
-                        if photo_url
+                        if has_ssr_photo and photo_url
                         else None,
                     }
                 )
 
-            counts = {
-                "html_fetch_count": 1,
-                "duration_ms": int((time.monotonic() - domain_started) * 1000),
-                "fetch_duration_ms": fetch_duration_ms,
-                "parse_duration_ms": parse_duration_ms,
-                "hydration_items": len(hydration_items),
-                "ssr_photo_map_items": len(ssr_photo_map),
-                "overlap_count": len(overlap_ids),
-                "overlap_ratio": round(
-                    len(overlap_ids) / len(hydration_items), 4
-                ) if hydration_items else 0.0,
-                "merged_with_photo": len(overlap_ids),
-                "missing_photo_after_merge": len(hydration_items) - len(overlap_ids),
-                "hydration_only_count": len(hydration_ids - set(ssr_photo_map)),
-                "ssr_photo_only_count": len(set(ssr_photo_map) - hydration_ids),
-                "photo_hosts": sorted(
-                    {
-                        host
-                        for url in ssr_photo_map.values()
-                        if (host := urllib.parse.urlsplit(url).hostname)
-                    }
-                ),
-            }
+            counts = merge_result.stats.to_safe_dict()
             return domain, counts, samples
 
         domain_results = await asyncio.gather(
