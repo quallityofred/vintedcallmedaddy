@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import FoundItem, Monitor, SeenItem, User
 from app.scheduler import tasks
+from app.scheduler.diagnostics import registry
 from app.scheduler.tasks import TelegramDeliveryTarget
 from app.web.api_dependencies import require_api_user
 from app.web.csrf import require_api_csrf
@@ -249,6 +250,97 @@ async def test_process_notifications_diagnostic_executes_limited_successful_batc
 
 
 @pytest.mark.asyncio
+async def test_process_notifications_job_is_monitor_scoped(
+    db_session, notification_session_factory, monkeypatch
+):
+    _, first_monitors, first_items = await seed_pending_items(db_session, count=2)
+    _, second_monitors, second_items = await seed_pending_items(db_session, count=2)
+    monkeypatch.setattr(
+        tasks,
+        "resolve_telegram_delivery_target",
+        AsyncMock(
+            return_value=TelegramDeliveryTarget(
+                ok=True,
+                code="main_chat",
+                message="configured",
+                bot=object(),
+                chat_id=123456,
+            )
+        ),
+    )
+    send_mock = AsyncMock(return_value="photo")
+    monkeypatch.setattr(tasks, "send_item_notification", send_mock)
+
+    app = create_test_app()
+    dry_response = await post_process(
+        app,
+        f"?dry_run=true&monitor_id={first_monitors[0].id}&limit=10&sample_limit=10",
+    )
+    assert dry_response.status_code == 200
+    dry_selected_ids = {
+        sample["vinted_item_id"] for sample in dry_response.json()["samples"]
+    }
+    response = await post_process_job(
+        app,
+        f"?dry_run=false&monitor_id={first_monitors[0].id}&limit=10",
+    )
+    assert response.status_code == 200
+    result = await wait_for_job(app, response.json()["job_id"])
+
+    assert result["requested_monitor_id"] == first_monitors[0].id
+    assert result["summary"]["selected_monitor_ids"] == [first_monitors[0].id]
+    assert result["summary"]["selected_for_processing"] == 2
+    assert send_mock.await_count == 2
+    live_selected_ids = {str(call.args[2].id) for call in send_mock.await_args_list}
+    assert live_selected_ids == dry_selected_ids
+    for item in first_items + second_items:
+        await db_session.refresh(item)
+    assert all(item.notified is True for item in first_items)
+    assert all(item.notified is False for item in second_items)
+    assert first_monitors[0].id != second_monitors[0].id
+
+
+@pytest.mark.asyncio
+async def test_process_notifications_direct_live_requires_explicit_scope():
+    with pytest.raises(ValueError, match="monitor_id_required"):
+        await tasks.process_pending_notifications(dry_run=False)
+
+
+@pytest.mark.asyncio
+async def test_process_notifications_job_rejects_unscoped_live():
+    response = await post_process_job(create_test_app(), "?dry_run=false&limit=1")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "monitor_id_required_for_live_notification_processing"
+
+
+@pytest.mark.asyncio
+async def test_process_notifications_running_status_reports_request_and_live_side_effects():
+    job_id = f"notify-running-{uuid4().hex}"
+    await registry.start_job(
+        job_id,
+        0,
+        "pending_notifications",
+        request_metadata={
+            "requested_monitor_id": 22,
+            "requested_limit": 10,
+            "requested_sample_limit": 5,
+            "requested_dry_run": False,
+            "all_monitors": False,
+        },
+    )
+
+    response = await get_job_status(create_test_app(), job_id)
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["status"] == "running"
+    assert data["requested_monitor_id"] == 22
+    assert data["summary"]["selected_for_processing"] is None
+    assert data["side_effects"]["sends_telegram"] is True
+    assert data["side_effects"]["calls_vinted"] is False
+
+
+@pytest.mark.asyncio
 async def test_process_notifications_failure_remains_retryable(
     db_session, notification_session_factory, monkeypatch
 ):
@@ -437,11 +529,19 @@ async def test_pending_processors_do_not_overlap(monkeypatch):
     monkeypatch.setattr(tasks, "_count_pending_notifications", AsyncMock(return_value=0))
 
     await asyncio.gather(
-        tasks.process_pending_notifications(dry_run=False),
-        tasks.process_pending_notifications(dry_run=False),
+        tasks.process_pending_notifications(dry_run=False, allow_all_monitors=True),
+        tasks.process_pending_notifications(dry_run=False, allow_all_monitors=True),
     )
 
     assert max_active == 1
+
+
+def test_monitor_check_triggers_only_monitor_scoped_notification_processing():
+    import inspect
+
+    source = inspect.getsource(tasks.check_monitor)
+    assert "process_pending_notifications(monitor_id=monitor_id)" in source
+    assert "create_task(process_pending_notifications())" not in source
 
 
 @pytest.mark.asyncio

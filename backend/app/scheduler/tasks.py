@@ -1065,7 +1065,7 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					)
 
 					if new_items_to_notify:
-						asyncio.create_task(process_pending_notifications())
+						asyncio.create_task(process_pending_notifications(monitor_id=monitor_id))
 
 					monitor.last_check_status = "baseline_created" if context.is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
 
@@ -1198,9 +1198,12 @@ async def process_pending_notifications(
 	monitor_id: int | None = None,
 	dry_run: bool = False,
 	sample_limit: int = 10,
+	allow_all_monitors: bool = False,
 ) -> dict[str, object]:
 	"""Audit or deliver a bounded pending batch; only successful sends are acknowledged."""
 	started = time.monotonic()
+	if not dry_run and monitor_id is None and not allow_all_monitors:
+		raise ValueError("monitor_id_required_for_live_notification_processing")
 
 	if dry_run:
 		# Dry-run diagnostic is read-only and does not need the lock.
@@ -1217,6 +1220,7 @@ async def process_pending_notifications(
 			"pending_total": metadata["pending_total"],
 			"pending_before": metadata["pending_total"],
 			"selected_for_processing": len(candidates),
+			"selected_monitor_ids": sorted({candidate.monitor_id for candidate in candidates}),
 			"with_photo_url": with_photo,
 			"without_photo_url": len(candidates) - with_photo,
 			"estimated_seconds_private_chat": len(candidates),
@@ -1254,6 +1258,7 @@ async def process_pending_notifications(
 			"pending_total": metadata["pending_total"],
 			"pending_before": metadata["pending_total"],
 			"selected_for_processing": len(candidates),
+			"selected_monitor_ids": sorted({candidate.monitor_id for candidate in candidates}),
 			"with_photo_url": with_photo,
 			"without_photo_url": len(candidates) - with_photo,
 			"estimated_seconds_private_chat": len(candidates),
@@ -1410,6 +1415,7 @@ class MonitorScheduler:
 				process_pending_notifications,
 				trigger=IntervalTrigger(minutes=1),
 				args=[500],
+				kwargs={"allow_all_monitors": True},
 				id="pending_notifications_processor",
 			)
 		self.scheduler.start()
@@ -1658,4 +1664,4 @@ async def run_pending_notifications_job(
         await registry.complete_job(job_id, result)
     except Exception as e:
         logger.exception(f'Pending notification job failed: {job_id}')
-        await registry.fail_job(job_id, str(e))
+        await registry.fail_job(job_id, type(e).__name__)

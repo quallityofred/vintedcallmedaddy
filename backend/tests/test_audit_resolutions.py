@@ -283,7 +283,7 @@ async def test_notification_worker_contains_invalid_token_failure(db_session):
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), patch(
         "app.telegram.bot.get_or_create_bot", side_effect=ValueError("invalid token")
     ):
-        await process_pending_notifications()
+        await process_pending_notifications(allow_all_monitors=True)
 
     await db_session.refresh(item)
     assert item.notified is False

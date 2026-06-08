@@ -599,7 +599,7 @@ async def test_pending_notification_uses_user_credentials_and_safe_html(db_sessi
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
          patch("app.telegram.bot.get_or_create_bot", return_value=(fake_bot, MagicMock())) as get_bot, \
          patch("app.telegram.notifications.asyncio.sleep", AsyncMock()):
-        await process_pending_notifications()
+        await process_pending_notifications(allow_all_monitors=True)
 
     get_bot.assert_called_once_with("runtime-test-token")
     fake_bot.send_message.assert_awaited_once()
@@ -663,7 +663,7 @@ async def test_notification_failure_keeps_item_pending(db_session):
 
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
          patch("app.telegram.bot.get_or_create_bot", return_value=(fake_bot, MagicMock())):
-        await process_pending_notifications()
+        await process_pending_notifications(allow_all_monitors=True)
 
     await db_session.refresh(item)
     assert item.notified is False
@@ -714,7 +714,7 @@ async def test_notification_skipped_if_telegram_disabled(db_session):
 
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
          patch('app.telegram.bot.get_or_create_bot', return_value=(fake_bot, MagicMock())) as get_bot:
-        await process_pending_notifications()
+        await process_pending_notifications(allow_all_monitors=True)
 
     get_bot.assert_not_called()
     fake_bot.send_message.assert_not_awaited()

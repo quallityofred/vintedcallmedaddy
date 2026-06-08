@@ -25,6 +25,7 @@ class DiagnosticJob:
     completed_at: Optional[datetime] = None
     result: Optional[Dict[str, Any]] = None
     safe_error: Optional[str] = None
+    request_metadata: Dict[str, Any] = field(default_factory=dict)
 
 class DiagnosticsRegistry:
     def __init__(self):
@@ -55,13 +56,20 @@ class DiagnosticsRegistry:
         async with self._lock:
             return self._diagnostics.get(monitor_id)
 
-    async def start_job(self, job_id: str, monitor_id: int, source: str) -> DiagnosticJob:
+    async def start_job(
+        self,
+        job_id: str,
+        monitor_id: int,
+        source: str,
+        request_metadata: Optional[Dict[str, Any]] = None,
+    ) -> DiagnosticJob:
         job = DiagnosticJob(
             job_id=job_id,
             monitor_id=monitor_id,
             status="running",
             source=source,
             started_at=datetime.utcnow(),
+            request_metadata=dict(request_metadata or {}),
         )
         async with self._lock:
             self._jobs[job_id] = job

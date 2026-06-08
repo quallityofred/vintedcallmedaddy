@@ -158,7 +158,7 @@ async def _run_pending_notifications_with_bot(db_session, bot: FakeTopicBot):
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False, class_=AsyncSession)
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
          patch("app.telegram.bot.get_or_create_bot", return_value=(bot, MagicMock())):
-        await process_pending_notifications()
+        await process_pending_notifications(allow_all_monitors=True)
 
 
 @pytest.mark.asyncio
@@ -902,7 +902,7 @@ async def test_topic_notification_failure_keeps_found_item_pending(db_session):
 
     with patch("app.scheduler.tasks.AsyncSessionLocal", side_effect=session_factory), \
          patch("app.telegram.bot.get_or_create_bot", return_value=(fake_bot, MagicMock())):
-        await process_pending_notifications()
+        await process_pending_notifications(allow_all_monitors=True)
 
     fake_bot.send_message.assert_awaited_once()
     _, kwargs = fake_bot.send_message.await_args

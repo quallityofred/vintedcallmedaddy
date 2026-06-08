@@ -694,9 +694,26 @@ async def post_process_notifications_job(
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    job_id = f"notify_{int(datetime.now(timezone.utc).timestamp())}"
+    if not dry_run and monitor_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="monitor_id_required_for_live_notification_processing",
+        )
+
+    job_id = f"notify_{uuid.uuid4().hex[:12]}"
     # Always use monitor_id=0 for notification jobs in the registry
-    await registry.start_job(job_id, 0, "pending_notifications")
+    await registry.start_job(
+        job_id,
+        0,
+        "pending_notifications",
+        request_metadata={
+            "requested_monitor_id": monitor_id,
+            "requested_limit": limit,
+            "requested_sample_limit": sample_limit,
+            "requested_dry_run": dry_run,
+            "all_monitors": False,
+        },
+    )
 
     from app.scheduler.tasks import run_pending_notifications_job
     background_tasks.add_task(
@@ -708,7 +725,14 @@ async def post_process_notifications_job(
         dry_run=dry_run,
     )
 
-    return {"job_id": job_id, "status": "running"}
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "requested_monitor_id": monitor_id,
+        "requested_limit": limit,
+        "requested_sample_limit": sample_limit,
+        "requested_dry_run": dry_run,
+    }
 
 @router.get("/notifications/process-pending-jobs/{job_id}")
 async def get_notification_job_status(job_id: str, user: User = Depends(require_api_user)):
@@ -723,31 +747,41 @@ async def get_notification_job_status(job_id: str, user: User = Depends(require_
             content={"job_id": job_id, "status": "not_found", "safe_error": "job_not_found"},
         )
 
+    request = job.request_metadata
+    requested_dry_run = bool(request.get("requested_dry_run", True))
     res = {
         "job_id": job.job_id,
         "status": job.status,
+        "requested_monitor_id": request.get("requested_monitor_id"),
+        "requested_limit": request.get("requested_limit"),
+        "requested_sample_limit": request.get("requested_sample_limit"),
+        "requested_dry_run": requested_dry_run,
+        "all_monitors": bool(request.get("all_monitors", False)),
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "duration_ms_total": 0,
         "summary": {
-            "pending_before": 0,
-            "pending_total": 0,
-            "selected_for_processing": 0,
-            "sent_photo_count": 0,
-            "sent_text_count": 0,
-            "fallback_text_count": 0,
-            "failed_count": 0,
-            "rate_limited_count": 0,
-            "marked_notified_count": 0,
-            "pending_after": 0,
+            "monitor_id": request.get("requested_monitor_id"),
+            "limit": request.get("requested_limit"),
+            "pending_before": None,
+            "pending_total": None,
+            "selected_for_processing": None,
+            "selected_monitor_ids": [],
+            "sent_photo_count": None,
+            "sent_text_count": None,
+            "fallback_text_count": None,
+            "failed_count": None,
+            "rate_limited_count": None,
+            "marked_notified_count": None,
+            "pending_after": None,
         },
         "errors_sample": [],
         "side_effects": {
             "reads_database": True,
-            "calls_vinted": True,
-            "writes_found_items": False,
+            "calls_vinted": False,
+            "writes_found_items": not requested_dry_run,
             "enqueues_notifications": False,
-            "sends_telegram": False,
+            "sends_telegram": not requested_dry_run,
             "runs_scheduler_check": False,
         },
     }
@@ -762,6 +796,7 @@ async def get_notification_job_status(job_id: str, user: User = Depends(require_
             "pending_before": result.get("pending_before", 0),
             "pending_total": result.get("pending_total", 0),
             "selected_for_processing": result.get("selected_for_processing", 0),
+            "selected_monitor_ids": result.get("selected_monitor_ids", []),
             "sent_photo_count": result.get("sent_photo_count", 0),
             "sent_text_count": result.get("sent_text_count", 0),
             "fallback_text_count": result.get("fallback_text_count", 0),
@@ -773,6 +808,9 @@ async def get_notification_job_status(job_id: str, user: User = Depends(require_
         res["samples"] = result.get("samples", [])
         res["errors_sample"] = result.get("errors_sample", [])
         res["side_effects"] = result.get("side_effects", result.get("side_effects", res["side_effects"]))
+
+    if job.status == "failed":
+        res["safe_error"] = job.safe_error or "notification_job_failed"
 
     return JSONResponse(status_code=200, content=jsonable_encoder(res))
 

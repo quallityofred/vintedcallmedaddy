@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.models import User, Monitor, FoundItem, SeenItem
 from app.scraper.client import VintedClient, DomainSearchResult
@@ -292,4 +292,105 @@ async def test_hydration_fetch_uses_effective_catalog_filters_for_every_domain(m
         assert f"www.{domain}" in url
         assert "brand_ids[]=53" in url
         assert "catalog_ids[]=1231" in url
+        assert "order=newest_first" in url
+
+
+@pytest.mark.asyncio
+async def test_scheduler_hydration_ssr_source_reuses_one_html_fetch_and_preserves_hydration_data(
+    monkeypatch,
+):
+    params = {
+        "brand_ids[]": [53],
+        "catalog_ids[]": [1231],
+        "gender_ids[]": [1, 2],
+        "order": "relevance",
+    }
+    context = tasks.MonitorCheckContext(
+        monitor_id=22,
+        user_id=1,
+        monitor_name="nike",
+        params=params,
+        original_url="https://www.vinted.pl/catalog?brand_ids[]=53",
+        domains=["vinted.fr", "vinted.de"],
+        monitor_filters=extract_monitor_filters(params, monitor_name="nike"),
+        hidden_seller_ids=set(),
+        is_cold_start=False,
+        freshness_cutoff_at=datetime.now(timezone.utc),
+        original_interval=120,
+        cf_worker_url="",
+        cf_worker_mode="auto",
+        cf_worker_block_threshold=2,
+        cf_worker_recovery_minutes=10,
+    )
+    client = MagicMock()
+    client.fetch_catalog_html = AsyncMock()
+    html_by_domain = {
+        "vinted.fr": "SAME-FR-HTML",
+        "vinted.de": "SAME-DE-HTML",
+    }
+
+    async def fetch_catalog_html(url, *, domain):
+        client.requested_urls.append((url, domain))
+        return html_by_domain[domain]
+
+    client.requested_urls = []
+    client.fetch_catalog_html.side_effect = fetch_catalog_html
+    selector_settings = MagicMock(
+        monitor_hydration_source_enabled=True,
+        monitor_ssr_photo_merge_enabled=True,
+    )
+    hydration_html_by_domain = {}
+    ssr_html_by_domain = {}
+
+    def extract_items(html, *, domain):
+        hydration_html_by_domain[domain] = html
+        return [
+            {
+                "id": "101",
+                "title": f"Hydration title {domain}",
+                "price": 49.5,
+                "currency": "EUR",
+                "brand_title": "Nike",
+                "url": f"https://www.{domain}/items/101-hydration",
+            }
+        ]
+
+    def parse_photo_map(html):
+        domain = next(key for key, value in html_by_domain.items() if value == html)
+        ssr_html_by_domain[domain] = html
+        return {
+            "101": f"https://images.example.invalid/{domain}/101.webp",
+            "999": f"https://images.example.invalid/{domain}/ssr-only.webp",
+        }
+
+    monkeypatch.setattr("app.scraper.source_selector.get_settings", lambda: selector_settings)
+    with patch(
+        "app.scraper.hydration_ssr_merge.extract_hydration_items",
+        side_effect=extract_items,
+    ), patch(
+        "app.scraper.hydration_ssr_merge.parse_catalog_ssr_photo_map",
+        side_effect=parse_photo_map,
+    ):
+        results = await tasks._fetch_domain_results(client, context=context, mode="auto")
+
+    assert [result.domain for result in results] == ["vinted.fr", "vinted.de"]
+    assert len(client.requested_urls) == 2
+    assert hydration_html_by_domain == ssr_html_by_domain == html_by_domain
+    for result in results:
+        assert result.request_count == 1
+        assert len(result.items) == 1
+        item = result.items[0]
+        assert item.id == 101
+        assert item.title == f"Hydration title {result.domain}"
+        assert item.price == 49.5
+        assert item.currency == "EUR"
+        assert item.item_url == f"https://www.{result.domain}/items/101-hydration"
+        assert item.photo_url.endswith(f"/{result.domain}/101.webp")
+        assert result.source_diagnostics["ssr_photo_only_count"] == 1
+    for url, domain in client.requested_urls:
+        assert f"www.{domain}" in url
+        assert "brand_ids[]=53" in url
+        assert "catalog_ids[]=1231" in url
+        assert "gender_ids[]=1" in url
+        assert "gender_ids[]=2" in url
         assert "order=newest_first" in url
