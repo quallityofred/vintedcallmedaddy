@@ -634,3 +634,22 @@ async def post_monitor_start_with_baseline(
     finally:
         if client is not None:
             await client.close()
+
+
+@router.post("/notifications/process-pending")
+async def process_notifications_diagnostic(
+    dry_run: bool = True,
+    limit: int = Query(default=50, ge=1, le=200),
+    user: User = Depends(require_api_user),
+):
+    """Manually trigger notification processing for pending items."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.scheduler.tasks import process_pending_notifications
+
+    if dry_run:
+        return {"message": "Dry run: notification processing would be triggered with limit", "limit": limit}
+
+    await process_pending_notifications(limit=limit)
+    return {"message": "Notification processing triggered."}

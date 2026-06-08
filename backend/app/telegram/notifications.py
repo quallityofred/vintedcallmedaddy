@@ -9,7 +9,14 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.pricing.currency import format_price_with_usd
 from app.scraper.parser import VintedItem
 
+from app.telegram.rate_limiter import TelegramRateLimiter
+
 logger = logging.getLogger(__name__)
+
+# Initialize rate limiter
+rate_limiter = TelegramRateLimiter()
+
+# ... (rest of the file)
 
 
 def _escape(value: object, *, limit: int = 180) -> str:
@@ -101,6 +108,9 @@ async def send_item_notification(
 
     for _attempt in range(3):
         try:
+            # Apply rate limiting before sending
+            await rate_limiter.acquire(chat_id)
+
             thread_kwargs = {"message_thread_id": message_thread_id} if message_thread_id is not None else {}
             if item.photo_url:
                 await bot.send_photo(
@@ -120,7 +130,6 @@ async def send_item_notification(
                     disable_web_page_preview=False,
                     **thread_kwargs,
                 )
-            await asyncio.sleep(0.3)
             return
         except TelegramRetryAfter as exc:
             last_error = exc

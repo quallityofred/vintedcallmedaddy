@@ -1047,7 +1047,7 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 
 
 
-async def process_pending_notifications() -> None:
+async def process_pending_notifications(limit: int = 50) -> None:
 	"""Send pending Telegram notifications for newly found items."""
 	async with _notification_lock:
 		async with _new_session() as db:
@@ -1055,7 +1055,7 @@ async def process_pending_notifications() -> None:
 				select(FoundItem)
 				.where(FoundItem.notified == False)  # noqa: E712
 				.order_by(FoundItem.found_at.asc())
-				.limit(50)
+				.limit(limit)
 			)
 
 			if not settings.is_sqlite():
@@ -1161,6 +1161,13 @@ class MonitorScheduler:
 			if job:
 				self.job_ids[monitor.id] = job.id
 
+		if settings.pending_notifications_worker_enabled:
+			self.scheduler.add_job(
+				process_pending_notifications,
+				trigger=IntervalTrigger(minutes=1),
+				args=[500],
+				id="pending_notifications_processor",
+			)
 		self.scheduler.start()
 		logger.info("Scheduler started with %d monitors", len(monitors))
 
