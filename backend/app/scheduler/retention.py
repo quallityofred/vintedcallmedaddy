@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
@@ -304,3 +304,38 @@ async def _analyze_seen_items(
         else:
             stats.seen_items_would_keep += 1
             plan.seen_items_would_keep_total += 1
+
+async def run_history_retention_cleanup(
+    db: AsyncSession,
+    dry_run: bool = True,
+    monitor_ids: Optional[List[int]] = None,
+    include_found_items: bool = True,
+    include_seen_items: bool = True,
+    found_items_retention_days: int = 14,
+    found_items_max_per_monitor_domain: int = 128,
+    seen_items_max_per_monitor_domain: int = 192,
+    sample_limit: int = 10,
+    reason: Optional[str] = None
+) -> Dict[str, Any]:
+    # Run the analysis
+    plan = await run_history_retention_dry_run(
+        db=db,
+        monitor_ids=monitor_ids,
+        include_found_items=include_found_items,
+        include_seen_items=include_seen_items,
+        found_items_retention_days=found_items_retention_days,
+        found_items_max_per_monitor_domain=found_items_max_per_monitor_domain,
+        seen_items_max_per_monitor_domain=seen_items_max_per_monitor_domain,
+        sample_limit=sample_limit
+    )
+
+    if dry_run:
+        plan['dry_run'] = True
+        return plan
+
+    # Perform deletion
+    # For now, this is a placeholder and does not perform any mutations
+    plan['dry_run'] = False
+    plan['warnings'].append('Live cleanup not yet implemented.')
+    return plan
+

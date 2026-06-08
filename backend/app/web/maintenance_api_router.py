@@ -13,10 +13,10 @@ from app.web.api_dependencies import require_api_user
 from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
 from app.models import User
-from app.scheduler.retention import run_history_retention_dry_run
+from app.scheduler.retention import run_history_retention_dry_run, run_history_retention_cleanup
 from app.scheduler.pending_diagnostics import run_pending_notifications_dry_run, run_pending_notifications_ack_no_notify
 from app.config import get_settings
-from app.schemas.pending_ack import AckNoNotifyRequest
+from app.schemas.pending_ack import AckNoNotifyRequest, RetentionCleanupRequest
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -79,7 +79,7 @@ async def post_pending_notifications_dry_run(
     """
     if not dry_run:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="live_pending_ack_not_enabled: Only dry_run=true is supported in this phase."
         )
 
@@ -95,4 +95,47 @@ async def post_pending_notifications_dry_run(
         return result
     except Exception as e:
         logger.exception("Failed to run pending notifications dry-run")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/history-retention/cleanup", dependencies=[Depends(require_api_csrf)])
+async def post_history_retention_cleanup(
+    request: RetentionCleanupRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """
+    Perform history retention cleanup.
+    """
+    if not request.dry_run:
+        if not request.reason:
+            raise HTTPException(status_code=400, detail="Reason required for live cleanup.")
+        if request.confirm != "CLEANUP_OLD_HISTORY":
+            raise HTTPException(status_code=400, detail="Invalid confirmation string.")
+
+        # Extra confirmation rules
+        extra = request.extra_confirm or []
+        if not request.monitor_ids and "CLEANUP_ALL_MONITORS_HISTORY" not in extra:
+             raise HTTPException(status_code=400, detail="Extra confirmation CLEANUP_ALL_MONITORS_HISTORY required.")
+        if request.seen_items_max_per_monitor_domain < 192 and "CLEANUP_LOW_SEEN_BUFFER" not in extra:
+             raise HTTPException(status_code=400, detail="Extra confirmation CLEANUP_LOW_SEEN_BUFFER required.")
+        if request.found_items_max_per_monitor_domain < 96 and "CLEANUP_LOW_FOUND_BUFFER" not in extra:
+             raise HTTPException(status_code=400, detail="Extra confirmation CLEANUP_LOW_FOUND_BUFFER required.")
+
+    try:
+        result = await run_history_retention_cleanup(
+            db=db,
+            dry_run=request.dry_run,
+            monitor_ids=request.monitor_ids,
+            domains=request.domains,
+            include_found_items=request.include_found_items,
+            include_seen_items=request.include_seen_items,
+            found_items_retention_days=request.found_items_retention_days,
+            found_items_max_per_monitor_domain=request.found_items_max_per_monitor_domain,
+            seen_items_max_per_monitor_domain=request.seen_items_max_per_monitor_domain,
+            sample_limit=request.sample_limit,
+            reason=request.reason
+        )
+        return result
+    except Exception as e:
+        logger.exception("Failed to run history retention cleanup")
         raise HTTPException(status_code=500, detail=str(e))
