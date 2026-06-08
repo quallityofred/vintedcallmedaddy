@@ -409,6 +409,11 @@ async def validate_and_migrate_db(conn) -> None:
         logger.info("Added 'monitor_id' to 'found_items'")
 
     try:
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_found_items_notified ON found_items (notified)"))
+    except Exception as e:
+        logger.warning("Note: Could not ensure found_items notified index: %s", e)
+
+    try:
         eng = _get_effective_engine()
         dialect_name = eng.dialect.name if eng is not None else None
         # Use the same SQL for both Postgres and SQLite; the function

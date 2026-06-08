@@ -150,6 +150,7 @@ class FoundItem(Base):
         Index("ix_found_items_monitor_id", "monitor_id"),
         Index("ix_found_items_domain", "domain"),
         Index("ix_found_items_seller_id", "seller_id"),
+        Index("ix_found_items_notified", "notified"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

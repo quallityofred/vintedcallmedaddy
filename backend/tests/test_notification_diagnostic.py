@@ -422,9 +422,21 @@ async def test_pending_processors_do_not_overlap(monkeypatch):
 
     monkeypatch.setattr(tasks, "collect_pending_notification_candidates", fake_collect)
 
+    # 1. Dry-run diagnostics CAN overlap (responsiveness fix)
     await asyncio.gather(
         tasks.process_pending_notifications(dry_run=True),
         tasks.process_pending_notifications(dry_run=True),
+    )
+    assert max_active == 2
+    max_active = 0
+
+    # 2. Actual processors MUST NOT overlap (lock protection)
+    # We mock _count_pending_notifications to avoid DB call in the finally block
+    monkeypatch.setattr(tasks, "_count_pending_notifications", AsyncMock(return_value=0))
+
+    await asyncio.gather(
+        tasks.process_pending_notifications(dry_run=False),
+        tasks.process_pending_notifications(dry_run=False),
     )
 
     assert max_active == 1

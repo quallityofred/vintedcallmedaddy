@@ -1174,6 +1174,46 @@ async def process_pending_notifications(
 ) -> dict[str, object]:
 	"""Audit or deliver a bounded pending batch; only successful sends are acknowledged."""
 	started = time.monotonic()
+
+	if dry_run:
+		# Dry-run diagnostic is read-only and does not need the lock.
+		# This ensures diagnostics remain responsive during long-running background processing.
+		candidates, metadata = await collect_pending_notification_candidates(
+			monitor_id=monitor_id,
+			limit=limit,
+		)
+		with_photo = sum(1 for candidate in candidates if candidate.photo_url)
+		base_result: dict[str, object] = {
+			"dry_run": dry_run,
+			"monitor_id": monitor_id,
+			"limit": limit,
+			"pending_total": metadata["pending_total"],
+			"pending_before": metadata["pending_total"],
+			"selected_for_processing": len(candidates),
+			"with_photo_url": with_photo,
+			"without_photo_url": len(candidates) - with_photo,
+			"estimated_seconds_private_chat": len(candidates),
+			"estimated_seconds": len(candidates) * (3 if metadata["uses_group_rate"] else 1),
+			"telegram_bot_configured": metadata["telegram_bot_configured"],
+			"telegram_chat_configured": metadata["telegram_chat_configured"],
+			"samples": [_pending_sample(candidate) for candidate in candidates[:sample_limit]],
+			"errors_sample": [],
+			"sent_photo_count": 0,
+			"sent_text_count": 0,
+			"fallback_text_count": 0,
+			"failed_count": 0,
+			"rate_limited_count": 0,
+			"marked_notified_count": 0,
+			"pending_after": metadata["pending_total"],
+			"duration_ms": int((time.monotonic() - started) * 1000),
+			"side_effects": {
+				"reads_database": True,
+				"writes_found_items": False,
+				"sends_telegram": False,
+			},
+		}
+		return base_result
+
 	async with _notification_lock:
 		candidates, metadata = await collect_pending_notification_candidates(
 			monitor_id=monitor_id,
@@ -1196,25 +1236,6 @@ async def process_pending_notifications(
 			"samples": [_pending_sample(candidate) for candidate in candidates[:sample_limit]],
 			"errors_sample": [],
 		}
-		if dry_run:
-			base_result.update(
-				{
-					"sent_photo_count": 0,
-					"sent_text_count": 0,
-					"fallback_text_count": 0,
-					"failed_count": 0,
-					"rate_limited_count": 0,
-					"marked_notified_count": 0,
-					"pending_after": metadata["pending_total"],
-					"duration_ms": int((time.monotonic() - started) * 1000),
-					"side_effects": {
-						"reads_database": True,
-						"writes_found_items": False,
-						"sends_telegram": False,
-					},
-				}
-			)
-			return base_result
 
 		sent_photo_count = 0
 		sent_text_count = 0
