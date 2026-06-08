@@ -10,6 +10,7 @@ from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
 from app.models import User
 from app.scheduler.retention import run_history_retention_dry_run
+from app.scheduler.pending_diagnostics import run_pending_notifications_dry_run
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -53,4 +54,39 @@ async def post_history_retention_dry_run(
         return result
     except Exception as e:
         logger.exception("Failed to run history retention dry-run")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/pending-notifications/dry-run", dependencies=[Depends(require_api_csrf)])
+async def post_pending_notifications_dry_run(
+    monitor_ids: Optional[List[int]] = Query(None),
+    domains: Optional[List[str]] = Query(None),
+    older_than_minutes: Optional[int] = Query(None, ge=0),
+    include_inactive: bool = True,
+    sample_limit: int = Query(default=10, ge=0, le=20),
+    dry_run: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """
+    Perform a dry-run pending notification analysis.
+    This endpoint reports pending backlog counts and samples, without mutating any items.
+    """
+    if not dry_run:
+        raise HTTPException(
+            status_code=400, 
+            detail="live_pending_ack_not_enabled: Only dry_run=true is supported in this phase."
+        )
+
+    try:
+        result = await run_pending_notifications_dry_run(
+            db=db,
+            monitor_ids=monitor_ids,
+            domains=domains,
+            older_than_minutes=older_than_minutes,
+            include_inactive=include_inactive,
+            sample_limit=sample_limit
+        )
+        return result
+    except Exception as e:
+        logger.exception("Failed to run pending notifications dry-run")
         raise HTTPException(status_code=500, detail=str(e))
