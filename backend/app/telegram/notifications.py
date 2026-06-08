@@ -19,78 +19,22 @@ rate_limiter = TelegramRateLimiter()
 # ... (rest of the file)
 
 
-def _escape(value: object, *, limit: int = 180) -> str:
-    text = str(value or "")
-    if len(text) > limit:
-        text = f"{text[: max(limit - 3, 0)]}..."
-    return html.escape(text, quote=False)
+from app.telegram.formatter import (
+    build_found_item_caption,
+    build_found_item_keyboard,
+)
 
+from app.telegram.rate_limiter import TelegramRateLimiter
 
-def _format_price(item: VintedItem) -> str:
-    try:
-        return format_price_with_usd(item.price, item.currency)
-    except Exception:
-        logger.exception("Failed to format price for item_id=%d", item.id)
-    try:
-        if item.price <= 0:
-            return "Not listed"
-    except Exception:
-        return "Not listed"
-    return f"{item.price:g} {_escape(item.currency)}".strip()
+logger = logging.getLogger(__name__)
 
-
-def _optional_line(label: str, value: object) -> str | None:
-    text = _escape(value).strip()
-    if not text:
-        return None
-    return f"<b>{label}:</b> {text}"
-
-
-def _build_caption(item: VintedItem, monitor_name: str | None = None) -> str:
-    lines = ["🆕 <b>New Vinted item found</b>"]
-
-    monitor_line = _optional_line("Monitor", monitor_name)
-    if monitor_line:
-        lines.append(monitor_line)
-
-    lines.append(f"<b>Item:</b> {_escape(item.title) or 'Untitled'}")
-    lines.append(f"<b>Price:</b> {_format_price(item)}")
-
-    for label, value in (
-        ("Brand", item.brand),
-        ("Size", item.size),
-        ("Condition", item.condition),
-        ("Seller", item.seller_id if item.seller_id else None),
-        ("Source", item.domain),
-    ):
-        line = _optional_line(label, value)
-        if line:
-            lines.append(line)
-
-    if item.item_url:
-        safe_url = html.escape(item.item_url, quote=True)
-        lines.append(f'<a href="{safe_url}">Open item</a>')
-
-    return "\n".join(lines)
-
-
-def _build_keyboard(item: VintedItem) -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton(text="Open on Vinted", url=item.item_url)]
-    if item.seller_id:
-        buttons.append(
-            InlineKeyboardButton(
-                text="Hide seller",
-                callback_data=f"hide:{item.seller_id}",
-            )
-        )
-    return InlineKeyboardMarkup(inline_keyboard=[buttons])
-
+# Initialize rate limiter
+rate_limiter = TelegramRateLimiter()
 
 def _raise_last_failure(exc: BaseException | None) -> NoReturn:
     if exc is None:
         raise RuntimeError("Telegram notification failed")
     raise exc
-
 
 async def send_item_notification(
     bot: Bot,
@@ -102,8 +46,8 @@ async def send_item_notification(
 ) -> Literal["photo", "text", "fallback_text"]:
     from aiogram.exceptions import TelegramRetryAfter
 
-    caption = _build_caption(item, monitor_name=monitor_name)
-    keyboard = _build_keyboard(item)
+    caption = build_found_item_caption(item, monitor_name=monitor_name)
+    keyboard = build_found_item_keyboard(item)
     is_group = message_thread_id is not None or chat_id < 0
 
     async def send_text(*, fallback: bool) -> Literal["text", "fallback_text"]:
@@ -116,7 +60,7 @@ async def send_item_notification(
                     text=caption,
                     parse_mode="HTML",
                     reply_markup=keyboard,
-                    disable_web_page_preview=False,
+                    disable_web_page_preview=True, # Button exists, no raw URL preview needed
                     **thread_kwargs,
                 )
                 return "fallback_text" if fallback else "text"

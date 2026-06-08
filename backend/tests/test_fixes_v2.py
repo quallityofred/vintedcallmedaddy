@@ -611,7 +611,8 @@ async def test_pending_notification_uses_user_credentials_and_safe_html(db_sessi
     assert "Air &amp; Max &lt;Drop&gt;" in kwargs["text"]
     assert "25.5 EUR" in kwargs["text"]
     assert "vinted.fr" in kwargs["text"]
-    assert "https://www.vinted.fr/items/9001" in kwargs["text"]
+    assert "https://www.vinted.fr/items/9001" not in kwargs["text"]
+
     assert "runtime-test-token" not in kwargs["text"]
     assert "424242" not in kwargs["text"]
 
