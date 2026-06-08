@@ -34,6 +34,8 @@ class MonitorResponse(BaseModel):
     interval_sec: int
     is_active: bool
     last_check_at: Optional[datetime] = None
+    last_check_status: Optional[str] = None
+    is_stale_running: bool = False
     created_at: datetime
     updated_at: datetime
     items_found_count: int
@@ -88,7 +90,7 @@ def _monitor_domains(monitor: Monitor) -> List[str]:
     return [domain for domain in domains if isinstance(domain, str)]
 
 
-def _monitor_response(monitor: Monitor, items_found_count: int | None = None) -> dict[str, object]:
+def _monitor_response(monitor: Monitor, items_found_count: int | None = None, is_running_in_registry: bool = False) -> dict[str, object]:
     return {
         "id": monitor.id,
         "name": monitor.name,
@@ -96,6 +98,8 @@ def _monitor_response(monitor: Monitor, items_found_count: int | None = None) ->
         "interval_sec": monitor.interval_sec,
         "is_active": monitor.is_active,
         "last_check_at": monitor.last_check_at,
+        "last_check_status": "failed" if (monitor.last_check_status == "running" and not is_running_in_registry) else monitor.last_check_status,
+        "is_stale_running": (monitor.last_check_status == "running" and not is_running_in_registry),
         "created_at": monitor.created_at,
         "updated_at": monitor.updated_at,
         "items_found_count": items_found_count if items_found_count is not None else monitor.items_found_count,
@@ -158,11 +162,12 @@ async def list_monitors(
         .order_by(Monitor.created_at.desc())
     )
     monitors = result.scalars().all()
-    
+
     if not monitors:
         return []
 
     monitor_ids = [m.id for m in monitors]
+    from app.scheduler.tasks import is_monitor_check_running
     counts_result = await db.execute(
         select(FoundItem.monitor_id, func.count(FoundItem.id))
         .where(FoundItem.monitor_id.in_(monitor_ids))
@@ -171,7 +176,11 @@ async def list_monitors(
     counts = dict(counts_result.all())
 
     return [
-        _monitor_response(monitor, items_found_count=counts.get(monitor.id, 0)) 
+        _monitor_response(
+            monitor,
+            items_found_count=counts.get(monitor.id, 0),
+            is_running_in_registry=is_monitor_check_running(monitor.id)
+        )
         for monitor in monitors
     ]
 
@@ -230,11 +239,14 @@ async def get_monitor(
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
-        
+
+    from app.scheduler.tasks import is_monitor_check_running
+    is_running_in_registry = is_monitor_check_running(monitor_id)
+
     count = await db.scalar(
         select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
     )
-    return _monitor_response(monitor, items_found_count=count or 0)
+    return _monitor_response(monitor, items_found_count=count or 0, is_running_in_registry=is_running_in_registry)
 
 
 @router.post("", response_model=MonitorResponse, dependencies=[Depends(require_csrf)])
@@ -294,13 +306,13 @@ async def update_monitor(
 
     if data.name is not None:
         monitor.name = data.name.strip()
-    
+
     if data.url is not None:
         normalized_url = normalize_vinted_monitor_url(data.url)
         monitor.original_url = normalized_url
         params = _build_monitor_params(normalized_url, data.interval_sec or monitor.interval_sec)
         monitor.params_json = json.dumps(params)
-    
+
     if data.interval_sec is not None:
         monitor.interval_sec = data.interval_sec
         try:
@@ -425,18 +437,18 @@ async def bulk_delete_monitors(
         )
     )
     monitors = result.scalars().all()
-    
+
     found_ids = {m.id for m in monitors}
     not_found_or_forbidden_ids = [id for id in data.monitor_ids if id not in found_ids]
-    
+
     scheduler = get_scheduler(request)
     for monitor in monitors:
         if scheduler:
             scheduler.remove_monitor(monitor.id)
         await db.delete(monitor)
-    
+
     await db.commit()
-    
+
     return {
         "deleted_count": len(monitors),
         "not_found_or_forbidden_ids": not_found_or_forbidden_ids
@@ -526,16 +538,22 @@ async def check_monitor_now(
     from app.scheduler.tasks import is_monitor_check_capacity_saturated, is_monitor_check_running
 
     # Check for in-flight check
-    if monitor.last_check_status == "running" or is_monitor_check_running(monitor_id):
+    # Reconcile DB status with registry: if DB says running but registry says not,
+    # it's a stale status. If registry says running, it is truly busy.
+    is_running_in_registry = is_monitor_check_running(monitor_id)
+    if is_running_in_registry:
         return JSONResponse(
             {
-                "ok": False, 
-                "code": "already_running", 
+                "ok": False,
+                "code": "already_running",
                 "message": "Check is already running for this monitor. Please wait for it to complete.",
                 "retry_after": 10,
             },
             status_code=409,
         )
+    # If DB says running but registry says NOT running, it is stale.
+    # The check-now proceed logic doesn't depend on DB status == "running" anymore.
+    # The debug_monitor endpoint will mark it as failed/stale in the UI.
 
     if is_monitor_check_capacity_saturated(user.id):
         return JSONResponse(
@@ -571,7 +589,7 @@ async def check_monitor_now(
             "message": "Check started.",
             "retry_after": 30
         }
-    
+
     raise HTTPException(status_code=503, detail="Scheduler unavailable or monitor not scheduled")
 
 
@@ -589,9 +607,9 @@ async def debug_monitor(
     monitor = result.scalar_one_or_none()
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
-    
+
     await db.refresh(user)
-    
+
     scheduler = get_scheduler(request)
     job_info = {"job_exists": False}
     if scheduler:
@@ -605,10 +623,13 @@ async def debug_monitor(
                     "job_id": job.id,
                     "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None
                 }
-    
+
+    from app.scheduler.tasks import is_monitor_check_running
+    is_running_in_registry = is_monitor_check_running(monitor_id)
+
     status_notes = {
         None: "This monitor has not been checked yet.",
-        "running": "Check is currently running.",
+        "running": "Check is currently running." if is_running_in_registry else "Check was marked running but no active process found (stale).",
         "baseline_created": "Tracking baseline initialized. Future new items will appear here.",
         "success_zero_items": "Checked successfully, but scraper returned 0 items.",
         "success_no_new_items": "Checked successfully. No new items found.",
@@ -629,11 +650,12 @@ async def debug_monitor(
         "last_check_at": monitor.last_check_at,
         "last_check_started_at": monitor.last_check_started_at,
         "last_check_completed_at": monitor.last_check_completed_at,
-        "last_check_status": monitor.last_check_status,
+        "last_check_status": "failed" if (monitor.last_check_status == "running" and not is_running_in_registry) else monitor.last_check_status,
         "last_error": monitor.last_error,
         "items_found_count": live_found_count or 0,
         "scheduler": job_info,
         "explanation": status_notes.get(monitor.last_check_status, "Status unknown."),
+        "is_stale_running": (monitor.last_check_status == "running" and not is_running_in_registry),
         "cf_worker": {
             "mode": user.cf_worker_mode if user.cf_worker_mode in ["auto", "manual", "off"] else "auto",
             "configured": bool(user.cf_worker_url),
