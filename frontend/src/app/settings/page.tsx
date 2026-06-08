@@ -336,10 +336,14 @@ function SettingsContent() {
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
                         <div className="space-y-2">
-                            <Label htmlFor="targetChat">Target group chat ID</Label>
+                            <Label htmlFor="settingsTelegramTopicGroup">Target group chat ID</Label>
                             <Input
                                 disabled={topicSaving}
-                                id="targetChat"
+                                id="settingsTelegramTopicGroup"
+                                name="settingsTelegramTopicGroup"
+                                autoComplete="off"
+                                spellCheck={false}
+                                autoCapitalize="none"
                                 value={targetChatId}
                                 onChange={(e) => setTargetChatId(e.target.value)}
                                 placeholder="e.g. -100xxxxxxxxx"
@@ -456,11 +460,14 @@ function SettingsContent() {
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="token">Bot token</Label>
+                    <Label htmlFor="settingsTelegramBotToken">Bot token</Label>
                     <Input
                       autoComplete="off"
+                      name="settingsTelegramBotToken"
+                      spellCheck={false}
+                      autoCapitalize="none"
                       disabled={telegramSaving}
-                      id="token"
+                      id="settingsTelegramBotToken"
                       onChange={(event) => setToken(event.target.value)}
                       placeholder="Leave empty to keep saved token"
                       type="password"
@@ -468,11 +475,14 @@ function SettingsContent() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="chat">Chat ID</Label>
+                    <Label htmlFor="settingsTelegramChatId">Chat ID</Label>
                     <Input
                       autoComplete="off"
+                      name="settingsTelegramChatId"
+                      spellCheck={false}
+                      autoCapitalize="none"
                       disabled={telegramSaving}
-                      id="chat"
+                      id="settingsTelegramChatId"
                       onChange={(event) => setChatId(event.target.value)}
                       placeholder="Leave empty to keep saved chat"
                       value={chatId}
@@ -540,10 +550,14 @@ function SettingsContent() {
           <CardContent className="space-y-5 p-4 sm:p-6">
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2 md:col-span-3">
-                <Label htmlFor="cfUrl">Worker URL</Label>
+                <Label htmlFor="settingsWorkerEndpoint">Worker URL</Label>
                 <Input
                   disabled={cfSaving}
-                  id="cfUrl"
+                  id="settingsWorkerEndpoint"
+                  name="settingsWorkerEndpoint"
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoCapitalize="none"
                   onChange={(event) => setCfUrl(event.target.value)}
                   placeholder="https://worker.example.com"
                   value={cfUrl}
@@ -568,20 +582,24 @@ function SettingsContent() {
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="cfBlock">Block threshold</Label>
+                <Label htmlFor="settingsWorkerBlockThreshold">Block threshold</Label>
                 <Input
                   disabled={cfSaving}
-                  id="cfBlock"
+                  id="settingsWorkerBlockThreshold"
+                  name="settingsWorkerBlockThreshold"
+                  autoComplete="off"
                   type="number"
                   onChange={(event) => setCfBlock(event.target.value)}
                   value={cfBlock}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="cfRecovery">Recovery minutes</Label>
+                <Label htmlFor="settingsWorkerRecoveryMinutes">Recovery minutes</Label>
                 <Input
                   disabled={cfSaving}
-                  id="cfRecovery"
+                  id="settingsWorkerRecoveryMinutes"
+                  name="settingsWorkerRecoveryMinutes"
+                  autoComplete="off"
                   type="number"
                   onChange={(event) => setCfRecovery(event.target.value)}
                   value={cfRecovery}
