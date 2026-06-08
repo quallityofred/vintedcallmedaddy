@@ -22,16 +22,10 @@ from app.scraper.source_selector import (
     should_use_hydration_ssr_photo_merge,
 )
 from app.config import get_settings
-from app.scheduler.dry_run import (
-    perform_monitor_dry_run,
-    perform_monitor_full_cycle_dry_run,
-    perform_monitor_baseline_seen,
-)
 from app.scraper.client import VintedClient, TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
-logger.info("Diagnostics router routes: %s", [r.path for r in router.routes])
 
 def _create_failed_full_cycle_response(monitor_id: int, exc: Exception) -> dict:
     return {
@@ -169,7 +163,6 @@ async def get_monitor_source_selection(
         }
     }
 
-@router.post("/monitors/{monitor_id}/dry-run-source")
 @router.post("/monitors/{monitor_id}/dry-run-source")
 async def post_monitor_dry_run_source(
     monitor_id: int,
@@ -638,10 +631,7 @@ async def post_monitor_start_with_baseline(
             await client.close()
 
 
-@router.post(
-    "/notifications/process-pending",
-    dependencies=[Depends(require_api_csrf)],
-)
+@router.post("/notifications/process-pending", dependencies=[Depends(require_api_csrf)])
 async def process_notifications_diagnostic(
     dry_run: bool = True,
     monitor_id: int | None = Query(default=None, ge=1),
@@ -653,8 +643,13 @@ async def process_notifications_diagnostic(
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    from app.scheduler.tasks import process_pending_notifications
+    if not dry_run:
+        raise HTTPException(
+            status_code=400,
+            detail="async_notification_job_required: Use /api/v1/diagnostics/notifications/process-pending-jobs for live execution."
+        )
 
+    from app.scheduler.tasks import process_pending_notifications
     return await process_pending_notifications(
         limit=limit,
         monitor_id=monitor_id,
@@ -662,4 +657,97 @@ async def process_notifications_diagnostic(
         sample_limit=sample_limit,
     )
 
+@router.post("/notifications/process-pending-jobs", dependencies=[Depends(require_api_csrf)])
+async def post_process_notifications_job(
+    background_tasks: BackgroundTasks,
+    monitor_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=200),
+    sample_limit: int = Query(default=10, ge=0, le=20),
+    dry_run: bool = True,
+    user: User = Depends(require_api_user),
+):
+    """Start an asynchronous background job for notification processing."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
 
+    job_id = f"notify_{int(datetime.now(timezone.utc).timestamp())}"
+    # Always use monitor_id=0 for notification jobs in the registry
+    await registry.start_job(job_id, 0, "pending_notifications")
+
+    from app.scheduler.tasks import run_pending_notifications_job
+    background_tasks.add_task(
+        run_pending_notifications_job,
+        job_id,
+        monitor_id=monitor_id,
+        limit=limit,
+        sample_limit=sample_limit,
+        dry_run=dry_run,
+    )
+
+    return {"job_id": job_id, "status": "running"}
+
+@router.get("/notifications/process-pending-jobs/{job_id}")
+async def get_notification_job_status(job_id: str, user: User = Depends(require_api_user)):
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Retrieve status from registry (using a monitor_id of 0 as a global placeholder)
+    job = await registry.get_job(job_id, 0)
+    if job is None:
+        return JSONResponse(
+            status_code=404,
+            content={"job_id": job_id, "status": "not_found", "safe_error": "job_not_found"},
+        )
+
+    res = {
+        "job_id": job.job_id,
+        "status": job.status,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "duration_ms_total": 0,
+        "summary": {
+            "pending_before": 0,
+            "pending_total": 0,
+            "selected_for_processing": 0,
+            "sent_photo_count": 0,
+            "sent_text_count": 0,
+            "fallback_text_count": 0,
+            "failed_count": 0,
+            "rate_limited_count": 0,
+            "marked_notified_count": 0,
+            "pending_after": 0,
+        },
+        "errors_sample": [],
+        "side_effects": {
+            "reads_database": True,
+            "calls_vinted": True,
+            "writes_found_items": False,
+            "enqueues_notifications": False,
+            "sends_telegram": False,
+            "runs_scheduler_check": False,
+        },
+    }
+
+    if job.result is not None:
+        # job.result is the dict from process_pending_notifications
+        result = job.result
+        res["duration_ms_total"] = result.get("duration_ms", 0)
+        res["summary"] = {
+            "monitor_id": result.get("monitor_id"),
+            "limit": result.get("limit"),
+            "pending_before": result.get("pending_before", 0),
+            "pending_total": result.get("pending_total", 0),
+            "selected_for_processing": result.get("selected_for_processing", 0),
+            "sent_photo_count": result.get("sent_photo_count", 0),
+            "sent_text_count": result.get("sent_text_count", 0),
+            "fallback_text_count": result.get("fallback_text_count", 0),
+            "failed_count": result.get("failed_count", 0),
+            "rate_limited_count": result.get("rate_limited_count", 0),
+            "marked_notified_count": result.get("marked_notified_count", 0),
+            "pending_after": result.get("pending_after", 0),
+        }
+        res["samples"] = result.get("samples", [])
+        res["errors_sample"] = result.get("errors_sample", [])
+        res["side_effects"] = result.get("side_effects", result.get("side_effects", res["side_effects"]))
+
+    return JSONResponse(status_code=200, content=jsonable_encoder(res))

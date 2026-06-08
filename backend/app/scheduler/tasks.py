@@ -1588,3 +1588,25 @@ async def run_hydration_ssr_merge_job(
                     job_id,
                     type(exc).__name__,
                 )
+
+
+async def run_pending_notifications_job(
+    job_id: str,
+    monitor_id: int | None = None,
+    limit: int = 50,
+    sample_limit: int = 10,
+    dry_run: bool = True,
+):
+    from app.scheduler.diagnostics import registry
+    try:
+        # process_pending_notifications is already async and handles limit/monitor_id/dry_run
+        result = await process_pending_notifications(
+            limit=limit,
+            monitor_id=monitor_id,
+            dry_run=dry_run,
+            sample_limit=sample_limit,
+        )
+        await registry.complete_job(job_id, result)
+    except Exception as e:
+        logger.exception(f'Pending notification job failed: {job_id}')
+        await registry.fail_job(job_id, str(e))

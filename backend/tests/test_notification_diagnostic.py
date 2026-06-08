@@ -104,6 +104,32 @@ async def post_process(app: FastAPI, query: str):
         return await client.post(f"/api/v1/diagnostics/notifications/process-pending{query}")
 
 
+async def post_process_job(app: FastAPI, query: str):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post(f"/api/v1/diagnostics/notifications/process-pending-jobs{query}")
+
+
+async def get_job_status(app: FastAPI, job_id: str):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(f"/api/v1/diagnostics/notifications/process-pending-jobs/{job_id}")
+
+
+async def wait_for_job(app: FastAPI, job_id: str, timeout: int = 5):
+    start_time = asyncio.get_event_loop().time()
+    while asyncio.get_event_loop().time() - start_time < timeout:
+        response = await get_job_status(app, job_id)
+        assert response.status_code == 200
+        data = response.json()
+        if data["status"] == "completed":
+            return data
+        if data["status"] == "failed":
+            raise RuntimeError(f"Job failed: {data.get('safe_error')}")
+        await asyncio.sleep(0.1)
+    raise TimeoutError("Job timed out")
+
+
 @pytest.mark.asyncio
 async def test_process_notifications_diagnostic_dry_run_full_shape(
     db_session, notification_session_factory, monkeypatch
@@ -182,17 +208,29 @@ async def test_process_notifications_diagnostic_executes_limited_successful_batc
     send_mock = AsyncMock(return_value="photo")
     monkeypatch.setattr(tasks, "send_item_notification", send_mock)
 
-    response = await post_process(
+    # 1. Assert sync endpoint rejects dry_run=false
+    sync_response = await post_process(
         create_test_app(),
         f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
     )
+    assert sync_response.status_code == 400
+    assert "async_notification_job_required" in sync_response.json()["detail"]
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["selected_for_processing"] == 1
-    assert data["sent_photo_count"] == 1
-    assert data["marked_notified_count"] == 1
-    assert data["pending_after"] == 1
+    # 2. Run via async job
+    app = create_test_app()
+    job_response = await post_process_job(
+        app,
+        f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
+    )
+    assert job_response.status_code == 200
+    job_id = job_response.json()["job_id"]
+
+    data = await wait_for_job(app, job_id)
+    summary = data["summary"]
+    assert summary["selected_for_processing"] == 1
+    assert summary["sent_photo_count"] == 1
+    assert summary["marked_notified_count"] == 1
+    assert summary["pending_after"] == 1
     assert data["side_effects"]["writes_found_items"] is True
     assert data["side_effects"]["sends_telegram"] is True
     send_mock.assert_awaited_once()
@@ -229,15 +267,20 @@ async def test_process_notifications_failure_remains_retryable(
         AsyncMock(side_effect=RuntimeError("secret raw failure message")),
     )
 
-    response = await post_process(
-        create_test_app(),
+    app = create_test_app()
+    job_response = await post_process_job(
+        app,
         f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
     )
+    assert job_response.status_code == 200
+    job_id = job_response.json()["job_id"]
 
-    data = response.json()
-    assert data["failed_count"] == 1
-    assert data["marked_notified_count"] == 0
-    assert data["pending_after"] == 1
+    data = await wait_for_job(app, job_id)
+    summary = data["summary"]
+    assert summary.get("failed_count", 0) == 1
+
+    assert summary["marked_notified_count"] == 0
+    assert summary["pending_after"] == 1
     assert "secret raw failure message" not in json.dumps(data)
     await db_session.refresh(items[0])
     assert items[0].notified is False
@@ -263,13 +306,16 @@ async def test_process_notifications_reports_fallback_text(
     )
     monkeypatch.setattr(tasks, "send_item_notification", AsyncMock(return_value="fallback_text"))
 
-    response = await post_process(
-        create_test_app(),
+    app = create_test_app()
+    job_response = await post_process_job(
+        app,
         f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
     )
+    assert job_response.status_code == 200
+    job_id = job_response.json()["job_id"]
 
-    assert response.json()["fallback_text_count"] == 1
-
+    data = await wait_for_job(app, job_id)
+    assert data["summary"].get("fallback_text_count", 0) == 1
 
 @pytest.mark.asyncio
 async def test_process_notifications_diagnostic_requires_admin():
@@ -279,10 +325,25 @@ async def test_process_notifications_diagnostic_requires_admin():
 
 @pytest.mark.asyncio
 async def test_process_notifications_diagnostic_requires_csrf():
+    from app.web.csrf import require_api_csrf
     app = create_test_app()
-    app.dependency_overrides.pop(require_api_csrf)
+    # By default create_test_app overrides it to None.
+    # We want to test that it is NOT None (i.e. it is required).
+    # Since we can't easily "un-override" without knowing the original,
+    # we just don't override it in a special app instance.
 
-    response = await post_process(app, "?dry_run=true")
+    app_with_csrf = FastAPI()
+    app_with_csrf.include_router(router)
+    app_with_csrf.dependency_overrides[require_api_user] = lambda: User(
+        id=999,
+        username="diagnostic-admin",
+        password_hash="hash",
+        password_salt="salt",
+        is_admin=True,
+    )
+    # DO NOT override require_api_csrf
+
+    response = await post_process(app_with_csrf, "?dry_run=true")
 
     assert response.status_code == 403
 
