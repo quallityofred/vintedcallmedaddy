@@ -8,9 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.web.api_dependencies import require_api_user
 from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from app.web.api_dependencies import require_api_user
+from app.web.csrf import require_api_csrf
+from app.web.dependencies import get_db
+from app.models import User
 from app.scheduler.retention import run_history_retention_dry_run
 from app.scheduler.pending_diagnostics import run_pending_notifications_dry_run, run_pending_notifications_ack_no_notify
 from app.config import get_settings
+from app.schemas.pending_ack import AckNoNotifyRequest
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -18,47 +24,38 @@ router = APIRouter(prefix="/api/v1/maintenance", tags=["maintenance"])
 
 @router.post("/pending-notifications/ack-no-notify", dependencies=[Depends(require_api_csrf)])
 async def post_pending_notifications_ack_no_notify(
-    monitor_ids: Optional[List[int]] = Query(None),
-    domains: Optional[List[str]] = Query(None),
-    older_than_minutes: int = Query(default=1440, ge=0),
-    include_inactive: bool = Query(default=True),
-    include_active: bool = Query(default=False),
-    sample_limit: int = Query(default=10, ge=0, le=20),
-    dry_run: bool = Query(default=True),
-    reason: Optional[str] = Query(None),
-    confirm: Optional[str] = Query(None),
-    extra_confirm: Optional[List[str]] = Query(None),
+    request: AckNoNotifyRequest = Body(...),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
     """
     Perform a safe acknowledgement of pending FoundItems without notification.
     """
-    if not dry_run:
-        if not reason:
+    if not request.dry_run:
+        if not request.reason:
             raise HTTPException(status_code=400, detail="Reason required for live ack.")
-        if confirm != "ACK_PENDING_NO_NOTIFY":
+        if request.confirm != "ACK_PENDING_NO_NOTIFY":
             raise HTTPException(status_code=400, detail="Invalid confirmation string.")
 
         # Extra confirmation rules
-        extra = extra_confirm or []
-        if include_active and "ACK_ACTIVE_PENDING_NO_NOTIFY" not in extra:
+        extra = request.extra_confirm or []
+        if request.include_active and "ACK_ACTIVE_PENDING_NO_NOTIFY" not in extra:
              raise HTTPException(status_code=400, detail="Extra confirmation ACK_ACTIVE_PENDING_NO_NOTIFY required.")
-        if not monitor_ids and "ACK_ALL_SELECTED_PENDING_NO_NOTIFY" not in extra:
+        if not request.monitor_ids and "ACK_ALL_SELECTED_PENDING_NO_NOTIFY" not in extra:
              raise HTTPException(status_code=400, detail="Extra confirmation ACK_ALL_SELECTED_PENDING_NO_NOTIFY required.")
-        if older_than_minutes < 60 and "ACK_FRESH_PENDING_NO_NOTIFY" not in extra:
+        if request.older_than_minutes < 60 and "ACK_FRESH_PENDING_NO_NOTIFY" not in extra:
              raise HTTPException(status_code=400, detail="Extra confirmation ACK_FRESH_PENDING_NO_NOTIFY required.")
 
     try:
         result = await run_pending_notifications_ack_no_notify(
             db=db,
-            dry_run=dry_run,
-            monitor_ids=monitor_ids,
-            domains=domains,
-            older_than_minutes=older_than_minutes,
-            include_inactive=include_inactive,
-            include_active=include_active,
-            sample_limit=sample_limit
+            dry_run=request.dry_run,
+            monitor_ids=request.monitor_ids,
+            domains=request.domains,
+            older_than_minutes=request.older_than_minutes,
+            include_inactive=request.include_inactive,
+            include_active=request.include_active,
+            sample_limit=request.sample_limit
         )
         return result
     except Exception as e:

@@ -46,8 +46,12 @@ async def test_ack_no_mutation_dry_run(db_session):
     db_session.add(item)
     await db_session.commit()
 
-    # Dry-run
-    result = await run_pending_notifications_ack_no_notify(db=db_session, dry_run=True, include_inactive=True)
+    # Dry-run service
+    result = await run_pending_notifications_ack_no_notify(
+        db=db_session, 
+        dry_run=True, 
+        include_inactive=True
+    )
     
     assert result["eligible_to_ack"] == 1
     assert result["acked_count"] == 0
@@ -74,8 +78,13 @@ async def test_ack_live_mutation(db_session):
     db_session.add(item)
     await db_session.commit()
 
-    # Live ack
-    result = await run_pending_notifications_ack_no_notify(db=db_session, dry_run=False, include_inactive=True, older_than_minutes=1)
+    # Live ack service
+    result = await run_pending_notifications_ack_no_notify(
+        db=db_session, 
+        dry_run=False, 
+        include_inactive=True, 
+        older_than_minutes=1
+    )
     
     assert result["eligible_to_ack"] == 1
     assert result["acked_count"] == 1
