@@ -21,6 +21,13 @@ tags:
 - `backend/app/telegram/settings_store.py`
 - `backend/app/templates/settings.html`
 
+## Backlog Acknowledgement And Pipeline V2
+
+- `POST /api/v1/diagnostics/notifications/ack-pending-no-notify` is admin/API-CSRF protected and requires a monitor ID. Dry-run reads only; apply mode marks a bounded oldest-first set of pending `FoundItem` rows as notified without calling Telegram.
+- Cleanup is idempotent, monitor-scoped, redacted, and does not touch `SeenItem`, monitor state, scraper execution, or notification delivery code. Status: `issue/fixed`.
+- `backend/app/telegram/pipeline_v2.py` defines a default-off future delivery contract. It preserves success-only acknowledgement and retryable failures but is not wired into the live worker while `NOTIFICATION_PIPELINE_V2_ENABLED=false`.
+- Future durable notification jobs should be DB-backed and restart-safe; no migration or runtime switch is included in the current skeleton.
+
 ## Runtime Flow
 
 - Bot tokens are stored per user.

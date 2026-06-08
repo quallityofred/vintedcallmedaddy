@@ -21,6 +21,13 @@ tags:
 - `backend/app/scraper/rate_limiter.py`
 - `backend/app/runtime_settings.py`
 
+## Engine V2 Skeleton
+
+- `backend/app/scraper/engine_v2.py` defines default-off protocols and DTOs for future source selection and domain execution.
+- `HydrationSsrMergedSource` wraps the existing one-fetch hydration+SSR merge: hydration remains authoritative for identity, title, price, currency, URL, order, and filter correctness; SSR contributes only the matching photo map.
+- All selected domains are retained. SSR-only items are excluded, missing photos do not drop hydration items, and no per-item detail fetch is introduced.
+- Status: `issue/open` for future scheduler integration; current production behavior is unchanged while `SCRAPER_ENGINE_V2_ENABLED=false`.
+
 ## Runtime Flow
 
 - `VintedClient` keeps per-domain sessions and warms them up.

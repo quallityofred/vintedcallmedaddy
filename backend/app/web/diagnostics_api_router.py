@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Optional
 
@@ -749,5 +749,81 @@ async def get_notification_job_status(job_id: str, user: User = Depends(require_
         res["samples"] = result.get("samples", [])
         res["errors_sample"] = result.get("errors_sample", [])
         res["side_effects"] = result.get("side_effects", result.get("side_effects", res["side_effects"]))
+
+    return JSONResponse(status_code=200, content=jsonable_encoder(res))
+
+@router.post("/notifications/ack-pending-no-notify", dependencies=[Depends(require_api_csrf)])
+async def ack_pending_notifications_no_notify(
+    monitor_id: int = Query(..., ge=1),
+    limit: int = Query(default=100, ge=1, le=1000),
+    sample_limit: int = Query(default=10, ge=0, le=50),
+    dry_run: bool = True,
+    reason: str = Query(
+        default="manual_backlog_cleanup_no_notify",
+        min_length=1,
+        max_length=80,
+    ),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """Mark pending notification items as notified without sending Telegram."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.models import FoundItem
+
+    conditions = [
+        FoundItem.notified == False,  # noqa: E712
+        FoundItem.monitor_id == monitor_id,
+    ]
+    pending_before = int(
+        await db.scalar(select(func.count(FoundItem.id)).where(*conditions)) or 0
+    )
+    items = (
+        await db.execute(
+            select(FoundItem)
+            .where(*conditions)
+            .order_by(FoundItem.found_at.asc(), FoundItem.id.asc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    selected_for_ack = len(items)
+    projected_pending_after = max(0, pending_before - selected_for_ack)
+    res = {
+        "dry_run": dry_run,
+        "monitor_id": monitor_id,
+        "pending_before": pending_before,
+        "selected_for_ack": selected_for_ack,
+        "would_mark_notified_count": selected_for_ack,
+        "marked_notified_count": 0,
+        "pending_after_if_applied": projected_pending_after,
+        "pending_after": pending_before if dry_run else None,
+        "samples": [
+            {
+                "found_item_id": item.id,
+                "vinted_item_id": str(item.vinted_item_id),
+                "domain": item.domain,
+                "title_preview": item.title[:80],
+                "has_photo_url": bool(item.photo_url),
+            }
+            for item in items[:sample_limit]
+        ],
+        "reason": reason,
+        "side_effects": {
+            "sends_telegram": False,
+            "writes_found_items": not dry_run,
+            "marks_notified": not dry_run,
+        },
+    }
+
+    if not dry_run:
+        for item in items:
+            item.notified = True
+        await db.commit()
+        res["marked_notified_count"] = selected_for_ack
+        res["pending_after"] = int(
+            await db.scalar(select(func.count(FoundItem.id)).where(*conditions)) or 0
+        )
 
     return JSONResponse(status_code=200, content=jsonable_encoder(res))

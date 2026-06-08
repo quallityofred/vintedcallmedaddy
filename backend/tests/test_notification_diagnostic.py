@@ -11,25 +11,28 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import FoundItem, Monitor, User
+from app.models import FoundItem, Monitor, SeenItem, User
 from app.scheduler import tasks
 from app.scheduler.tasks import TelegramDeliveryTarget
 from app.web.api_dependencies import require_api_user
 from app.web.csrf import require_api_csrf
+from app.web.dependencies import get_db
 from app.web.diagnostics_api_router import router
 
 
-def create_test_app(*, admin: bool = True) -> FastAPI:
+def create_test_app(*, admin: bool = True, db_session: AsyncSession | None = None) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[require_api_user] = lambda: User(
         id=999,
-        username="diagnostic-admin",
+        username=f"admin-{datetime.now(timezone.utc).timestamp()}",
         password_hash="hash",
         password_salt="salt",
         is_admin=admin,
     )
     app.dependency_overrides[require_api_csrf] = lambda: None
+    if db_session is not None:
+        app.dependency_overrides[get_db] = lambda: db_session
     return app
 
 
@@ -46,29 +49,24 @@ async def seed_pending_items(db_session: AsyncSession, *, count: int = 3):
     await db_session.commit()
     await db_session.refresh(user)
 
-    monitors = []
-    for index in range(2):
-        monitor = Monitor(
-            user_id=user.id,
-            name=f"Pending monitor {index}",
-            original_url="https://www.vinted.pl/catalog?brand_ids[]=53",
-            params_json='{"brand_ids[]":[53]}',
-            domains_json='["vinted.pl"]',
-            interval_sec=120,
-            is_active=False,
-        )
-        db_session.add(monitor)
-        monitors.append(monitor)
+    monitor = Monitor(
+        user_id=user.id,
+        name=f"Pending monitor-{datetime.now(timezone.utc).timestamp()}",
+        original_url="https://www.vinted.pl/catalog?brand_ids[]=53",
+        params_json='{"brand_ids[]":[53]}',
+        domains_json='["vinted.pl"]',
+        interval_sec=120,
+        is_active=False,
+    )
+    db_session.add(monitor)
     await db_session.commit()
-    for monitor in monitors:
-        await db_session.refresh(monitor)
+    await db_session.refresh(monitor)
 
     items = []
     for index in range(count):
-        monitor = monitors[index % len(monitors)]
         item = FoundItem(
             monitor_id=monitor.id,
-            vinted_item_id=9200000000 + index,
+            vinted_item_id=9200000000 + int(datetime.now(timezone.utc).timestamp()) + index,
             domain="vinted.pl",
             title=f"Pending item {index}",
             price=100 + index,
@@ -87,7 +85,7 @@ async def seed_pending_items(db_session: AsyncSession, *, count: int = 3):
     await db_session.commit()
     for item in items:
         await db_session.refresh(item)
-    return user, monitors, items
+    return user, [monitor], items
 
 
 @pytest.fixture
@@ -108,6 +106,11 @@ async def post_process_job(app: FastAPI, query: str):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.post(f"/api/v1/diagnostics/notifications/process-pending-jobs{query}")
+
+async def post_ack(app: FastAPI, query: str):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post(f"/api/v1/diagnostics/notifications/ack-pending-no-notify{query}")
 
 
 async def get_job_status(app: FastAPI, job_id: str):
@@ -147,11 +150,11 @@ async def test_process_notifications_diagnostic_dry_run_full_shape(
     data = response.json()
     assert data["dry_run"] is True
     assert data["monitor_id"] == monitors[0].id
-    assert data["pending_total"] == 2
-    assert data["selected_for_processing"] == 2
+    assert data["pending_total"] == 3
+    assert data["selected_for_processing"] == 3
     assert data["with_photo_url"] == 2
-    assert data["without_photo_url"] == 0
-    assert data["estimated_seconds_private_chat"] == 2
+    assert data["without_photo_url"] == 1
+    assert data["estimated_seconds_private_chat"] == 3
     assert data["telegram_bot_configured"] is True
     assert data["telegram_chat_configured"] is True
     assert data["side_effects"] == {
@@ -181,7 +184,7 @@ async def test_process_notifications_diagnostic_dry_run_applies_limit(
     )
 
     data = response.json()
-    assert data["pending_total"] == 2
+    assert data["pending_total"] == 4
     assert data["selected_for_processing"] == 1
     assert len(data["samples"]) == 1
 
@@ -230,7 +233,7 @@ async def test_process_notifications_diagnostic_executes_limited_successful_batc
     assert summary["selected_for_processing"] == 1
     assert summary["sent_photo_count"] == 1
     assert summary["marked_notified_count"] == 1
-    assert summary["pending_after"] == 1
+    assert summary["pending_after"] == 2
     assert data["side_effects"]["writes_found_items"] is True
     assert data["side_effects"]["sends_telegram"] is True
     send_mock.assert_awaited_once()
@@ -327,10 +330,6 @@ async def test_process_notifications_diagnostic_requires_admin():
 async def test_process_notifications_diagnostic_requires_csrf():
     from app.web.csrf import require_api_csrf
     app = create_test_app()
-    # By default create_test_app overrides it to None.
-    # We want to test that it is NOT None (i.e. it is required).
-    # Since we can't easily "un-override" without knowing the original,
-    # we just don't override it in a special app instance.
 
     app_with_csrf = FastAPI()
     app_with_csrf.include_router(router)
@@ -429,3 +428,138 @@ async def test_pending_processors_do_not_overlap(monkeypatch):
     )
 
     assert max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_requires_admin(db_session):
+    _, monitors, _ = await seed_pending_items(db_session, count=1)
+    app = create_test_app(admin=False, db_session=db_session)
+
+    response = await post_ack(app, f"?monitor_id={monitors[0].id}")
+    assert response.status_code == 403
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_dry_run_is_read_only(db_session, monkeypatch):
+    _, monitors, items = await seed_pending_items(db_session, count=5)
+    app = create_test_app(db_session=db_session)
+    send_mock = AsyncMock(side_effect=AssertionError("ack endpoint must not send Telegram"))
+    monkeypatch.setattr(tasks, "send_item_notification", send_mock)
+
+    response = await post_ack(app, f"?monitor_id={monitors[0].id}&dry_run=true")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["selected_for_ack"] == 5
+    assert data["would_mark_notified_count"] == 5
+    assert data["marked_notified_count"] == 0
+    assert data["pending_after_if_applied"] == 0
+    assert data["pending_after"] == 5
+    assert data["side_effects"]["marks_notified"] is False
+
+    await db_session.refresh(items[0])
+    assert items[0].notified is False
+    send_mock.assert_not_awaited()
+
+    serialized = json.dumps(data)
+    assert "images.example.invalid" not in serialized
+    assert "secret-test-token" not in serialized
+    assert "123456" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_mutates_on_false(db_session, monkeypatch):
+    _, monitors, items = await seed_pending_items(db_session, count=5)
+    app = create_test_app(db_session=db_session)
+    send_mock = AsyncMock(side_effect=AssertionError("ack endpoint must not send Telegram"))
+    monkeypatch.setattr(tasks, "send_item_notification", send_mock)
+    monitor_last_check = monitors[0].last_check_at
+    seen_before = int((await db_session.execute(select(func.count(SeenItem.id)))).scalar_one())
+
+    response = await post_ack(app, f"?monitor_id={monitors[0].id}&dry_run=false")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["selected_for_ack"] == 5
+    assert data["marked_notified_count"] == 5
+    assert data["pending_after"] == 0
+    assert data["side_effects"]["marks_notified"] is True
+
+    await db_session.refresh(items[0])
+    assert items[0].notified is True
+    assert items[4].notified is True
+    await db_session.refresh(monitors[0])
+    assert monitors[0].last_check_at == monitor_last_check
+    seen_after = int((await db_session.execute(select(func.count(SeenItem.id)))).scalar_one())
+    assert seen_after == seen_before
+    send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_idempotent(db_session):
+    _, monitors, _ = await seed_pending_items(db_session, count=5)
+    app = create_test_app(db_session=db_session)
+
+    # First run
+    await post_ack(app, f"?monitor_id={monitors[0].id}&dry_run=false")
+
+    # Second run
+    response = await post_ack(app, f"?monitor_id={monitors[0].id}&dry_run=false")
+    data = response.json()
+    assert data["selected_for_ack"] == 0
+    assert data["marked_notified_count"] == 0
+    assert data["pending_after"] == 0
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_requires_monitor_id():
+    app = create_test_app()
+    response = await post_ack(app, "")
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_requires_csrf(db_session):
+    _, monitors, _ = await seed_pending_items(db_session, count=1)
+    app = create_test_app(db_session=db_session)
+    app.dependency_overrides.pop(require_api_csrf)
+
+    response = await post_ack(app, f"?monitor_id={monitors[0].id}")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_respects_limit_and_monitor_scope(db_session):
+    _, first_monitors, first_items = await seed_pending_items(db_session, count=5)
+    _, second_monitors, second_items = await seed_pending_items(db_session, count=3)
+    app = create_test_app(db_session=db_session)
+
+    response = await post_ack(
+        app,
+        f"?monitor_id={first_monitors[0].id}&limit=2&sample_limit=1&dry_run=false",
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pending_before"] == 5
+    assert data["selected_for_ack"] == 2
+    assert data["marked_notified_count"] == 2
+    assert data["pending_after"] == 3
+    assert len(data["samples"]) == 1
+    for item in first_items:
+        await db_session.refresh(item)
+    for item in second_items:
+        await db_session.refresh(item)
+    assert sum(item.notified for item in first_items) == 2
+    assert all(item.notified is False for item in second_items)
+    assert first_monitors[0].id != second_monitors[0].id
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_no_notify_reason_is_bounded(db_session):
+    _, monitors, _ = await seed_pending_items(db_session, count=1)
+    app = create_test_app(db_session=db_session)
+
+    response = await post_ack(
+        app,
+        f"?monitor_id={monitors[0].id}&reason={'x' * 81}",
+    )
+
+    assert response.status_code == 422

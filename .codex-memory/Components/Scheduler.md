@@ -18,6 +18,13 @@ tags:
 - `app/scheduler/app_scheduler_tasks.py`
 - `app/models.py`
 
+## Default-Off Architecture Contracts
+
+- `SCRAPER_ENGINE_V2_ENABLED` defaults to `false`; the scheduler does not import or select the v2 engine while disabled.
+- The v2 scrape context preserves every selected domain and the existing `newest_first`, first-page, and stop-at-first-seen expectations.
+- The hydration+SSR adapter performs one catalog fetch per domain through the proven shared merge service and never performs per-item detail requests.
+- `NOTIFICATION_PIPELINE_V2_ENABLED` defaults to `false`; current pending-notification jobs and scheduler notification behavior remain authoritative.
+
 ## Runtime Flow
 
 - `app.app_main` creates `MonitorScheduler`.

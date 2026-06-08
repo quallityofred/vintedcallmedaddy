@@ -25,6 +25,12 @@ tags:
 - `backend/tests/test_stress.py`
 - `frontend/tests/e2e/landing.spec.ts`
 
+## 2026-06-08 Cleanup And V2 Skeleton Coverage
+
+- `test_notification_diagnostic.py` uses the route's actual overridden test DB session and verifies admin/CSRF guards, required monitor scope, dry-run read-only behavior, bounded deterministic apply behavior, idempotency, redaction, and no Telegram/monitor/SeenItem side effects.
+- `test_scraper_engine_v2.py` verifies the flag defaults off, legacy source selection remains unchanged, all selected domains are preserved, and the adapter performs one catalog fetch per domain with no item-detail calls.
+- `test_notification_pipeline_v2.py` verifies the flag defaults off, the live processor remains unchanged, only successful attempts are acknowledged, failures remain retryable, and redaction omits sensitive delivery data.
+
 ## Current Snapshot
 
 - `poetry run pytest -q` passed with `16` tests on `2026-06-02`.
