@@ -660,3 +660,105 @@ async def process_notifications_diagnostic(
         dry_run=dry_run,
         sample_limit=sample_limit,
     )
+
+
+@router.post('/monitors/{monitor_id}/jobs/hydration-ssr-photo-merge')
+async def post_monitor_hydration_ssr_merge_job(
+    monitor_id: int,
+    background_tasks: fastapi.BackgroundTasks,
+    domain: str | None = None,
+    max_domains: int = Query(default=8, ge=1, le=8),
+    max_items_per_domain: int = Query(default=96, ge=1, le=120),
+    sample_limit: int = Query(default=3, ge=0, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    monitor_result = await db.execute(
+        select(Monitor).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    monitor = monitor_result.scalar_one_or_none()
+    if monitor is None:
+        raise HTTPException(status_code=404, detail='Monitor not found')
+        
+    job_id = f'merge_{monitor_id}_{int(datetime.now(timezone.utc).timestamp())}'
+    job = await registry.start_job(
+        job_id,
+        monitor_id,
+        'hydration_with_ssr_photos',
+    )
+
+    from app.scheduler.tasks import run_hydration_ssr_merge_job
+    background_tasks.add_task(
+        run_hydration_ssr_merge_job,
+        monitor_id,
+        job_id,
+        target_domain=domain,
+        max_domains=max_domains,
+        max_items_per_domain=max_items_per_domain,
+        sample_limit=sample_limit,
+    )
+    
+    return {
+        'job_id': job_id,
+        'status': job.status,
+        'source': job.source,
+        'started_at': job.started_at.isoformat(),
+    }
+
+
+@router.get('/monitors/{monitor_id}/jobs/{job_id}')
+async def get_monitor_job_status(
+    monitor_id: int,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    monitor_result = await db.execute(
+        select(Monitor.id).where(Monitor.id == monitor_id, Monitor.user_id == user.id)
+    )
+    if monitor_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail='Monitor not found')
+
+    job = await registry.get_job(job_id, monitor_id)
+    if job is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                'job_id': job_id,
+                'status': 'not_found',
+                'safe_error': 'diagnostic_job_not_found',
+            },
+        )
+    if job.status == 'completed' and job.result is not None:
+        return JSONResponse(status_code=200, content=jsonable_encoder(job.result))
+    if job.status == 'failed':
+        return JSONResponse(
+            status_code=200,
+            content={
+                'job_id': job.job_id,
+                'status': 'failed',
+                'source': job.source,
+                'started_at': job.started_at.isoformat(),
+                'completed_at': job.completed_at.isoformat() if job.completed_at else None,
+                'safe_error': job.safe_error or 'hydration_ssr_merge_job_failed',
+                'summary': {},
+                'counts_by_domain': {},
+                'samples_by_domain': {},
+                'errors_by_domain': {'__global__': job.safe_error or 'JobFailed'},
+                'side_effects': {
+                    'reads_database': True,
+                    'calls_vinted': False,
+                    'writes_seen_items': False,
+                    'writes_found_items': False,
+                    'enqueues_notifications': False,
+                    'sends_telegram': False,
+                    'runs_scheduler_check': False,
+                },
+            },
+        )
+    return {
+        'job_id': job.job_id,
+        'status': job.status,
+        'source': job.source,
+        'started_at': job.started_at.isoformat(),
+    }
