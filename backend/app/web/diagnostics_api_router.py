@@ -25,6 +25,8 @@ from app.scraper.source_selector import (
     should_use_hydration_source,
     should_use_hydration_ssr_photo_merge,
 )
+from app.scraper.monitor_filters import extract_monitor_filters
+from app.scraper.url_parser import normalize_catalog_search_params, parse_vinted_url
 from app.config import get_settings
 from app.scraper.client import VintedClient, TokenBucketLimiter
 
@@ -117,12 +119,17 @@ async def get_monitor_source_selection(
     # Check selector logic
     used = should_use_hydration_source(params)
     merge_used = should_use_hydration_ssr_photo_merge(params)
+    original_url = monitor.original_url if isinstance(monitor.original_url, str) else ""
+    original_url_params = normalize_catalog_search_params(parse_vinted_url(original_url))
+    effective_request_params = normalize_catalog_search_params(params)
+    monitor_name = monitor.name if isinstance(monitor.name, str) else None
+    filters = extract_monitor_filters(params, monitor_name=monitor_name)
 
     # Determine reason
     reason = "api"
     if not settings.monitor_hydration_source_enabled:
         reason = "flag_disabled"
-    elif not any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_id", "catalog"]):
+    elif not any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_ids", "catalog_id", "catalog"]):
         reason = "brand_only_api_path"
     else:
         reason = "catalog_filter_detected"
@@ -143,8 +150,18 @@ async def get_monitor_source_selection(
             else "api"
         ),
         "reason": reason,
-        "has_catalog_filter": any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_id", "catalog"]),
+        "has_catalog_filter": any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_ids", "catalog_id", "catalog"]),
         "has_brand_filter": "brand_ids[]" in params or "brand_ids" in params,
+        "filter_diagnostics": {
+            "stored_param_keys": sorted(key for key in params if not str(key).startswith("_")),
+            "original_url_param_keys": sorted(original_url_params),
+            "effective_request_param_keys": sorted(effective_request_params),
+            "filter_keys": filters.filter_keys,
+            "brand_ids": sorted(filters.brand_ids),
+            "catalog_ids": sorted(filters.catalog_ids),
+            "gender_ids": sorted(filters.gender_ids),
+            "request_params_match_original_url": effective_request_params == original_url_params,
+        },
         "detail_guards": {
             "enabled": settings.monitor_detail_guard_enabled,
             "category_guard_enabled": settings.monitor_detail_category_guard_enabled,

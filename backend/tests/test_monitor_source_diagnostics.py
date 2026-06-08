@@ -31,6 +31,8 @@ async def test_get_monitor_source_selection_returns_hydration_when_enabled():
     mock_monitor.id = 22
     mock_monitor.user_id = 1
     mock_monitor.params_json = '{"catalog[]": ["1231"]}'
+    mock_monitor.original_url = "https://www.vinted.pl/catalog?brand_ids[]=53"
+    mock_monitor.name = "nike"
     
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = mock_monitor
@@ -64,6 +66,8 @@ async def test_get_monitor_source_selection_returns_hydration_when_enabled():
             assert data["reason"] == "catalog_filter_detected"
             assert data["hydration_ssr_photo_merge_enabled"] is False
             assert data["hydration_ssr_photo_merge_eligible"] is False
+            assert data["filter_diagnostics"]["request_params_match_original_url"] is False
+            assert data["filter_diagnostics"]["catalog_ids"] == ["1231"]
 
 @pytest.mark.asyncio
 async def test_get_monitor_source_selection_returns_api_when_flag_disabled():
@@ -76,6 +80,8 @@ async def test_get_monitor_source_selection_returns_api_when_flag_disabled():
     mock_monitor.id = 22
     mock_monitor.user_id = 1
     mock_monitor.params_json = '{"catalog[]": ["1231"]}'
+    mock_monitor.original_url = "https://www.vinted.pl/catalog?catalog[]=1231"
+    mock_monitor.name = "nike"
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = mock_monitor
     mock_db.execute.return_value = mock_result
@@ -118,6 +124,8 @@ async def test_get_monitor_source_selection_reports_ssr_photo_merge_when_enabled
     mock_monitor.id = 22
     mock_monitor.user_id = 1
     mock_monitor.params_json = '{"catalog[]": ["1231"]}'
+    mock_monitor.original_url = "https://www.vinted.pl/catalog?catalog[]=1231"
+    mock_monitor.name = "nike"
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = mock_monitor
     mock_db.execute.return_value = mock_result

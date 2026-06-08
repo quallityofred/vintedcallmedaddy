@@ -13,6 +13,7 @@ ARRAY_PARAM_ALIASES = {
     "size_ids": ("size_ids[]", "size_ids"),
     "status_ids": ("status_ids[]", "status_ids"),
     "color_ids": ("color_ids[]", "color_ids"),
+    "gender_ids": ("gender_ids[]", "gender_ids"),
 }
 
 
@@ -27,12 +28,13 @@ class MonitorFilters:
     price_to: str | None
     search_text: str | None
     order: str | None
+    gender_ids: frozenset[str] = frozenset()
     allowed_brand_names: frozenset[str] = frozenset()
 
     @property
     def filter_keys(self) -> list[str]:
         keys: list[str] = []
-        for key in ("brand_ids", "catalog_ids", "size_ids", "status_ids", "color_ids"):
+        for key in ("brand_ids", "catalog_ids", "size_ids", "status_ids", "color_ids", "gender_ids"):
             if getattr(self, key):
                 keys.append(key)
         for key in ("price_from", "price_to", "search_text", "order"):
@@ -80,6 +82,7 @@ def extract_monitor_filters(params: dict[str, Any], monitor_name: str | None = N
         size_ids=_string_set_from_aliases(params, ARRAY_PARAM_ALIASES["size_ids"]),
         status_ids=_string_set_from_aliases(params, ARRAY_PARAM_ALIASES["status_ids"]),
         color_ids=_string_set_from_aliases(params, ARRAY_PARAM_ALIASES["color_ids"]),
+        gender_ids=_string_set_from_aliases(params, ARRAY_PARAM_ALIASES["gender_ids"]),
         price_from=str(params["price_from"]).strip() if params.get("price_from") not in (None, "") else None,
         price_to=str(params["price_to"]).strip() if params.get("price_to") not in (None, "") else None,
         search_text=str(params["search_text"]).strip() if params.get("search_text") not in (None, "") else None,
@@ -116,6 +119,7 @@ def has_restrictive_filters(filters: MonitorFilters) -> bool:
         or filters.size_ids
         or filters.status_ids
         or filters.color_ids
+        or filters.gender_ids
         or filters.price_from is not None
         or filters.price_to is not None
         or filters.search_text is not None

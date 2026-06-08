@@ -23,7 +23,11 @@ from app.scraper.client import DomainSearchResult, VintedClient, TokenBucketLimi
 from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters, item_matches_monitor_filters
 from app.scraper.parser import VintedItem
 from app.scheduler.found_item_values import build_found_item_values
-from app.scraper.url_parser import parse_vinted_url
+from app.scraper.url_parser import (
+	build_vinted_catalog_url,
+	normalize_catalog_search_params,
+	parse_vinted_url,
+)
 from app.telegram.notifications import send_item_notification
 from app.telegram.topic_service import ensure_monitor_topic, record_topic_send_failure
 
@@ -359,26 +363,7 @@ async def _update_monitor_interval(
 
 
 def _runtime_search_params(params: dict) -> dict:
-	search_params = dict(params)
-	search_params["order"] = "newest_first"
-	search_params.pop("page", None)
-	search_params.pop("search_id", None)
-
-	# Map catalog aliases to Vinted API expected key: catalog_ids[]
-	catalog_aliases = ["catalog[]", "catalog", "catalog_ids"]
-	found_catalogs = set()
-	for alias in catalog_aliases:
-		if alias in search_params:
-			values = search_params.pop(alias)
-			if isinstance(values, list):
-				found_catalogs.update(values)
-			else:
-				found_catalogs.add(values)
-
-	if found_catalogs:
-		search_params["catalog_ids[]"] = sorted(list(found_catalogs))
-
-	return search_params
+	return normalize_catalog_search_params(params)
 
 
 async def _load_seen_item_ids(db, monitor_id: int, domain: str, item_ids: set[int]) -> set[int]:
@@ -444,7 +429,11 @@ async def _fetch_domain_results(
 			from app.scraper.hydration_ssr_merge import fetch_and_parse_hydration_ssr_photos
 
 			async def fetch_merged_domain(domain: str) -> DomainSearchResult:
-				domain_url = _catalog_url_for_domain(context.original_url, domain)
+				domain_url = build_vinted_catalog_url(
+					context.original_url,
+					domain,
+					search_params,
+				)
 				try:
 					merge_result = await fetch_and_parse_hydration_ssr_photos(
 						client,
@@ -495,7 +484,11 @@ async def _fetch_domain_results(
 		by_domain: dict[str, list[VintedItem]] = {domain: [] for domain in context.domains}
 		for domain in context.domains:
 			# Use client to fetch per domain
-			domain_url = context.original_url.replace("vinted.pl", domain)
+			domain_url = build_vinted_catalog_url(
+				context.original_url,
+				domain,
+				search_params,
+			)
 			hydration_items = await client.fetch_catalog_hydration_items(domain_url, domain=domain)
 			items = [hydration_record_to_vinted_item(i, domain) for i in hydration_items]
 			by_domain[domain].extend(items)
@@ -768,10 +761,10 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 			return None
 
 		params = json.loads(monitor.params_json)
-		monitor_filters = extract_monitor_filters(params)
+		monitor_filters = extract_monitor_filters(params, monitor_name=monitor.name)
 		if not has_restrictive_filters(monitor_filters):
 			url_params = parse_vinted_url(monitor.original_url)
-			url_filters = extract_monitor_filters(url_params)
+			url_filters = extract_monitor_filters(url_params, monitor_name=monitor.name)
 			if has_restrictive_filters(url_filters):
 				url_params["_original_interval"] = params.get("_original_interval", monitor.interval_sec)
 				params = url_params
@@ -1466,13 +1459,6 @@ class MonitorScheduler:
 			pass
 		return False
 
-def _catalog_url_for_domain(original_url: str, domain: str) -> str:
-    parsed = urllib.parse.urlsplit(original_url)
-    return urllib.parse.urlunsplit(
-        (parsed.scheme or "https", f"www.{domain}", parsed.path, parsed.query, "")
-    )
-
-
 def _public_item_path(value: object) -> str:
     if not isinstance(value, str):
         return ""
@@ -1529,9 +1515,17 @@ async def run_hydration_ssr_merge_job(
             per=60.0,
         )
         client = VintedClient(rate_limiter=rate_limiter)
+        try:
+            effective_params = json.loads(monitor.params_json)
+        except (TypeError, json.JSONDecodeError):
+            effective_params = parse_vinted_url(monitor.original_url)
 
         async def process_domain(domain: str):
-            domain_url = _catalog_url_for_domain(monitor.original_url, domain)
+            domain_url = build_vinted_catalog_url(
+                monitor.original_url,
+                domain,
+                effective_params,
+            )
             merge_result = await fetch_and_parse_hydration_ssr_photos(
                 client,
                 domain_url,

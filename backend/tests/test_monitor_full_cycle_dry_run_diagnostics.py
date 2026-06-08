@@ -96,6 +96,36 @@ async def test_full_cycle_dry_run_exposes_safe_hydration_field_diagnostics():
     assert "Synthetic Nike shoe" in serialized
     assert "https://images" not in serialized
 
+
+@pytest.mark.asyncio
+async def test_dry_run_reports_stored_original_filter_mismatch_and_uses_effective_params():
+    class ClientStub:
+        def __init__(self):
+            self.requested_url = None
+
+        async def fetch_catalog_html(self, url, *, domain):
+            self.requested_url = url
+            return ""
+
+    monitor = Monitor(
+        id=22,
+        user_id=1,
+        name="nike",
+        original_url="https://www.vinted.pl/catalog?brand_ids[]=53",
+        params_json=json.dumps({"brand_ids[]": [53], "catalog[]": [1231]}),
+        domains_json=json.dumps(["vinted.pl"]),
+        is_active=False,
+    )
+    client = ClientStub()
+
+    with patch("app.scheduler.dry_run.should_use_hydration_source", return_value=True):
+        result = await perform_monitor_dry_run(monitor, client, target_domain="vinted.pl")
+
+    assert result.filter_diagnostics["request_params_match_original_url"] is False
+    assert result.filter_diagnostics["catalog_ids"] == ["1231"]
+    assert "catalog_ids[]=1231" in client.requested_url
+    assert "brand_ids[]=53" in client.requested_url
+
 @pytest.mark.asyncio
 async def test_full_cycle_dry_run_media_diagnostics_disabled_by_default():
     app = create_test_app()

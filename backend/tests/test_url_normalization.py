@@ -63,6 +63,15 @@ def test_parse_vinted_url_preserves_arrays():
     assert params["brand_ids[]"] == [1, 2]
 
 
+def test_parse_vinted_url_preserves_catalog_and_gender_arrays():
+    params = parse_vinted_url(
+        "https://www.vinted.fr/catalog?catalog_ids=1231,1232&gender_ids[]=1&gender_ids[]=2"
+    )
+
+    assert params["catalog_ids[]"] == [1231, 1232]
+    assert params["gender_ids[]"] == [1, 2]
+
+
 def test_parse_vinted_url_preserves_comma_separated_brand_ids():
     url = "https://www.vinted.fr/catalog?brand_ids=1,2"
     params = parse_vinted_url(url)

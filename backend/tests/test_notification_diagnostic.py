@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 from datetime import datetime, timezone
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -37,8 +38,9 @@ def create_test_app(*, admin: bool = True, db_session: AsyncSession | None = Non
 
 
 async def seed_pending_items(db_session: AsyncSession, *, count: int = 3):
+    fixture_id = uuid4().hex
     user = User(
-        username=f"pending-user-{datetime.now(timezone.utc).timestamp()}",
+        username=f"pending-user-{fixture_id}",
         password_hash="hash",
         password_salt="salt",
         telegram_bot_token="secret-test-token",
@@ -51,7 +53,7 @@ async def seed_pending_items(db_session: AsyncSession, *, count: int = 3):
 
     monitor = Monitor(
         user_id=user.id,
-        name=f"Pending monitor-{datetime.now(timezone.utc).timestamp()}",
+        name=f"Pending monitor-{fixture_id}",
         original_url="https://www.vinted.pl/catalog?brand_ids[]=53",
         params_json='{"brand_ids[]":[53]}',
         domains_json='["vinted.pl"]',

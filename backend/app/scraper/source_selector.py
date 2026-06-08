@@ -4,7 +4,7 @@ from typing import Any
 from app.config import get_settings
 
 
-_CATEGORY_KEYS = ("catalog[]", "catalog_ids[]", "catalog_id", "catalog")
+_CATEGORY_KEYS = ("catalog[]", "catalog_ids[]", "catalog_ids", "catalog_id", "catalog")
 
 def should_use_hydration_source(params: dict[str, Any]) -> bool:
     """

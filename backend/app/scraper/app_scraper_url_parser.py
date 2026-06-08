@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from urllib.parse import parse_qs, urlparse, urlunparse, urlencode
+from urllib.parse import parse_qs, urlparse, urlsplit, urlunparse, urlunsplit, urlencode
 
 from app.scraper.domains import normalize_vinted_host, resolve_vinted_host_to_representative
 
@@ -25,6 +25,7 @@ _ARRAY_PARAMS = {
     "material_ids[]",
     "status_ids[]",
     "country_ids[]",
+    "gender_ids[]",
 }
 
 # Scalar params that map directly to API params
@@ -144,6 +145,55 @@ def parse_vinted_url(url: str) -> dict:
     params["order"] = "newest_first"
 
     return params
+
+
+def normalize_catalog_search_params(params: dict) -> dict:
+    """Return public catalog parameters in the canonical Vinted request shape."""
+    search_params = {
+        key: value
+        for key, value in dict(params).items()
+        if not str(key).startswith("_") and value not in (None, "")
+    }
+    search_params["order"] = "newest_first"
+    search_params.pop("page", None)
+    search_params.pop("search_id", None)
+
+    catalog_values: list[object] = []
+    for alias in ("catalog[]", "catalog", "catalog_id", "catalog_ids", "catalog_ids[]"):
+        if alias not in search_params:
+            continue
+        value = search_params.pop(alias)
+        catalog_values.extend(value if isinstance(value, (list, tuple, set)) else [value])
+    if catalog_values:
+        search_params["catalog_ids[]"] = list(dict.fromkeys(catalog_values))
+
+    for plain_key in (
+        "brand_ids",
+        "size_ids",
+        "color_ids",
+        "material_ids",
+        "status_ids",
+        "country_ids",
+        "gender_ids",
+    ):
+        bracketed_key = f"{plain_key}[]"
+        if plain_key in search_params and bracketed_key not in search_params:
+            search_params[bracketed_key] = search_params.pop(plain_key)
+
+    return search_params
+
+
+def build_vinted_catalog_url(original_url: str, domain: str, params: dict) -> str:
+    """Build a domain catalog URL from effective monitor parameters.
+
+    Stored runtime parameters are authoritative. This prevents a stale or broad
+    original query string from being used after monitor parameters were repaired
+    or migrated.
+    """
+    parsed = urlsplit(original_url)
+    path = parsed.path if parsed.path.startswith("/catalog") else "/catalog"
+    query = urlencode(normalize_catalog_search_params(params), doseq=True, safe="[]")
+    return urlunsplit((parsed.scheme or "https", f"www.{domain}", path, query, ""))
 
 
 def normalize_vinted_monitor_url(url: str) -> str:

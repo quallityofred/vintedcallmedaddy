@@ -50,6 +50,7 @@ def test_hydration_source_selector_detects_catalog_array_param():
         assert should_use_hydration_source({"catalog_ids[]": "1231"}) is True
         assert should_use_hydration_source({"catalog_id": "1231"}) is True
         assert should_use_hydration_source({"catalog": "1231"}) is True
+        assert should_use_hydration_source({"catalog_ids": ["1231"]}) is True
 
 
 def test_ssr_photo_merge_requires_both_flags_and_catalog_filter():

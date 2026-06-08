@@ -11,6 +11,11 @@ from app.models import FoundItem, Monitor, SeenItem
 from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem
 from app.scraper.source_selector import should_use_hydration_source
+from app.scraper.url_parser import (
+    build_vinted_catalog_url,
+    normalize_catalog_search_params,
+    parse_vinted_url,
+)
 from app.scheduler.found_item_values import inspect_found_item_insert_readiness
 from app.scraper.hydration_parser import (
     hydration_record_to_vinted_item,
@@ -115,6 +120,7 @@ class MonitorDryRunResult:
     errors_by_domain: Dict[str, str]
     pipeline_counts_by_domain: Dict[str, Dict[str, int]] = field(default_factory=dict)
     fetch_diagnostics_by_domain: Dict[str, FetchDiagnostics] = field(default_factory=dict)
+    filter_diagnostics: Dict[str, Any] = field(default_factory=dict)
     side_effects: Dict[str, bool] = field(default_factory=lambda: {
         "runs_scheduler_check": False,
         "writes_seen_items": False,
@@ -169,6 +175,7 @@ class MonitorFullCycleDryRunResult:
     seen_found_simulation_by_domain: Dict[str, FullCycleSimulationSamples]
     samples_by_domain: Dict[str, List[DryRunItem]]
     errors_by_domain: Dict[str, str]
+    filter_diagnostics: Dict[str, Any] = field(default_factory=dict)
     side_effects: Dict[str, bool] = field(default_factory=lambda: {
         "runs_scheduler_check": False,
         "writes_seen_items": False,
@@ -219,6 +226,18 @@ async def perform_monitor_dry_run(
     fetch_diagnostics_by_domain = {}
 
     filters = extract_monitor_filters(params, monitor_name=monitor.name)
+    effective_request_params = normalize_catalog_search_params(params)
+    original_url_params = normalize_catalog_search_params(parse_vinted_url(monitor.original_url))
+    filter_diagnostics = {
+        "stored_param_keys": sorted(key for key in params if not str(key).startswith("_")),
+        "original_url_param_keys": sorted(original_url_params),
+        "effective_request_param_keys": sorted(effective_request_params),
+        "filter_keys": filters.filter_keys,
+        "brand_ids": sorted(filters.brand_ids),
+        "catalog_ids": sorted(filters.catalog_ids),
+        "gender_ids": sorted(filters.gender_ids),
+        "request_params_match_original_url": effective_request_params == original_url_params,
+    }
 
     for domain in dry_run_domains:
         try:
@@ -226,7 +245,7 @@ async def perform_monitor_dry_run(
             raw_count = 0
             
             # Setup for hydration diagnostics
-            domain_url = monitor.original_url.replace("vinted.pl", domain)
+            domain_url = build_vinted_catalog_url(monitor.original_url, domain, effective_request_params)
             from urllib.parse import urlparse, parse_qs
             parsed_url = urlparse(domain_url)
             
@@ -412,7 +431,7 @@ async def perform_monitor_dry_run(
 
     reason = "catalog_filter_detected" if source == "hydration" else "brand_only_api_path"
     if source == "api" and should_use_hydration_source(params) == False: # Double check logic
-         if any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_id", "catalog"]) == False:
+         if any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_ids", "catalog_id", "catalog"]) == False:
               reason = "no_catalog_filter"
 
     return MonitorDryRunResult(
@@ -425,7 +444,8 @@ async def perform_monitor_dry_run(
         samples_by_domain=samples_by_domain,
         errors_by_domain=errors_by_domain,
         pipeline_counts_by_domain=pipeline_counts_by_domain,
-        fetch_diagnostics_by_domain=fetch_diagnostics_by_domain
+        fetch_diagnostics_by_domain=fetch_diagnostics_by_domain,
+        filter_diagnostics=filter_diagnostics,
     )
 
 
@@ -639,6 +659,7 @@ async def perform_monitor_full_cycle_dry_run(
         seen_found_simulation_by_domain=simulations,
         samples_by_domain=samples_by_domain,
         errors_by_domain=errors_by_domain,
+        filter_diagnostics=source_result.filter_diagnostics,
     )
 
 async def perform_monitor_baseline_seen(

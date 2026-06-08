@@ -9,6 +9,7 @@ from app.scraper.client import VintedClient, DomainSearchResult
 from app.scraper.parser import VintedItem, VintedItemDetail
 
 from app.scheduler import tasks
+from app.scraper.monitor_filters import extract_monitor_filters
 
 async def _user(db_session, username: str) -> User:
     user = User(username=username, password_hash="hash", password_salt="salt")
@@ -77,6 +78,15 @@ class FakeDomainClient:
     
     async def close(self):
         pass
+
+
+class FakeHydrationClient:
+    def __init__(self):
+        self.calls = []
+
+    async def fetch_catalog_hydration_items(self, url, *, domain):
+        self.calls.append((url, domain))
+        return []
 
 async def _run_check(db_session, monitor, client):
     # Ensure tasks uses our db_session
@@ -246,3 +256,40 @@ async def test_existing_found_without_seen_is_not_requeued_and_backfills_seen(db
 
     assert [(item.vinted_item_id, item.notified) for item in found] == [(888, True)]
     assert [(item.vinted_item_id, item.domain) for item in seen] == [(888, "vinted.fr")]
+
+
+@pytest.mark.asyncio
+async def test_hydration_fetch_uses_effective_catalog_filters_for_every_domain(monkeypatch):
+    params = {"brand_ids[]": [53], "catalog[]": [1231], "order": "newest_first"}
+    context = tasks.MonitorCheckContext(
+        monitor_id=22,
+        user_id=1,
+        monitor_name="nike",
+        params=params,
+        original_url="https://www.vinted.pl/catalog?brand_ids[]=53",
+        domains=["vinted.fr", "vinted.de"],
+        monitor_filters=extract_monitor_filters(params, monitor_name="nike"),
+        hidden_seller_ids=set(),
+        is_cold_start=False,
+        freshness_cutoff_at=datetime.now(timezone.utc),
+        original_interval=120,
+        cf_worker_url="",
+        cf_worker_mode="auto",
+        cf_worker_block_threshold=2,
+        cf_worker_recovery_minutes=10,
+    )
+    client = FakeHydrationClient()
+    settings = MagicMock()
+    settings.monitor_hydration_source_enabled = True
+    settings.monitor_ssr_photo_merge_enabled = False
+    monkeypatch.setattr("app.scraper.source_selector.get_settings", lambda: settings)
+
+    results = await tasks._fetch_domain_results(client, context=context, mode="auto")
+
+    assert [result.domain for result in results] == ["vinted.fr", "vinted.de"]
+    assert [domain for _, domain in client.calls] == ["vinted.fr", "vinted.de"]
+    for url, domain in client.calls:
+        assert f"www.{domain}" in url
+        assert "brand_ids[]=53" in url
+        assert "catalog_ids[]=1231" in url
+        assert "order=newest_first" in url

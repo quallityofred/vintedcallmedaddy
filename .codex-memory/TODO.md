@@ -99,6 +99,7 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 - Scraper engine v2 remains `SCRAPER_ENGINE_V2_ENABLED=false`. Before any future switch, integrate through an explicit scheduler release with all selected domains preserved, one catalog fetch per domain, no per-item detail fetch, and hydration as the item-data authority.
 - Notification pipeline v2 remains `NOTIFICATION_PIPELINE_V2_ENABLED=false`. Before any future switch, define durable DB-backed job state and restart recovery without weakening existing retry, topic routing, or rate-limiter behavior.
 - Monitor 22 repair gate after deployment: first run `backfill-seen-from-found-items` with `dry_run=true`; review `missing_total` and bounded samples. Only after explicit approval apply bounded batches with `dry_run=false` until `missing_total=0`, then run baseline/full-cycle read-only diagnostics before any controlled check-now. This repair sends no Telegram and does not alter FoundItem notification state.
+- Monitor 22 filter gate after deployment: inspect `GET /api/v1/diagnostics/monitors/22/source-selection` and require effective catalog/brand/gender keys to match the intended configuration. If `request_params_match_original_url=false`, the scheduler still uses effective stored filters, but the monitor URL should be repaired separately for operator clarity. Run bounded full-cycle dry-run and require a seen boundary or explicitly baseline before another controlled check-now.
 
 ## Graph Metadata Validation
 
