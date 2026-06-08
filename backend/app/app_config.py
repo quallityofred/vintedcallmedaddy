@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     scraper_domain_http_concurrency: int = Field(default=1, ge=1)
     scraper_domain_cooldown_seconds: int = Field(default=300, ge=0)
 
+    history_retention_found_items_days_default: int = Field(default=14, ge=1, le=365)
+    history_retention_found_items_max_per_monitor_domain_default: int = Field(default=288, ge=1, le=1000)
+    history_retention_seen_items_max_per_monitor_domain_default: int = Field(default=288, ge=1, le=1000)
+    history_retention_sample_limit_default: int = Field(default=10, ge=0, le=50)
+
     @property
     def database_url_validated(self) -> str:
         url = self.database_url

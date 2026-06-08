@@ -125,3 +125,5 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
     - No raw long URLs if buttons are available.
     - Use Telegram HTML/Markdown safe formatting.
 
+
+- [ ] Implement live history retention cleanup with strict confirmation (Phase C)

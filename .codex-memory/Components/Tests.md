@@ -279,3 +279,5 @@ tags:
 ## Related Frontend Notes
 
 - [[Components/Frontend Next.js]]
+
+- \	ests/test_history_retention_dry_run.py\: Verifies FoundItem and SeenItem retention planning (TTL, caps, preservation of pending items) and strict dry-run behavior.

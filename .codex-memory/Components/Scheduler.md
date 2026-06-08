@@ -72,3 +72,14 @@ tags:
 - 2026-06-08: Fixed `issue/fixed` notification dispatch ownership after monitor checks. A check with new findings schedules `process_pending_notifications(monitor_id=<checked monitor>)` instead of a global drain. Global live processing is now an explicit internal opt-in reserved for the default-off periodic worker; the process-local lock still serializes delivery and successful sends alone mark rows notified.
 - 2026-06-08: Promoted monitor full-cycle workflows to production core. A new shared service `app/scheduler/monitor_full_cycle.py` orchestrates safe monitor operations: `cleanup_pending_no_notify_for_monitor`, `baseline_seen_no_notify_for_monitor`, `run_monitor_check_once`, and `send_all_pending_for_monitor`. These helpers are exposed through production API routes `POST /api/v1/monitors/{id}/full-cycle-jobs` and `POST /api/v1/monitors/{id}/notifications/send-pending-jobs`.
 - 2026-06-08: Production full-cycle jobs use an asynchronous background task pattern with a process-local job registry. While running, job status shows options and started time; completed status includes the full results payload (e.g., cleanup counts, baseline counts, check results, notification counts). All live operations require explicit `dry_run=False` and are protected by authentication and CSRF.
+
+
+## History Retention (Phase B)
+
+- **Service**: \un_history_retention_dry_run\ in \pp/scheduler/retention.py\.
+- **Endpoint**: \POST /api/v1/maintenance/history-retention/dry-run\.
+- **Invariants**: 
+  - Dry-run only: No database mutation in Phase B.
+  - FoundItem: Prunes notified=True rows older than 14 days or beyond cap (default 288 per monitor/domain). Always preserves notified=False rows.
+  - SeenItem: Prunes rows beyond cap (default 288 per monitor/domain). No TTL pruning in Phase B.
+  - Side Effects: No Telegram, no Vinted calls, no baseline runs.
