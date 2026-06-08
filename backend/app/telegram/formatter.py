@@ -16,30 +16,34 @@ def format_price(item: VintedItem) -> str:
             return "Not listed"
     return f"{item.price:g} {escape_telegram_html(item.currency)}".strip()
 
-def optional_line(label: str, value: object) -> str | None:
+def optional_line(icon: str, label: str, value: object) -> str | None:
     text = escape_telegram_html(value).strip()
-    if not text or text == "None":
+    if not text or text.lower() in ("none", "null", "unknown"):
         return None
-    return f"<b>{label}:</b> {text}"
+    return f"{icon} <b>{label}:</b> {text}"
 
 def build_found_item_caption(item: VintedItem, monitor_name: str | None = None) -> str:
-    lines = ["🆕 <b>New Vinted item found</b>"]
+    lines = [
+        "🆕 <b>NEW VINTED ITEM</b>",
+        "━━━━━━━━━━━━━━"
+    ]
 
-    monitor_line = optional_line("Monitor", monitor_name)
+    monitor_line = optional_line("🔎", "Monitor", monitor_name)
     if monitor_line:
         lines.append(monitor_line)
 
-    lines.append(f"<b>Item:</b> {escape_telegram_html(item.title) or 'Untitled'}")
-    lines.append(f"<b>Price:</b> {format_price(item)}")
+    lines.append("") # Spacer
+    lines.append(f"👟 <b>{escape_telegram_html(item.title) or 'Untitled'}</b>")
+    lines.append(f"💰 <b>Price:</b> {format_price(item)}")
 
-    for label, value in (
-        ("Brand", item.brand),
-        ("Size", item.size),
-        ("Condition", item.condition),
-        ("Seller ID", item.seller_id if item.seller_id else None),
-        ("Source", item.domain),
+    for icon, label, value in (
+        ("🏷", "Brand", item.brand),
+        ("📏", "Size", item.size),
+        ("✨", "Condition", item.condition),
+        ("👤", "Seller ID", item.seller_id if item.seller_id else None),
+        ("🌍", "Source", item.domain),
     ):
-        line = optional_line(label, value)
+        line = optional_line(icon, label, value)
         if line:
             lines.append(line)
 

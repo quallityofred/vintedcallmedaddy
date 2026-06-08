@@ -21,15 +21,16 @@ def sample_item():
 def test_build_found_item_caption(sample_item):
     caption = build_found_item_caption(sample_item, monitor_name="nike")
     
-    assert "🆕 <b>New Vinted item found</b>" in caption
-    assert "<b>Monitor:</b> nike" in caption
-    assert "<b>Item:</b> Nike Air Max Plus" in caption
-    assert "<b>Price:</b> 45 EUR" in caption
-    assert "<b>Brand:</b> Nike" in caption
-    assert "<b>Size:</b> 43" in caption
-    assert "<b>Condition:</b> Very good" in caption
-    assert "<b>Seller ID:</b> 123456" in caption
-    assert "<b>Source:</b> vinted.fr" in caption
+    assert "🆕 <b>NEW VINTED ITEM</b>" in caption
+    assert "━━━━━━━━━━━━━━" in caption
+    assert "🔎 <b>Monitor:</b> nike" in caption
+    assert "👟 <b>Nike Air Max Plus</b>" in caption
+    assert "💰 <b>Price:</b> 45 EUR" in caption
+    assert "🏷 <b>Brand:</b> Nike" in caption
+    assert "📏 <b>Size:</b> 43" in caption
+    assert "✨ <b>Condition:</b> Very good" in caption
+    assert "👤 <b>Seller ID:</b> 123456" in caption
+    assert "🌍 <b>Source:</b> vinted.fr" in caption
     
     # Verify no raw URL
     assert "http://vinted.fr/items/123" not in caption
@@ -46,7 +47,20 @@ def test_build_found_item_keyboard(sample_item):
 
 def test_caption_omits_missing_fields(sample_item):
     sample_item.brand = None
+    sample_item.size = ""
     caption = build_found_item_caption(sample_item)
     
-    assert "<b>Brand:</b>" not in caption
-    assert "<b>Size:</b> 43" in caption
+    assert "🏷 <b>Brand:</b>" not in caption
+    assert "📏 <b>Size:</b>" not in caption
+    assert "✨ <b>Condition:</b> Very good" in caption
+
+def test_caption_escapes_html(sample_item):
+    sample_item.title = "Air & Max <Drop>"
+    caption = build_found_item_caption(sample_item)
+    
+    # Title escaped
+    assert "Air &amp; Max &lt;Drop&gt;" in caption
+    # But tags for formatting are OK
+    assert "<b>" in caption
+    # Title should not contain unescaped < >
+    assert "Air & Max <Drop>" not in caption
