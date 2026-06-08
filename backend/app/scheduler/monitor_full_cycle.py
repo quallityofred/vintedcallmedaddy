@@ -177,6 +177,38 @@ async def send_all_pending_for_monitor(
         "pending_after": pending_after,
     }
 
+async def run_monitor_check_once(
+    monitor_id: int,
+    db: AsyncSession,
+) -> Dict[str, Any]:
+    """
+    Perform one real monitor check using the production path.
+    Temporarily resumes if paused, then awaits check_monitor.
+    Returns monitor state after check.
+    """
+    monitor = await db.get(Monitor, monitor_id)
+    if not monitor:
+        raise ValueError(f"Monitor {monitor_id} not found")
+
+    original_is_active = monitor.is_active
+    if not original_is_active:
+        monitor.is_active = True
+        await db.commit()
+        await db.refresh(monitor)
+
+    try:
+        await check_monitor(monitor_id)
+        await db.refresh(monitor)
+        return {
+            "last_check_status": monitor.last_check_status,
+            "last_check_at": monitor.last_check_at.isoformat() if monitor.last_check_at else None,
+            "items_found_count": monitor.items_found_count,
+        }
+    finally:
+        if not original_is_active:
+            # We don't restore state here because full-cycle has its own pause_after
+            pass
+
 async def run_monitor_full_cycle_job(
     monitor_id: int,
     dry_run: bool = True,
@@ -231,13 +263,11 @@ async def run_monitor_full_cycle_job(
 
         if run_check:
             current_phase = "check"
-            # check_monitor handles its own sessions and locking
-            # Note: check_monitor will launch its own process_pending_notifications task
-            # if it finds new items. We might want to wait or manage this.
-            # For full-cycle, we'll run it and then potentially run our own send_pending loop.
             if not dry_run:
-                 await check_monitor(monitor_id)
-                 side_effects.append("ran_check")
+                 async with session_factory() as db:
+                     res = await run_monitor_check_once(monitor_id, db)
+                     results["check"] = res
+                     side_effects.append("ran_check")
             else:
                  async with session_factory() as db:
                      monitor = await db.get(Monitor, monitor_id)
@@ -280,6 +310,8 @@ async def run_monitor_full_cycle_job(
 
         completed_at = datetime.now(timezone.utc)
         return {
+            "job_id": None, # Filled by registry or caller if needed
+            "status": "completed",
             "monitor_id": monitor_id,
             "monitor_name": monitor_name,
             "dry_run": dry_run,

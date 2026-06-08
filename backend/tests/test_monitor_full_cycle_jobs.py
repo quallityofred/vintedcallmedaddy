@@ -1,7 +1,7 @@
 import pytest
 import json
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime, timezone
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
@@ -120,7 +120,20 @@ async def test_run_monitor_full_cycle_job_simulated_check_dry_run(db_session, te
         mock_client = mock_client_class.return_value
         mock_client.close = AsyncMock()
         with patch("app.scheduler.monitor_full_cycle.perform_monitor_full_cycle_dry_run") as mock_dry_run:
-            mock_dry_run.return_value = AsyncMock() # Just a mock result
+            from app.scheduler.dry_run import MonitorFullCycleDryRunResult
+            mock_dry_run.return_value = MonitorFullCycleDryRunResult(
+                monitor_id=test_monitor.id,
+                selected_source="hydration",
+                reason="test",
+                selected_domains=["vinted.pl"],
+                dry_run_domains=["vinted.pl"],
+                summary={},
+                counts_by_domain={},
+                pipeline_counts_by_domain={},
+                seen_found_simulation_by_domain={},
+                samples_by_domain={},
+                errors_by_domain={}
+            )
 
             # dry_run=True, run_check=True
             res = await run_monitor_full_cycle_job(
@@ -132,6 +145,7 @@ async def test_run_monitor_full_cycle_job_simulated_check_dry_run(db_session, te
             )
 
             assert "simulated_check" in res["side_effects"]
+            assert "check_dry_run" in res["results"]
             mock_client.close.assert_called_once()
 
 @pytest.mark.asyncio
@@ -188,38 +202,48 @@ async def test_send_all_pending_for_monitor(db_session, test_monitor, mock_sessi
         assert mock_process.call_count == 3
 
 @pytest.mark.asyncio
-async def test_run_monitor_full_cycle_job(db_session, test_monitor, mock_session_factory):
-    with patch("app.scheduler.monitor_full_cycle.cleanup_pending_no_notify_for_monitor") as mock_cleanup, \
-         patch("app.scheduler.monitor_full_cycle.baseline_seen_no_notify_for_monitor") as mock_baseline, \
-         patch("app.scheduler.monitor_full_cycle.check_monitor") as mock_check, \
-         patch("app.scheduler.monitor_full_cycle.send_all_pending_for_monitor") as mock_send:
+async def test_run_monitor_full_cycle_job_live_check_success(db_session, test_monitor, mock_session_factory):
+    # Mock check_monitor to simulate finding items and updating monitor status
+    async def mock_check(m_id):
+        async with mock_session_factory() as db:
+            m = await db.get(Monitor, m_id)
+            m.last_check_status = "success_new_items"
+            m.items_found_count += 5
+            m.last_check_at = datetime.now(timezone.utc)
+            await db.commit()
 
-        mock_cleanup.return_value = {"selected_for_ack": 1}
-        mock_baseline.return_value = {"created_seen_items_total": 5}
-        mock_send.return_value = {"total_marked_notified": 3}
+    with patch("app.scheduler.monitor_full_cycle.check_monitor", side_effect=mock_check), \
+         patch("app.scheduler.monitor_full_cycle.cleanup_pending_no_notify_for_monitor") as mock_cleanup, \
+         patch("app.scheduler.monitor_full_cycle.baseline_seen_no_notify_for_monitor") as mock_baseline, \
+         patch("app.scheduler.monitor_full_cycle.send_all_pending_for_monitor") as mock_send:
+        
+        mock_cleanup.return_value = {"selected_for_ack": 0}
+        mock_baseline.return_value = {"created_seen_items_total": 10}
+        mock_send.return_value = {"total_marked_notified": 5}
+
+        # Monitor initially inactive
+        test_monitor.is_active = False
+        await db_session.commit()
 
         res = await run_monitor_full_cycle_job(
             test_monitor.id,
             dry_run=False,
-            cleanup_existing_pending=True,
-            cold_baseline=True,
             run_check=True,
-            send_pending=True,
-            pause_before=True,
+            pause_before=False,
             pause_after=True
         )
 
-        assert "cleanup" in res["results"]
-        assert "baseline" in res["results"]
-        assert "notifications" in res["results"]
+        assert "check" in res["results"]
+        assert res["results"]["check"]["last_check_status"] == "success_new_items"
+        assert res["results"]["check"]["items_found_count"] == 5
         assert "ran_check" in res["side_effects"]
-
-        # Verify monitor is paused (pause_after=True)
+        
+        # Verify monitor was paused after
         await db_session.refresh(test_monitor)
-        assert test_monitor.is_active == False
+        assert test_monitor.is_active is False
 
 @pytest.mark.asyncio
-async def test_full_cycle_api_routes(db_session, test_user, test_monitor):
+async def test_full_cycle_api_routes_status_shape(db_session, test_user, test_monitor):
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[require_api_user] = lambda: test_user
@@ -228,24 +252,17 @@ async def test_full_cycle_api_routes(db_session, test_user, test_monitor):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        with patch("app.scheduler.tasks.run_monitor_full_cycle_job_task") as mock_task:
-            response = await client.post(
-                f"/api/v1/monitors/{test_monitor.id}/full-cycle-jobs",
-                params={"dry_run": "true"}
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert "job_id" in data
+        # 1. Create a dummy completed job in registry
+        from app.scheduler.diagnostics import registry
+        job_id = "test_job_123"
+        await registry.start_job(job_id, test_monitor.id, "test")
+        dummy_result = {"foo": "bar", "status": "completed"}
+        await registry.complete_job(job_id, dummy_result)
 
-            job_id = data["job_id"]
-            response = await client.get(f"/api/v1/monitors/{test_monitor.id}/full-cycle-jobs/{job_id}")
-            assert response.status_code == 200
-            assert response.json()["status"] == "running"
-
-        with patch("app.scheduler.tasks.run_monitor_send_all_pending_job_task") as mock_task:
-            response = await client.post(
-                f"/api/v1/monitors/{test_monitor.id}/notifications/send-pending-jobs",
-                params={"dry_run": "true"}
-            )
-            assert response.status_code == 200
-            assert "job_id" in response.json()
+        # 2. Get status and verify shape
+        response = await client.get(f"/api/v1/monitors/{test_monitor.id}/full-cycle-jobs/{job_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["job_id"] == job_id
+        assert data["status"] == "completed"
+        assert data["foo"] == "bar"

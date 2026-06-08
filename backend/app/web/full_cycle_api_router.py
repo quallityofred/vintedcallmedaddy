@@ -102,7 +102,10 @@ async def get_monitor_full_cycle_job_status(
         return JSONResponse(status_code=404, content={"job_id": job_id, "status": "not_found"})
 
     if job.status == "completed" and job.result is not None:
-        return JSONResponse(status_code=200, content=jsonable_encoder(job.result))
+        res = dict(job.result)
+        res["job_id"] = job_id
+        res["status"] = "completed"
+        return JSONResponse(status_code=200, content=jsonable_encoder(res))
     
     if job.status == "failed":
         return {
@@ -182,7 +185,10 @@ async def get_monitor_send_pending_job_status(
         return JSONResponse(status_code=404, content={"job_id": job_id, "status": "not_found"})
 
     if job.status == "completed" and job.result is not None:
-        return JSONResponse(status_code=200, content=jsonable_encoder(job.result))
+        res = dict(job.result)
+        res["job_id"] = job_id
+        res["status"] = "completed"
+        return JSONResponse(status_code=200, content=jsonable_encoder(res))
     
     if job.status == "failed":
         return {
