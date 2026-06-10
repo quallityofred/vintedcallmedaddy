@@ -41,12 +41,28 @@ async def post_monitor_cold_start_reset(
 
         # Extra confirmation rules
         extra = request.extra_confirm or []
-        if "CLEAR_SEEN_ITEMS_NO_NOTIFY_BASELINE" not in extra:
+        if request.clear_seen_items and "CLEAR_SEEN_ITEMS_NO_NOTIFY_BASELINE" not in extra:
              raise HTTPException(status_code=400, detail="Extra confirmation CLEAR_SEEN_ITEMS_NO_NOTIFY_BASELINE required.")
+        
+        if request.clear_found_items:
+            if "CLEAR_FOUND_ITEMS_HISTORY" not in extra:
+                raise HTTPException(status_code=400, detail="Extra confirmation CLEAR_FOUND_ITEMS_HISTORY required.")
+            
+            # Check for pending items if we want to clear found items
+            # We do a quick check here or let the service return it in dry run.
+            # But for live mode, we must be sure.
+            # We'll run the service in dry-run mode first to check for pending items if not already checked.
+            res_check = await run_monitor_cold_start_reset(
+                db=db, monitor_id=monitor_id, dry_run=True, domains=request.domains, 
+                clear_found_items=True, clear_seen_items=False, reset_last_checked=False
+            )
+            if res_check.get("pending_found_items_count", 0) > 0:
+                if "CLEAR_PENDING_FOUND_ITEMS_HISTORY_TOO" not in extra:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Monitor has {res_check['pending_found_items_count']} pending items. CLEAR_PENDING_FOUND_ITEMS_HISTORY_TOO required."
+                    )
 
-        # Load monitor to check active state if we want to guard it here too
-        # But we already do it in the service.
-    
     try:
         result = await run_monitor_cold_start_reset(
             db=db,

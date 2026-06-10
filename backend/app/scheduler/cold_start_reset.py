@@ -45,6 +45,7 @@ async def run_monitor_cold_start_reset(
         "deleted_seen_items": 0,
         "would_delete_found_items": 0,
         "deleted_found_items": 0,
+        "pending_found_items_count": 0,
         "would_reset_last_checked": False,
         "reset_last_checked": False,
         "cold_start_mode_after_reset": False,
@@ -106,6 +107,15 @@ async def run_monitor_cold_start_reset(
             stmt = stmt.where(FoundItem.domain.in_(target_domains))
         result["would_delete_found_items"] = await db.scalar(stmt) or 0
 
+        # Count pending items (notified=False)
+        pending_stmt = select(func.count(FoundItem.id)).where(
+            FoundItem.monitor_id == monitor_id,
+            FoundItem.notified == False
+        )
+        if target_domains:
+            pending_stmt = pending_stmt.where(FoundItem.domain.in_(target_domains))
+        result["pending_found_items_count"] = await db.scalar(pending_stmt) or 0
+
     if reset_last_checked and monitor.last_check_at is not None:
         result["would_reset_last_checked"] = True
 
@@ -115,27 +125,27 @@ async def run_monitor_cold_start_reset(
             raise ValueError(f"Monitor {monitor_id} is currently running a check. Reset aborted.")
 
         if clear_seen_items:
-            del_stmt = delete(SeenItem).where(SeenItem.id.in_(
-                select(SeenItem.id).where(SeenItem.monitor_id == monitor_id)
-            ))
+            del_stmt = delete(SeenItem).where(SeenItem.monitor_id == monitor_id)
             if target_domains:
-                # Re-constructing delete to handle domain filter correctly if needed
-                # SQLAlchemy delete with subquery can be tricky depending on dialect
-                del_stmt = delete(SeenItem).where(SeenItem.monitor_id == monitor_id)
-                if target_domains:
-                    del_stmt = del_stmt.where(SeenItem.domain.in_(target_domains))
+                del_stmt = del_stmt.where(SeenItem.domain.in_(target_domains))
             
             del_res = await db.execute(del_stmt)
             result["deleted_seen_items"] = del_res.rowcount
             result["side_effects"]["deletes_seen_items"] = del_res.rowcount > 0
 
         if clear_found_items:
+            # We already expect confirmations to be handled in the router
             del_stmt = delete(FoundItem).where(FoundItem.monitor_id == monitor_id)
             if target_domains:
                 del_stmt = del_stmt.where(FoundItem.domain.in_(target_domains))
             del_res = await db.execute(del_stmt)
             result["deleted_found_items"] = del_res.rowcount
             result["side_effects"]["deletes_found_items"] = del_res.rowcount > 0
+            
+            # If we cleared all found items (for all domains or filtered), we might want to update monitor count
+            # but if it was filtered it's harder. For now, if all domains are reset, we set it to 0.
+            if not domains or set(domains) == set(monitor_domains):
+                monitor.items_found_count = 0
 
         if reset_last_checked:
             monitor.last_check_at = None

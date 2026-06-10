@@ -5,6 +5,7 @@ import {
   Bell,
   Clock3,
   ExternalLink,
+  History,
   Loader2,
   Pause,
   Pencil,
@@ -35,6 +36,7 @@ import { Label } from "@/components/ui/label";
 import { DomainSelection } from "@/components/domain-selection";
 import { MonitorDebugPanel } from "@/components/monitor-debug-panel";
 import { MonitorTelegramTopicPanel } from "@/components/monitor-telegram-topic-panel";
+import { MonitorColdStartResetModal } from "@/components/monitor-cold-start-reset-modal";
 import { useAsyncActions } from "@/hooks/use-async-actions";
 import { checkMonitorNow, csrfFetch } from "@/lib/api-client";
 import { getMonitorTopicBatch, getTelegramTopicSettings, MonitorTopicStatus } from "@/lib/telegram-topics";
@@ -91,6 +93,7 @@ export function MonitorPreview() {
   const [topicsEnabled, setTopicsEnabled] = useState(false);
   const [topicStatuses, setTopicStatuses] = useState<Record<number, MonitorTopicStatus>>({});
   const [editingMonitor, setEditingMonitor] = useState<Monitor | null>(null);
+  const [resettingMonitor, setResettingMonitor] = useState<Monitor | null>(null);
   const [draft, setDraft] = useState<MonitorDraft>(emptyDraft);
   const monitorRequestId = useRef(0);
   const monitorMutationVersion = useRef(0);
@@ -645,6 +648,17 @@ export function MonitorPreview() {
                               onStatusChange={updateTopicStatus}
                             />
                             <Button
+                              aria-label={`Reset cold start for ${monitor.name}`}
+                              disabled={monitorBusy || bulkDeleting}
+                              onClick={() => setResettingMonitor(monitor)}
+                              size="sm"
+                              title="Reset cold start"
+                              variant="outline"
+                            >
+                              <History className="size-3.5" />
+                              Reset
+                            </Button>
+                            <Button
                               aria-label={`${monitor.is_active ? "Pause" : "Resume"} monitor ${monitor.name}`}
                               disabled={monitorBusy || bulkDeleting}
                               onClick={() => handleAction(monitor.id, monitor.is_active ? "pause" : "resume")}
@@ -731,6 +745,14 @@ export function MonitorPreview() {
           ))}
         </div>
       </CardContent>
+
+      <MonitorColdStartResetModal
+        monitorId={resettingMonitor?.id ?? 0}
+        monitorName={resettingMonitor?.name ?? ""}
+        open={!!resettingMonitor}
+        onOpenChange={(open) => !open && setResettingMonitor(null)}
+        onSuccess={fetchMonitors}
+      />
     </Card>
   );
 }

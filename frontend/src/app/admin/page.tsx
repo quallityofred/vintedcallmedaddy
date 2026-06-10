@@ -1,13 +1,15 @@
 import { PageShell } from "@/components/page-shell";
 import { AuthGuard } from "@/components/auth-guard";
 import { AdminInvites } from "@/components/admin-invites";
+import { AdminMaintenancePanel } from "@/components/admin-maintenance-panel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function AdminPage() {
   return (
     <AuthGuard requireAdmin>
-      <PageShell eyebrow="Admin" title="Administration" description="Manage system invites and logs.">
+      <PageShell eyebrow="Admin" title="Administration" description="Manage system invites, logs, and maintenance.">
         <div className="grid gap-6">
+          <AdminMaintenancePanel />
           <AdminInvites />
           <Card className="glass-panel">
             <CardHeader>
