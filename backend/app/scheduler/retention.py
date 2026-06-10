@@ -14,17 +14,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RetentionConfig:
     found_items_retention_days: int = 14
-    found_items_max_per_monitor_domain: int = 288
-    seen_items_max_per_monitor_domain: int = 288
+    found_items_max_per_monitor_domain: int = 128
+    seen_items_max_per_monitor_domain: int = 192
     sample_limit: int = 10
-
-@dataclass
-class RetentionSample:
-    monitor_id: int
-    domain: str
-    vinted_item_id: int
-    created_at: str
-    notified: Optional[bool] = None
 
 @dataclass
 class MonitorDomainStats:
@@ -78,8 +70,8 @@ async def run_history_retention_dry_run(
     include_found_items: bool = True,
     include_seen_items: bool = True,
     found_items_retention_days: int = 14,
-    found_items_max_per_monitor_domain: int = 288,
-    seen_items_max_per_monitor_domain: int = 288,
+    found_items_max_per_monitor_domain: int = 128,
+    seen_items_max_per_monitor_domain: int = 192,
     sample_limit: int = 10
 ) -> Dict[str, Any]:
     """
@@ -118,14 +110,16 @@ async def run_history_retention_dry_run(
         return plan.__dict__
 
     stats_map: Dict[tuple[int, str], MonitorDomainStats] = {}
+    found_items_to_delete: List[int] = []
+    seen_items_to_delete: List[int] = []
 
     # 2. Process FoundItems
     if include_found_items:
-        await _analyze_found_items(db, actual_monitor_ids, config, plan, stats_map)
+        found_items_to_delete = await _analyze_found_items(db, actual_monitor_ids, config, plan, stats_map)
 
     # 3. Process SeenItems
     if include_seen_items:
-        await _analyze_seen_items(db, actual_monitor_ids, config, plan, stats_map)
+        seen_items_to_delete = await _analyze_seen_items(db, actual_monitor_ids, config, plan, stats_map)
 
     # Convert stats_map to list
     for stats in stats_map.values():
@@ -146,7 +140,10 @@ async def run_history_retention_dry_run(
             }
         })
 
-    return plan.__dict__
+    result_dict = plan.__dict__
+    result_dict["_found_items_to_delete"] = found_items_to_delete
+    result_dict["_seen_items_to_delete"] = seen_items_to_delete
+    return result_dict
 
 async def _analyze_found_items(
     db: AsyncSession,
@@ -154,18 +151,13 @@ async def _analyze_found_items(
     config: RetentionConfig,
     plan: RetentionPlan,
     stats_map: Dict[tuple[int, str], MonitorDomainStats]
-):
-    # FoundItems:
-    # - notified=False: always keep
-    # - notified=True:
-    #   - keep if found_at >= (now - retention_days) AND rank <= cap
-
+) -> List[int]:
     from app.models import utc_now
     now = utc_now()
     cutoff_date = now - timedelta(days=config.found_items_retention_days)
 
-    # Query all FoundItems for target monitors
     stmt = select(
+        FoundItem.id,
         FoundItem.monitor_id,
         FoundItem.domain,
         FoundItem.vinted_item_id,
@@ -180,11 +172,11 @@ async def _analyze_found_items(
     result = await db.execute(stmt)
     rows = result.all()
 
-    # In-memory grouping and ranking (safer for dry-run without complex window functions in SQLite/PG compatibility)
+    ids_to_delete = []
     current_group = None
     rank = 0
 
-    for monitor_id, domain, item_id, found_at, notified in rows:
+    for row_id, monitor_id, domain, item_id, found_at, notified in rows:
         key = (monitor_id, domain)
         if key not in stats_map:
             stats_map[key] = MonitorDomainStats(monitor_id=monitor_id, domain=domain)
@@ -203,17 +195,12 @@ async def _analyze_found_items(
         stats.found_items_notified += 1
         plan.found_items_notified_total += 1
 
-        # Ranking notified items per monitor-domain
         if current_group != key:
             current_group = key
             rank = 1
         else:
             rank += 1
 
-        # Retention criteria:
-        # Would delete if (older than TTL) OR (beyond cap)
-
-        # Ensure found_at is timezone-aware if cutoff_date is
         if found_at.tzinfo is None and cutoff_date.tzinfo is not None:
             found_at = found_at.replace(tzinfo=timezone.utc)
         elif found_at.tzinfo is not None and cutoff_date.tzinfo is None:
@@ -225,6 +212,7 @@ async def _analyze_found_items(
         if is_too_old or is_beyond_cap:
             stats.found_items_would_delete += 1
             plan.found_items_would_delete_total += 1
+            ids_to_delete.append(row_id)
             if len(plan.samples) < config.sample_limit:
                 plan.samples.append({
                     "type": "found_item",
@@ -238,6 +226,8 @@ async def _analyze_found_items(
         else:
             stats.found_items_would_keep += 1
             plan.found_items_would_keep_total += 1
+    
+    return ids_to_delete
 
 async def _analyze_seen_items(
     db: AsyncSession,
@@ -245,11 +235,9 @@ async def _analyze_seen_items(
     config: RetentionConfig,
     plan: RetentionPlan,
     stats_map: Dict[tuple[int, str], MonitorDomainStats]
-):
-    # SeenItems:
-    # - Keep newest N per monitor-domain
-
+) -> List[int]:
     stmt = select(
+        SeenItem.id,
         SeenItem.monitor_id,
         SeenItem.domain,
         SeenItem.vinted_item_id,
@@ -263,11 +251,11 @@ async def _analyze_seen_items(
     result = await db.execute(stmt)
     rows = result.all()
 
+    ids_to_delete = []
     current_group = None
     rank = 0
 
-    for monitor_id, domain, item_id, seen_at in rows:
-        # Some SeenItems might not have monitor_id if they are global (though our schema implies monitor_id is likely)
+    for row_id, monitor_id, domain, item_id, seen_at in rows:
         if monitor_id is None:
             plan.warnings.append(f"SeenItem {item_id} has no monitor_id, skipping.")
             continue
@@ -291,8 +279,8 @@ async def _analyze_seen_items(
         if is_beyond_cap:
             stats.seen_items_would_delete += 1
             plan.seen_items_would_delete_total += 1
-            if len(plan.samples) < config.sample_limit * 2: # Allow more seen samples
-                # Filter to avoid duplicates in samples list if already present from found_items (unlikely but good practice)
+            ids_to_delete.append(row_id)
+            if len(plan.samples) < config.sample_limit * 2:
                 plan.samples.append({
                     "type": "seen_item",
                     "monitor_id": monitor_id,
@@ -304,6 +292,8 @@ async def _analyze_seen_items(
         else:
             stats.seen_items_would_keep += 1
             plan.seen_items_would_keep_total += 1
+            
+    return ids_to_delete
 
 async def run_history_retention_cleanup(
     db: AsyncSession,
@@ -319,7 +309,7 @@ async def run_history_retention_cleanup(
     confirm: Optional[str] = None
 ) -> Dict[str, Any]:
     # Run the analysis
-    plan = await run_history_retention_dry_run(
+    plan_dict = await run_history_retention_dry_run(
         db=db,
         monitor_ids=monitor_ids,
         include_found_items=include_found_items,
@@ -330,42 +320,37 @@ async def run_history_retention_cleanup(
         sample_limit=sample_limit
     )
 
+    found_ids = plan_dict.pop("_found_items_to_delete", [])
+    seen_ids = plan_dict.pop("_seen_items_to_delete", [])
+
     if dry_run:
-        plan['dry_run'] = True
-        return plan
+        plan_dict['dry_run'] = True
+        return plan_dict
 
     # Perform deletion
-    # Need to re-run the logic to get IDs to delete for atomicity.
-    # Actually, simple deletion based on criteria is better.
+    deleted_found = 0
+    deleted_seen = 0
 
-    # 1. Deleting FoundItems
-    if include_found_items:
-        # Re-get the criteria
-        from app.models import utc_now
-        now = utc_now()
-        cutoff_date = now - timedelta(days=found_items_retention_days)
+    if include_found_items and found_ids:
+        stmt = delete(FoundItem).where(FoundItem.id.in_(found_ids))
+        res = await db.execute(stmt)
+        deleted_found = res.rowcount
+        plan_dict['side_effects']['deletes_found_items'] = deleted_found > 0
 
-        # Direct delete query: notified=True AND found_at < cutoff_date
-        stmt = delete(FoundItem).where(
-            and_(
-                FoundItem.notified == True,
-                FoundItem.found_at < cutoff_date
-            )
-        )
-        if monitor_ids:
-            stmt = stmt.where(FoundItem.monitor_id.in_(monitor_ids))
-        result = await db.execute(stmt)
-        plan['found_items_deleted_count'] = result.rowcount
-        plan['side_effects']['deletes_found_items'] = result.rowcount > 0
+    if include_seen_items and seen_ids:
+        stmt = delete(SeenItem).where(SeenItem.id.in_(seen_ids))
+        res = await db.execute(stmt)
+        deleted_seen = res.rowcount
+        plan_dict['side_effects']['deletes_seen_items'] = deleted_seen > 0
 
-    # 2. Delete SeenItems
-    if include_seen_items:
-        # This is harder to do in one query without window functions.
-        # Given the cap, maybe just delete items older than some reasonable seen_at?
-        # But that's not the cap policy.
-        
-        # Placeholder for SeenItems deletion
-        plan['warnings'].append('SeenItem deletion not yet fully implemented.')
+    await db.commit()
 
-    plan['dry_run'] = False
-    return plan
+    plan_dict['found_items_deleted_count'] = deleted_found
+    plan_dict['seen_items_deleted_count'] = deleted_seen
+    plan_dict['dry_run'] = False
+    
+    # Update totals after deletion
+    plan_dict['found_items_total_after'] = plan_dict['found_items_total'] - deleted_found
+    plan_dict['seen_items_total_after'] = plan_dict['seen_items_total'] - deleted_seen
+
+    return plan_dict
