@@ -1,4 +1,4 @@
-﻿---
+---
 type: changelog
 project: vintedbot
 tags:
@@ -111,4 +111,10 @@ otified column of the ound_items table to further improve pending query perform
 - 2026-06-08: Fixed duplicate Telegram topic creation per monitor. Implemented an in-memory `asyncio.Lock` per monitor/chat and an atomic compare-and-swap `UPDATE` in the database to ensure exactly-one topic creation even under heavy concurrency. Updated `topic_service.py` with robust check-lock-check logic, fixed test isolation in `test_telegram_topics.py`, and added concurrent race tests in `backend/tests/test_telegram_topic_idempotency.py`. Verified with 419 passed tests.
 
 
+- 2026-06-10: Implemented safe monitor cold-start reset maintenance endpoint `POST /api/v1/maintenance/monitors/{id}/reset-cold-start`. This clears `SeenItem` rows and resets `last_check_at=None` to force a no-notify baseline next run, preventing Telegram floods.
+- 2026-06-10: Fixed production regression where retention cleanup endpoint returned HTTP 500 due to unexpected `domains` argument in `run_history_retention_cleanup`. Added full support for `domains` filtering.
+- 2026-06-10: Added regression tests for domain-scoped history retention cleanup, including endpoint-level dry-run verification.
+- 2026-06-10: Implemented real history retention cleanup logic for `FoundItem` and `SeenItem` with strict confirmation guards (Phase C).
 - 2026-06-08: Implemented Phase B: History Retention Dry-Run. Added pure planning service un_history_retention_dry_run and secured synchronous endpoint POST /api/v1/maintenance/history-retention/dry-run. Applied notified-only TTL (14d) and per-monitor-domain cap (288) logic. Verified dry-run-only behavior with 4 new tests and 18 regression tests.
+
+

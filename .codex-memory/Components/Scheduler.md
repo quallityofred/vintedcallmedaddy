@@ -1,4 +1,4 @@
-﻿---
+---
 type: component
 project: vintedbot
 tags:
@@ -71,6 +71,9 @@ tags:
 - 2026-06-08: Hydration scheduler requests now use canonical effective monitor parameters for every selected domain. A stale brand-only `original_url` can no longer override restrictive stored catalog/gender filters. Delta boundaries, all-domain iteration, Found/Seen dedupe, and genuine-new-item handling are unchanged.
 - 2026-06-08: Fixed `issue/fixed` notification dispatch ownership after monitor checks. A check with new findings schedules `process_pending_notifications(monitor_id=<checked monitor>)` instead of a global drain. Global live processing is now an explicit internal opt-in reserved for the default-off periodic worker; the process-local lock still serializes delivery and successful sends alone mark rows notified.
 - 2026-06-08: Promoted monitor full-cycle workflows to production core. A new shared service `app/scheduler/monitor_full_cycle.py` orchestrates safe monitor operations: `cleanup_pending_no_notify_for_monitor`, `baseline_seen_no_notify_for_monitor`, `run_monitor_check_once`, and `send_all_pending_for_monitor`. These helpers are exposed through production API routes `POST /api/v1/monitors/{id}/full-cycle-jobs` and `POST /api/v1/monitors/{id}/notifications/send-pending-jobs`.
+- 2026-06-10: Added cold-start reset service `run_monitor_cold_start_reset`. It forces a monitor into a safe baseline state by clearing domain-scoped `SeenItem` rows and resetting `last_check_at`. Live resets are guarded by monitor-inactive requirements and strict confirmation strings.
+- 2026-06-10: Added `domains` filter support to history retention cleanup. This allows scoping cleanup to specific Vinted marketplaces.
+- 2026-06-10: Implemented real history retention deletion logic for `FoundItem` (notified-only) and `SeenItem` (cap-only) with strict confirmation guards.
 - 2026-06-08: Production full-cycle jobs use an asynchronous background task pattern with a process-local job registry. While running, job status shows options and started time; completed status includes the full results payload (e.g., cleanup counts, baseline counts, check results, notification counts). All live operations require explicit `dry_run=False` and are protected by authentication and CSRF.
 
 
@@ -83,3 +86,4 @@ tags:
   - FoundItem: Prunes notified=True rows older than 14 days or beyond cap (default 288 per monitor/domain). Always preserves notified=False rows.
   - SeenItem: Prunes rows beyond cap (default 288 per monitor/domain). No TTL pruning in Phase B.
   - Side Effects: No Telegram, no Vinted calls, no baseline runs.
+

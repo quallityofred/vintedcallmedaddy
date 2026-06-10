@@ -1,4 +1,4 @@
-﻿---
+---
 type: component
 project: vintedbot
 tags:
@@ -274,6 +274,9 @@ tags:
 - 2026-06-08: Added route and worker coverage for async hydration+SSR merge jobs: full flattened completed status, structured unknown-job/auth responses, eight selected domains, concurrent execution, one fetch per domain, shared HTML identity across parsers, item-ID-only merge, hydration ordering/field authority, SSR-only exclusion, per-domain error isolation, no writes, and photo URL redaction.
 - 2026-06-08: Added shared-service and scheduler flag coverage for hydration+SSR photo enrichment: default-off path isolation, same-HTML parser identity, one fetch per selected domain, concurrent all-domain execution, item-ID-only merge, hydration field/order preservation, SSR-only exclusion, hydration fallback after SSR parser failure, no implicit item cap/detail fetch, persisted FoundItem photo, and Telegram photo/text behavior.
 - 2026-06-08: Added pending-notification diagnostics and limiter coverage: real SQLite monitor scoping/counts, bounded dry-run with no writes/sends, explicit batch success/failure/fallback behavior, retryable failed rows, redaction, admin/CSRF/limit guards, default-off worker guard, private/group/global rate limits, rate-limited photo/text fallback, and Telegram `retry_after` handling.
+- 2026-06-10: Added `backend/tests/test_monitor_cold_start_reset.py` verifying dry-run safety, live reset mutation (SeenItem deletion + last_check_at reset), domain filtering, active-monitor guards, and endpoint confirmation requirements.
+- 2026-06-10: Added `backend/tests/test_history_retention_cleanup.py` covering real deletion logic, dry-run safety, TTL/cap application, and preservation of pending items.
+- 2026-06-10: Added domain-scoped retention tests verifying the `domains` filter contract and its effect on DB mutation.
 - 2026-06-08: Added notification scoping regressions for two monitors, dry-run/live candidate parity, unscoped live rejection, truthful running-job metadata, and monitor-scoped check-triggered processing. Added scheduler-level hydration+SSR coverage for all selected domains, one fetch and shared HTML per domain, effective catalog/brand/gender params, hydration field authority, item-ID photo merge, and SSR-only exclusion. Verification: full backend suite `406 passed`.
 
 ## Related Frontend Notes
@@ -281,3 +284,4 @@ tags:
 - [[Components/Frontend Next.js]]
 
 - \	ests/test_history_retention_dry_run.py\: Verifies FoundItem and SeenItem retention planning (TTL, caps, preservation of pending items) and strict dry-run behavior.
+

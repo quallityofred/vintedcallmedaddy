@@ -26,3 +26,15 @@ class RetentionCleanupRequest(BaseModel):
     reason: Optional[str] = None
     confirm: Optional[str] = None
     extra_confirm: Optional[List[str]] = None
+
+class ColdStartResetRequest(BaseModel):
+    dry_run: bool = True
+    domains: Optional[List[str]] = None
+    clear_seen_items: bool = True
+    clear_found_items: bool = False
+    reset_last_checked: bool = True
+    require_monitor_inactive: bool = True
+    sample_limit: int = 10
+    reason: Optional[str] = None
+    confirm: Optional[str] = None
+    extra_confirm: Optional[List[str]] = None

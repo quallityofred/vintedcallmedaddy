@@ -15,12 +15,56 @@ from app.web.dependencies import get_db
 from app.models import User
 from app.scheduler.retention import run_history_retention_dry_run, run_history_retention_cleanup
 from app.scheduler.pending_diagnostics import run_pending_notifications_dry_run, run_pending_notifications_ack_no_notify
+from app.scheduler.cold_start_reset import run_monitor_cold_start_reset
 from app.config import get_settings
-from app.schemas.pending_ack import AckNoNotifyRequest, RetentionCleanupRequest
+from app.schemas.pending_ack import AckNoNotifyRequest, RetentionCleanupRequest, ColdStartResetRequest
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 router = APIRouter(prefix="/api/v1/maintenance", tags=["maintenance"])
+
+@router.post("/monitors/{monitor_id}/reset-cold-start", dependencies=[Depends(require_api_csrf)])
+async def post_monitor_cold_start_reset(
+    monitor_id: int,
+    request: ColdStartResetRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """
+    Safely reset a monitor to a cold-start state.
+    """
+    if not request.dry_run:
+        if not request.reason:
+            raise HTTPException(status_code=400, detail="Reason required for live reset.")
+        if request.confirm != "RESET_MONITOR_COLD_START":
+            raise HTTPException(status_code=400, detail="Invalid confirmation string.")
+
+        # Extra confirmation rules
+        extra = request.extra_confirm or []
+        if "CLEAR_SEEN_ITEMS_NO_NOTIFY_BASELINE" not in extra:
+             raise HTTPException(status_code=400, detail="Extra confirmation CLEAR_SEEN_ITEMS_NO_NOTIFY_BASELINE required.")
+
+        # Load monitor to check active state if we want to guard it here too
+        # But we already do it in the service.
+    
+    try:
+        result = await run_monitor_cold_start_reset(
+            db=db,
+            monitor_id=monitor_id,
+            dry_run=request.dry_run,
+            domains=request.domains,
+            clear_seen_items=request.clear_seen_items,
+            clear_found_items=request.clear_found_items,
+            reset_last_checked=request.reset_last_checked,
+            require_monitor_inactive=request.require_monitor_inactive,
+            sample_limit=request.sample_limit
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Failed to run monitor cold-start reset")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/pending-notifications/ack-no-notify", dependencies=[Depends(require_api_csrf)])
 async def post_pending_notifications_ack_no_notify(

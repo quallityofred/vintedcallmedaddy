@@ -1,4 +1,4 @@
-﻿---
+---
 type: todo
 project: vintedbot
 tags:
@@ -111,7 +111,7 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
 
 - **Beautiful Telegram Output TODO:** After the production core rollout is verified, enhance the Telegram notification formatting for better visual impact and usability:
     - Large item photo at top.
-    - Clear label "🆕 New Vinted item found".
+    - Clear label "?? New Vinted item found".
     - Monitor name.
     - Item title.
     - Price plus approximate USD (already exists, keep clean).
@@ -126,4 +126,7 @@ pm audit --omit=dev after Next.js releases a non-breaking dependency update.
     - Use Telegram HTML/Markdown safe formatting.
 
 
-- [ ] Implement live history retention cleanup with strict confirmation (Phase C)
+- [x] Implement live history retention cleanup with strict confirmation (Phase C)
+- [ ] Monitor production history retention cleanup behavior and counts.
+- [ ] Monitor production monitor cold-start reset behavior and next-run baseline success.
+
