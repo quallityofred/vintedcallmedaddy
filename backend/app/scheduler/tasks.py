@@ -48,6 +48,18 @@ _telegram_bot: Bot | None = None
 _notification_lock = asyncio.Lock()
 _running_checks: set[int] = set()
 _running_checks_lock = asyncio.Lock()
+_worker_lock = asyncio.Lock()
+_worker_stats = {
+	"enabled": settings.pending_notifications_worker_enabled,
+	"last_run_started_at": None,
+	"last_run_completed_at": None,
+	"last_run_duration_ms": None,
+	"last_run_status": "never_run",
+	"last_run_result": None,
+	"consecutive_failures": 0,
+	"skipped_due_to_overlap_count": 0,
+	"last_error": None,
+}
 _global_check_semaphore = asyncio.Semaphore(settings.monitor_check_global_concurrency)
 _user_check_semaphores: dict[int, asyncio.Semaphore] = {}
 _backpressure_stats = {
@@ -1427,6 +1439,50 @@ async def process_pending_notifications(
 		return base_result
 
 
+def get_pending_notifications_worker_stats() -> dict:
+	return {
+		**_worker_stats,
+		"batch_limit": settings.pending_notifications_worker_batch_limit,
+		"interval_seconds": settings.pending_notifications_worker_interval_seconds,
+		"sample_limit": settings.pending_notifications_worker_sample_limit,
+	}
+
+
+async def run_pending_notifications_worker():
+	"""Background worker tick: process pending notifications safely."""
+	if _worker_lock.locked():
+		_worker_stats["skipped_due_to_overlap_count"] += 1
+		logger.info("pending_notifications_worker_skipped_overlap")
+		return
+
+	async with _worker_lock:
+		started_at = datetime.now(timezone.utc)
+		_worker_stats["last_run_started_at"] = started_at.isoformat()
+		_worker_stats["last_run_status"] = "running"
+		_worker_stats["last_run_duration_ms"] = None
+
+		try:
+			result = await process_pending_notifications(
+				limit=settings.pending_notifications_worker_batch_limit,
+				dry_run=False,
+				sample_limit=settings.pending_notifications_worker_sample_limit,
+				allow_all_monitors=True,
+			)
+			_worker_stats["last_run_result"] = result
+			_worker_stats["last_run_status"] = "success"
+			_worker_stats["consecutive_failures"] = 0
+			_worker_stats["last_error"] = None
+		except Exception as e:
+			_worker_stats["last_run_status"] = "failed"
+			_worker_stats["consecutive_failures"] += 1
+			_worker_stats["last_error"] = str(e)[:255]
+			logger.exception("pending_notifications_worker_failed")
+		finally:
+			completed_at = datetime.now(timezone.utc)
+			_worker_stats["last_run_completed_at"] = completed_at.isoformat()
+			_worker_stats["last_run_duration_ms"] = int((completed_at - started_at).total_seconds() * 1000)
+
+
 class MonitorScheduler:
 	"""APScheduler wrapper that manages per-monitor polling jobs."""
 
@@ -1475,10 +1531,8 @@ class MonitorScheduler:
 
 		if settings.pending_notifications_worker_enabled:
 			self.scheduler.add_job(
-				process_pending_notifications,
-				trigger=IntervalTrigger(minutes=1),
-				args=[500],
-				kwargs={"allow_all_monitors": True},
+				run_pending_notifications_worker,
+				trigger=IntervalTrigger(seconds=settings.pending_notifications_worker_interval_seconds),
 				id="pending_notifications_processor",
 			)
 		self.scheduler.start()

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     monitor_ssr_photo_merge_enabled: bool = False
     scraper_engine_v2_enabled: bool = False
     pending_notifications_worker_enabled: bool = False
+    pending_notifications_worker_interval_seconds: int = Field(default=30, ge=10)
+    pending_notifications_worker_batch_limit: int = Field(default=50, ge=1, le=1000)
+    pending_notifications_worker_sample_limit: int = Field(default=10, ge=0, le=50)
     notification_pipeline_v2_enabled: bool = False
 
     vinted_adaptive_pacing_enabled: bool = True

@@ -332,9 +332,10 @@ def create_app() -> FastAPI:
         scheduler = getattr(request.app.state, "scheduler", None)
         job_count = len(getattr(scheduler, "job_ids", [])) if scheduler else 0
         from app.web.dependencies import count_running_bots
-        from app.scheduler.tasks import get_backpressure_state
+        from app.scheduler.tasks import get_backpressure_state, get_pending_notifications_worker_stats, _worker_lock
         from app.scraper.client import _http_budget
         bots_running = count_running_bots()
+        worker_stats = get_pending_notifications_worker_stats()
         return {
             "status": "ok",
             "health_schema_version": HEALTH_SCHEMA_VERSION,
@@ -347,6 +348,12 @@ def create_app() -> FastAPI:
             "scheduler_ready": bool(getattr(request.app.state, "scheduler_ready", False)),
             "startup_error": getattr(request.app.state, "startup_error", None),
             "scheduler_jobs": job_count,
+            "pending_notifications_worker": {
+                "enabled": worker_stats["enabled"],
+                "running": _worker_lock.locked(),
+                "last_status": worker_stats["last_run_status"],
+                "last_run_at": worker_stats["last_run_completed_at"],
+            },
             **get_backpressure_state(),
             **_http_budget.get_stats(),
             "bots_running": bots_running,

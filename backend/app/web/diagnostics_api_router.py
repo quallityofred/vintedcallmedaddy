@@ -830,6 +830,26 @@ async def get_notification_job_status(job_id: str, user: User = Depends(require_
     return JSONResponse(status_code=200, content=jsonable_encoder(res))
 
 
+@router.get("/notifications/worker")
+async def get_notification_worker_diagnostics(user: User = Depends(require_api_user)):
+    """Get diagnostic info for the background pending notification worker."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.scheduler.tasks import get_pending_notifications_worker_stats, _worker_lock
+    stats = get_pending_notifications_worker_stats()
+    
+    return {
+        **stats,
+        "running": _worker_lock.locked(),
+        "side_effects": {
+            "reads_database": True,
+            "writes_found_items": False,
+            "sends_telegram": False,
+        }
+    }
+
+
 @router.post("/monitors/{monitor_id}/backfill-seen-from-found-items", dependencies=[Depends(require_api_csrf)])
 async def backfill_seen_from_found_items(
     monitor_id: int,
