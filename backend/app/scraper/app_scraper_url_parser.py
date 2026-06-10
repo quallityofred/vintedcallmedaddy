@@ -111,12 +111,10 @@ def parse_vinted_url(url: str) -> dict:
         return params
 
     for key, values in qs.items():
-        # Normalise both "brand_ids[]" and "brand_ids" forms
-        normalised_key = key if key.endswith("[]") else key
         val = values[0] if values else ""
 
-        if normalised_key in _ARRAY_PARAMS or (key + "[]") in _ARRAY_PARAMS:
-            array_key = normalised_key if normalised_key in _ARRAY_PARAMS else key + "[]"
+        if key in _ARRAY_PARAMS or (key + "[]") in _ARRAY_PARAMS:
+            array_key = key if key.endswith("[]") else key + "[]"
             # Ensure array parameters are always lists, containing ints.
             params[array_key] = _parse_int_values(values)
 
@@ -165,8 +163,10 @@ def normalize_catalog_search_params(params: dict) -> dict:
         value = search_params.pop(alias)
         catalog_values.extend(value if isinstance(value, (list, tuple, set)) else [value])
     if catalog_values:
+        # Canonical catalog key
         search_params["catalog_ids[]"] = list(dict.fromkeys(catalog_values))
 
+    # All other array params
     for plain_key in (
         "brand_ids",
         "size_ids",
@@ -177,8 +177,15 @@ def normalize_catalog_search_params(params: dict) -> dict:
         "gender_ids",
     ):
         bracketed_key = f"{plain_key}[]"
-        if plain_key in search_params and bracketed_key not in search_params:
-            search_params[bracketed_key] = search_params.pop(plain_key)
+        if bracketed_key in search_params:
+             # Already have bracketed form, just clean up plain form if it exists
+             search_params.pop(plain_key, None)
+             # Ensure it's a list
+             if not isinstance(search_params[bracketed_key], list):
+                  search_params[bracketed_key] = [search_params[bracketed_key]]
+        elif plain_key in search_params:
+            val = search_params.pop(plain_key)
+            search_params[bracketed_key] = val if isinstance(val, list) else [val]
 
     return search_params
 

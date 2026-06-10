@@ -778,6 +778,8 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 
 		params = json.loads(monitor.params_json)
 		monitor_filters = extract_monitor_filters(params, monitor_name=monitor.name)
+		
+		# Repair logic: if stored params are broad/not restrictive, try re-parsing from original_url
 		if not has_restrictive_filters(monitor_filters):
 			url_params = parse_vinted_url(monitor.original_url)
 			url_filters = extract_monitor_filters(url_params, monitor_name=monitor.name)
@@ -796,6 +798,7 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 				await db.commit()
 				logger.warning("Skipping unfiltered Vinted monitor: monitor_id=%s", monitor.id)
 				return None
+
 		domains = json.loads(monitor.domains_json)
 		hidden_result = await db.execute(
 			select(HiddenSeller.seller_id).where(HiddenSeller.user_id == monitor.user_id)

@@ -30,6 +30,7 @@ from app.scraper.url_parser import normalize_catalog_search_params, parse_vinted
 from app.config import get_settings
 from app.scraper.client import VintedClient, TokenBucketLimiter
 from app.schemas.notification_diagnostics import NotificationProcessRequest
+from app.schemas.monitor_diagnostics import MonitorDryRunRequest, MonitorFullCycleDryRunRequest, MonitorBaselineRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
@@ -208,11 +209,7 @@ async def get_monitor_source_selection(
 @router.post("/monitors/{monitor_id}/dry-run-source")
 async def post_monitor_dry_run_source(
     monitor_id: int,
-    max_domains: int = 1,
-    max_items_per_domain: int = 10,
-    domain: str | None = None,
-    source: str = "hydration",
-    sample_limit: int = Query(default=10, ge=0, le=20),
+    request: MonitorDryRunRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -235,15 +232,20 @@ async def post_monitor_dry_run_source(
     try:
         # Note: ssr_html_photo diagnostic was removed to prevent timeout.
         # Use /jobs/hydration-ssr-photo-merge for asynchronous all-domain validation.
-        if source == "ssr_html_photo":
+        if request.source == "ssr_html_photo":
              raise HTTPException(status_code=400, detail="Use /jobs/hydration-ssr-photo-merge instead")
+
+        target_domain = request.domain
+        if not target_domain and request.domains:
+            target_domain = request.domains[0]
 
         res = await perform_monitor_dry_run(
             monitor,
             client,
-            max_domains=min(max_domains, 3),
-            max_items_per_domain=min(max_items_per_domain, 20),
-            target_domain=domain
+            max_domains=min(request.max_domains, 3),
+            max_items_per_domain=min(request.max_items_per_domain, 20),
+            target_domain=target_domain,
+            include_media_diagnostics=request.include_media_diagnostics,
         )
         return JSONResponse(status_code=200, content=jsonable_encoder(dataclasses.asdict(res)))
     except ValueError as e:
@@ -258,14 +260,7 @@ async def post_monitor_dry_run_source(
 @router.post("/monitors/{monitor_id}/dry-run-full-cycle", response_model=None)
 async def post_monitor_full_cycle_dry_run(
     monitor_id: int,
-    domain: str | None = None,
-    max_domains: int = Query(default=8, ge=1, le=8),
-    max_items_per_domain: int = Query(default=96, ge=1, le=120),
-    include_samples: bool = True,
-    sample_limit: int = Query(default=10, ge=0, le=20),
-    include_media_diagnostics: bool = False,
-    media_diag_max_items: int = Query(default=10, ge=1, le=20),
-    media_diag_max_chunks: int = Query(default=20, ge=1, le=50),
+    request: MonitorFullCycleDryRunRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -278,15 +273,27 @@ async def post_monitor_full_cycle_dry_run(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
 
+    target_domain = request.domain
+    if not target_domain and request.domains:
+        target_domain = request.domains[0]
+
+    try:
+        selected_domains = json.loads(monitor.domains_json)
+    except Exception:
+        selected_domains = []
+
     # Guard: Reject oversized requests
-    if domain is None and max_domains > 2:
+    # Evaluate effective requested domains count
+    effective_domain_count = 1 if target_domain else min(len(selected_domains), request.max_domains)
+
+    if effective_domain_count > 2:
         return JSONResponse(
             status_code=200,
             content=jsonable_encoder({
                 "monitor_id": monitor_id,
                 "selected_source": "hydration",
                 "reason": "full_cycle_dry_run_request_too_large",
-                "selected_domains": json.loads(monitor.domains_json),
+                "selected_domains": selected_domains,
                 "dry_run_domains": [],
                 "summary": {
                     "domains_checked": 0, "raw_fetched_total": 0, "after_filters_total": 0,
@@ -302,7 +309,8 @@ async def post_monitor_full_cycle_dry_run(
                 "safe_error": "full_cycle_dry_run_request_too_large",
                 "limits": {
                     "max_domains_allowed": 2,
-                    "requested_max_domains": max_domains,
+                    "requested_max_domains": request.max_domains,
+                    "effective_requested_domains": effective_domain_count,
                     "recommended_mode": "domain_or_small_batch"
                 },
                 "side_effects": {
@@ -326,14 +334,14 @@ async def post_monitor_full_cycle_dry_run(
             monitor,
             client,
             db,
-            max_domains=max_domains,
-            max_items_per_domain=max_items_per_domain,
-            target_domain=domain,
-            include_samples=include_samples,
-            sample_limit=sample_limit,
-            include_media_diagnostics=include_media_diagnostics,
-            media_diag_max_items=media_diag_max_items,
-            media_diag_max_chunks=media_diag_max_chunks,
+            max_domains=request.max_domains,
+            max_items_per_domain=request.max_items_per_domain,
+            target_domain=target_domain,
+            include_samples=request.include_samples,
+            sample_limit=request.sample_limit,
+            include_media_diagnostics=request.include_media_diagnostics,
+            media_diag_max_items=request.media_diag_max_items,
+            media_diag_max_chunks=request.media_diag_max_chunks,
             telegram_enabled=bool(user.is_telegram_enabled),
         )
         return JSONResponse(
@@ -366,11 +374,7 @@ async def post_monitor_full_cycle_dry_run(
 @router.post("/monitors/{monitor_id}/baseline-seen-no-notify", response_model=None)
 async def post_monitor_seen_baseline_no_notify(
     monitor_id: int,
-    domain: str | None = None,
-    max_domains: int = Query(default=1, ge=1, le=8),
-    max_items_per_domain: int = Query(default=96, ge=1, le=120),
-    dry_run: bool = True,
-    sample_limit: int = Query(default=10, ge=0, le=20),
+    request: MonitorBaselineRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -383,11 +387,19 @@ async def post_monitor_seen_baseline_no_notify(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
 
+    target_domain = request.domain
+    if not target_domain and request.domains:
+        target_domain = request.domains[0]
+
     try:
         selected_domains = json.loads(monitor.domains_json)
     except Exception:
         selected_domains = []
-    if domain is None and max_domains > 2:
+    
+    # Effective requested domains count
+    effective_domain_count = 1 if target_domain else min(len(selected_domains), request.max_domains)
+
+    if effective_domain_count > 2:
         return JSONResponse(
             status_code=200,
             content=jsonable_encoder(_create_baseline_guard_response(monitor_id, selected_domains)),
@@ -402,11 +414,11 @@ async def post_monitor_seen_baseline_no_notify(
             monitor,
             client,
             db,
-            max_domains=max_domains,
-            max_items_per_domain=max_items_per_domain,
-            target_domain=domain,
-            dry_run=dry_run,
-            sample_limit=sample_limit,
+            max_domains=request.max_domains,
+            max_items_per_domain=request.max_items_per_domain,
+            target_domain=target_domain,
+            dry_run=request.dry_run,
+            sample_limit=request.sample_limit,
         )
         return JSONResponse(
             status_code=200,
@@ -555,12 +567,7 @@ async def get_monitor_job_status(
 @router.post("/monitors/{monitor_id}/start-with-baseline", response_model=None)
 async def post_monitor_start_with_baseline(
     monitor_id: int,
-    domain: str | None = None,
-    max_domains: int = Query(default=2, ge=1, le=8),
-    max_items_per_domain: int = Query(default=96, ge=1, le=120),
-    dry_run: bool = True,
-    activate_after: bool = False,
-    sample_limit: int = Query(default=10, ge=0, le=20),
+    request: MonitorBaselineRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_api_user),
 ):
@@ -573,7 +580,19 @@ async def post_monitor_start_with_baseline(
     if monitor is None:
         raise HTTPException(status_code=404, detail="Monitor not found")
 
-    if domain is None and max_domains > 2:
+    target_domain = request.domain
+    if not target_domain and request.domains:
+        target_domain = request.domains[0]
+
+    # Effective requested domains count
+    try:
+        selected_domains = json.loads(monitor.domains_json)
+    except Exception:
+        selected_domains = []
+
+    effective_domain_count = 1 if target_domain else min(len(selected_domains), request.max_domains)
+
+    if effective_domain_count > 2:
         return JSONResponse(
             status_code=400,
             content={"detail": "For batch baseline, please specify explicit domains or reduce max_domains to <= 2"},
@@ -582,23 +601,15 @@ async def post_monitor_start_with_baseline(
     last_check_at_before = monitor.last_check_at
     monitor_activated = False
 
-    try:
-        selected_domains = json.loads(monitor.domains_json)
-    except Exception:
-        selected_domains = []
-
-    if activate_after:
+    if request.activate_after:
         # Determine if this specific run covers all selected domains
-        # If domain is specified, it only covers one domain (or none if not matched)
-        # If max_domains is used, it only covers a subset
-        # Safest condition: only allow if ALL domains are covered.
         covers_all = False
-        if domain is not None:
+        if target_domain is not None:
              # If specific domain, is it the only one?
-             covers_all = (len(selected_domains) == 1 and domain in selected_domains)
+             covers_all = (len(selected_domains) == 1 and target_domain in selected_domains)
         else:
              # If no specific domain, does max_domains cover all?
-             covers_all = (max_domains >= len(selected_domains))
+             covers_all = (request.max_domains >= len(selected_domains))
 
         if not covers_all:
              return JSONResponse(
@@ -606,9 +617,9 @@ async def post_monitor_start_with_baseline(
                 content={
                     "reason": "partial_baseline_activation_not_allowed",
                     "selected_domains": selected_domains,
-                    "baseline_domains": [domain] if domain else [],
+                    "baseline_domains": [target_domain] if target_domain else [],
                     "selected_domain_count": len(selected_domains),
-                    "baseline_domain_count": 1 if domain else max_domains,
+                    "baseline_domain_count": effective_domain_count,
                     "safe_error": "partial_baseline_activation_not_allowed",
                     "side_effects": {
                         "runs_scheduler_check": False,
@@ -633,14 +644,14 @@ async def post_monitor_start_with_baseline(
             monitor,
             client,
             db,
-            max_domains=max_domains,
-            max_items_per_domain=max_items_per_domain,
-            target_domain=domain,
-            dry_run=dry_run,
-            sample_limit=sample_limit,
+            max_domains=request.max_domains,
+            max_items_per_domain=request.max_items_per_domain,
+            target_domain=target_domain,
+            dry_run=request.dry_run,
+            sample_limit=request.sample_limit,
         )
 
-        if not dry_run and activate_after:
+        if not request.dry_run and request.activate_after:
             monitor.is_active = True
             if monitor.last_check_at is None:
                 monitor.last_check_at = datetime.now(timezone.utc)
@@ -650,8 +661,8 @@ async def post_monitor_start_with_baseline(
 
         res = {
             "reason": "start_with_baseline",
-            "dry_run": dry_run,
-            "activate_after": activate_after,
+            "dry_run": request.dry_run,
+            "activate_after": request.activate_after,
             "monitor_activated": monitor_activated,
             "monitor_last_check_at_before": last_check_at_before,
             "monitor_last_check_at_after": monitor.last_check_at,
