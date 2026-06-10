@@ -246,30 +246,94 @@ async def test_retention_dry_run_no_mutation(db_session):
     assert len(seen_items_after.all()) == 2
 
 @pytest.mark.asyncio
-async def test_retention_confirmation_guards_endpoint(db_session, client):
-    # Setup some items
+async def test_retention_cleanup_domains_filter_contract(db_session):
     user = await _create_test_user(db_session)
-    monitor = Monitor(user_id=user.id, name="M", original_url="U", params_json="{}", domains_json='["vinted.fr"]')
+    monitor = Monitor(user_id=user.id, name="M", original_url="U", params_json="{}", domains_json='["vinted.fr", "vinted.pl"]')
     db_session.add(monitor)
     await db_session.commit()
+    await db_session.refresh(monitor)
+
+    # Add items in two domains
+    db_session.add(SeenItem(monitor_id=monitor.id, vinted_item_id=1, domain="vinted.fr"))
+    db_session.add(SeenItem(monitor_id=monitor.id, vinted_item_id=2, domain="vinted.pl"))
+    await db_session.commit()
+
+    # This should FAIL with TypeError: run_history_retention_cleanup() got an unexpected keyword argument 'domains'
+    # if the contract is not fixed.
+    result = await run_history_retention_cleanup(
+        db=db_session,
+        dry_run=True,
+        domains=["vinted.fr"]
+    )
     
-    # We need to bypass auth/csrf for these tests if not configured
-    # In these tests, we assume require_api_user and require_api_csrf are overridden or bypassed by test setup
-    # Actually, override_get_db is good for DB, but we might need more for auth
-    
-    # For now, let's test the endpoint response for 400s if confirmations are missing
-    # Assuming CSRF and Auth are bypassed/not active in this test env or mocked
+    assert result["seen_items_total"] == 1
+    assert result["monitors_considered"] == [monitor.id]
+
+@pytest.mark.asyncio
+async def test_retention_cleanup_endpoint_dry_run_domains(db_session, client):
+    user = await _create_test_user(db_session)
+    # We need a user with username 'admin' or similar if require_api_user is strict, 
+    # but _create_test_user creates a random one. 
+    # Usually we mock the user in dependency_overrides.
+    from app.web.api_dependencies import require_api_user
+    app.dependency_overrides[require_api_user] = lambda: user
     
     payload = {
-        "dry_run": False,
-        "reason": "",
-        "confirm": "WRONG"
+        "dry_run": True,
+        "domains": ["vinted.fr"],
+        "include_found_items": True,
+        "include_seen_items": True
     }
     
-    # This might fail with 401/403 if auth is not bypassed
-    # response = await client.post("/api/v1/maintenance/history-retention/cleanup", json=payload)
-    # assert response.status_code == 400
-    pass
+    # We also need to bypass require_api_csrf
+    from app.web.csrf import require_api_csrf
+    app.dependency_overrides[require_api_csrf] = lambda: None
+
+    response = await client.post("/api/v1/maintenance/history-retention/cleanup", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dry_run"] is True
+    assert data["config"]["domains"] == ["vinted.fr"]
+
+    app.dependency_overrides.clear()
+
+@pytest.mark.asyncio
+async def test_retention_cleanup_live_with_domain_filter(db_session):
+    user = await _create_test_user(db_session)
+    monitor = Monitor(user_id=user.id, name="M", original_url="U", params_json="{}", domains_json='["vinted.fr", "vinted.pl"]')
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    now = utc_now()
+    # Items in vinted.fr (cap=1)
+    db_session.add(SeenItem(monitor_id=monitor.id, vinted_item_id=1, domain="vinted.fr", seen_at=now))
+    db_session.add(SeenItem(monitor_id=monitor.id, vinted_item_id=2, domain="vinted.fr", seen_at=now - timedelta(minutes=1)))
+    
+    # Items in vinted.pl (cap=1)
+    db_session.add(SeenItem(monitor_id=monitor.id, vinted_item_id=3, domain="vinted.pl", seen_at=now))
+    db_session.add(SeenItem(monitor_id=monitor.id, vinted_item_id=4, domain="vinted.pl", seen_at=now - timedelta(minutes=1)))
+    
+    await db_session.commit()
+
+    # Clean up only vinted.fr with cap=1
+    result = await run_history_retention_cleanup(
+        db=db_session,
+        dry_run=False,
+        domains=["vinted.fr"],
+        seen_items_max_per_monitor_domain=1,
+        reason="test",
+        confirm="CLEANUP_OLD_HISTORY"
+    )
+    
+    assert result["seen_items_deleted_count"] == 1
+    
+    # Verify DB: 
+    # vinted.fr should have item 1 (newest)
+    # vinted.pl should still have both 3 and 4
+    res = await db_session.execute(select(SeenItem.vinted_item_id).order_by(SeenItem.vinted_item_id))
+    remaining_ids = [r[0] for r in res.all()]
+    assert remaining_ids == [1, 3, 4]
 
 @pytest.mark.asyncio
 async def test_low_buffer_guards_in_cleanup_logic(db_session):

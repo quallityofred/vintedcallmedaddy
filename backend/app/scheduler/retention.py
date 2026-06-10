@@ -67,6 +67,7 @@ class RetentionPlan:
 async def run_history_retention_dry_run(
     db: AsyncSession,
     monitor_ids: Optional[List[int]] = None,
+    domains: Optional[List[str]] = None,
     include_found_items: bool = True,
     include_seen_items: bool = True,
     found_items_retention_days: int = 14,
@@ -92,7 +93,8 @@ async def run_history_retention_dry_run(
             "found_items_retention_days": config.found_items_retention_days,
             "found_items_max_per_monitor_domain": config.found_items_max_per_monitor_domain,
             "seen_items_max_per_monitor_domain": config.seen_items_max_per_monitor_domain,
-            "sample_limit": config.sample_limit
+            "sample_limit": config.sample_limit,
+            "domains": domains
         }
     )
 
@@ -115,11 +117,11 @@ async def run_history_retention_dry_run(
 
     # 2. Process FoundItems
     if include_found_items:
-        found_items_to_delete = await _analyze_found_items(db, actual_monitor_ids, config, plan, stats_map)
+        found_items_to_delete = await _analyze_found_items(db, actual_monitor_ids, config, plan, stats_map, domains=domains)
 
     # 3. Process SeenItems
     if include_seen_items:
-        seen_items_to_delete = await _analyze_seen_items(db, actual_monitor_ids, config, plan, stats_map)
+        seen_items_to_delete = await _analyze_seen_items(db, actual_monitor_ids, config, plan, stats_map, domains=domains)
 
     # Convert stats_map to list
     for stats in stats_map.values():
@@ -150,7 +152,8 @@ async def _analyze_found_items(
     monitor_ids: List[int],
     config: RetentionConfig,
     plan: RetentionPlan,
-    stats_map: Dict[tuple[int, str], MonitorDomainStats]
+    stats_map: Dict[tuple[int, str], MonitorDomainStats],
+    domains: Optional[List[str]] = None
 ) -> List[int]:
     from app.models import utc_now
     now = utc_now()
@@ -163,7 +166,12 @@ async def _analyze_found_items(
         FoundItem.vinted_item_id,
         FoundItem.found_at,
         FoundItem.notified
-    ).where(FoundItem.monitor_id.in_(monitor_ids)).order_by(
+    ).where(FoundItem.monitor_id.in_(monitor_ids))
+    
+    if domains:
+        stmt = stmt.where(FoundItem.domain.in_(domains))
+        
+    stmt = stmt.order_by(
         FoundItem.monitor_id,
         FoundItem.domain,
         desc(FoundItem.found_at)
@@ -234,7 +242,8 @@ async def _analyze_seen_items(
     monitor_ids: List[int],
     config: RetentionConfig,
     plan: RetentionPlan,
-    stats_map: Dict[tuple[int, str], MonitorDomainStats]
+    stats_map: Dict[tuple[int, str], MonitorDomainStats],
+    domains: Optional[List[str]] = None
 ) -> List[int]:
     stmt = select(
         SeenItem.id,
@@ -242,7 +251,12 @@ async def _analyze_seen_items(
         SeenItem.domain,
         SeenItem.vinted_item_id,
         SeenItem.seen_at
-    ).where(SeenItem.monitor_id.in_(monitor_ids)).order_by(
+    ).where(SeenItem.monitor_id.in_(monitor_ids))
+    
+    if domains:
+        stmt = stmt.where(SeenItem.domain.in_(domains))
+        
+    stmt = stmt.order_by(
         SeenItem.monitor_id,
         SeenItem.domain,
         desc(SeenItem.seen_at)
@@ -299,6 +313,7 @@ async def run_history_retention_cleanup(
     db: AsyncSession,
     dry_run: bool = True,
     monitor_ids: Optional[List[int]] = None,
+    domains: Optional[List[str]] = None,
     include_found_items: bool = True,
     include_seen_items: bool = True,
     found_items_retention_days: int = 14,
@@ -312,6 +327,7 @@ async def run_history_retention_cleanup(
     plan_dict = await run_history_retention_dry_run(
         db=db,
         monitor_ids=monitor_ids,
+        domains=domains,
         include_found_items=include_found_items,
         include_seen_items=include_seen_items,
         found_items_retention_days=found_items_retention_days,
