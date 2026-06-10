@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     startup_db_retry_interval_seconds: int = 10
     startup_optional_timeout_seconds: int = 20
     auth_db_operation_timeout_seconds: int = 25
-    monitor_check_global_concurrency: int = Field(default=2, ge=1)
+    monitor_check_global_concurrency: int = Field(default=3, ge=1)
     monitor_check_per_user_concurrency: int = Field(default=1, ge=1)
     monitor_check_acquire_timeout_seconds: float = Field(default=2.0, ge=0)
     monitor_check_max_pages_per_domain: int = Field(default=1, ge=1)
@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     scraper_engine_v2_enabled: bool = False
     pending_notifications_worker_enabled: bool = False
     notification_pipeline_v2_enabled: bool = False
+
+    vinted_adaptive_pacing_enabled: bool = True
+    vinted_global_safe_requests_per_minute: int = Field(default=30, ge=1)
+    vinted_domain_safe_requests_per_minute: int = Field(default=6, ge=1)
+    vinted_request_jitter_ratio: float = Field(default=0.10, ge=0.0, le=1.0)
+
     scraper_global_http_concurrency: int = Field(default=8, ge=1)
     scraper_domain_http_concurrency: int = Field(default=1, ge=1)
     scraper_domain_cooldown_seconds: int = Field(default=300, ge=0)

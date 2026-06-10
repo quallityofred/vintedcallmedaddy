@@ -5,6 +5,7 @@ import random
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any, Union
 from urllib.parse import urlencode
 
 from curl_cffi.requests import AsyncSession
@@ -12,6 +13,7 @@ import httpx
 
 from app.scraper.parser import VintedItem, VintedItemDetail, parse_item_detail, parse_response
 from app.scraper.rate_limiter import TokenBucketLimiter
+from app.scheduler.vinted_rate_limiter import VintedRateLimiter
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -170,7 +172,7 @@ class CloudflareFallback:
 class VintedClient:
     def __init__(
         self,
-        rate_limiter: TokenBucketLimiter,
+        rate_limiter: Union[TokenBucketLimiter, VintedRateLimiter],
         cf_fallback: CloudflareFallback | None = None,
     ) -> None:
         self.rate_limiter = rate_limiter
@@ -178,6 +180,25 @@ class VintedClient:
         self._sessions: dict[str, AsyncSession] = {}
         self._session_ready: dict[str, bool] = {}
         self._lock = asyncio.Lock()
+
+    def _report_status(self, domain: str, response: Any):
+        if hasattr(self.rate_limiter, "report_status"):
+            retry_after = None
+            if hasattr(response, "headers"):
+                ra = response.headers.get("Retry-After")
+                if ra and ra.isdigit():
+                    retry_after = int(ra)
+            
+            status_code = getattr(response, "status_code", 0)
+            self.rate_limiter.report_status(domain, status_code, retry_after)
+        else:
+            status_code = getattr(response, "status_code", 0)
+            if status_code == 200:
+                if hasattr(self.rate_limiter, "report_success"):
+                    self.rate_limiter.report_success(domain)
+            elif status_code in (429, 403):
+                if hasattr(self.rate_limiter, "report_error"):
+                    self.rate_limiter.report_error(domain)
 
     async def _ensure_session(self, domain: str, force_new: bool = False) -> AsyncSession:
         async with self._lock:
@@ -295,13 +316,16 @@ class VintedClient:
                     timeout=30.0,
                 )
             
+            self._report_status(domain, response)
+
             if response.status_code != 200:
                 logger.warning("Failed to fetch catalog HTML, status=%d", response.status_code)
                 return ""
                 
             return response.text
-        except Exception:
+        except Exception as e:
             logger.exception("Failed to fetch catalog HTML for url=%s", url)
+            self._report_status(domain, getattr(e, "response", None))
             return ""
 
     async def fetch_catalog_hydration_items(self, url: str, *, domain: str = "vinted.pl") -> list[dict]:
@@ -345,8 +369,9 @@ class VintedClient:
                     timeout=30.0,
                 )
 
+            self._report_status(domain, response)
+
             if response.status_code == 200:
-                self.rate_limiter.report_success(domain)
                 if self.cf_fallback:
                     self.cf_fallback.report_direct_success(domain)
                 data = response.json()
@@ -354,7 +379,6 @@ class VintedClient:
 
             if response.status_code in (429, 403):
                 logger.warning("Blocked on domain=%s status=%d", domain, response.status_code)
-                self.rate_limiter.report_error(domain)
                 _http_budget.report_block(domain)
                 if self.cf_fallback:
                     self.cf_fallback.report_block(domain)
@@ -376,9 +400,9 @@ class VintedClient:
             logger.warning("Unexpected status=%d from domain=%s", response.status_code, domain)
             return []
 
-        except Exception:
+        except Exception as e:
             logger.exception("Request failed for domain=%s", domain)
-            self.rate_limiter.report_error(domain)
+            self._report_status(domain, getattr(e, "response", None))
             _http_budget.report_block(domain)
             if self.cf_fallback:
                 self.cf_fallback.report_block(domain)
@@ -402,14 +426,14 @@ class VintedClient:
             async with _http_budget.acquire(domain):
                 response = await session.get(url, headers=headers, timeout=20.0)
 
+            self._report_status(domain, response)
+
             if response.status_code == 200:
-                self.rate_limiter.report_success(domain)
                 data = response.json()
                 return parse_item_detail(data, item_id)
 
             if response.status_code in (403, 429):
                 logger.warning("Blocked on item detail domain=%s status=%d", domain, response.status_code)
-                self.rate_limiter.report_error(domain)
                 _http_budget.report_block(domain)
                 if self.cf_fallback:
                     self.cf_fallback.report_block(domain)
@@ -421,9 +445,9 @@ class VintedClient:
 
             logger.warning("Unexpected item detail status=%d domain=%s", response.status_code, domain)
             return None
-        except Exception:
+        except Exception as e:
             logger.exception("Item detail request failed for domain=%s item_id=%s", domain, item_id)
-            self.rate_limiter.report_error(domain)
+            self._report_status(domain, getattr(e, "response", None))
             return None
 
     async def _search_domain_with_semaphore(

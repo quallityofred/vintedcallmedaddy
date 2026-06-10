@@ -95,6 +95,26 @@ def _create_baseline_guard_response(monitor_id: int, selected_domains: list[str]
         },
     }
 
+from app.web.dependencies import get_db, get_scheduler
+from app.scheduler.vinted_rate_limiter import get_vinted_rate_limiter
+
+@router.get("/scheduler/adaptive-vinted-pacing")
+async def get_adaptive_vinted_pacing_diagnostics(
+    user: User = Depends(require_api_user),
+    scheduler = Depends(get_scheduler),
+):
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    pacing = scheduler.get_pacing_diagnostics() if scheduler else None
+    limiter = await get_vinted_rate_limiter()
+    limiter_diag = limiter.get_diagnostics()
+
+    return {
+        "adaptive_pacing": dataclasses.asdict(pacing) if pacing else None,
+        "rate_limiter": limiter_diag,
+    }
+
 @router.get("/monitors/{monitor_id}/source-selection")
 async def get_monitor_source_selection(
     monitor_id: int,

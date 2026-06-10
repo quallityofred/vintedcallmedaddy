@@ -8,6 +8,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -19,7 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_session_factory
 from app.models import FoundItem, HiddenSeller, Monitor, MonitorTelegramTopic, SeenItem, User
-from app.scraper.client import DomainSearchResult, VintedClient, TokenBucketLimiter
+from app.scraper.client import DomainSearchResult, VintedClient
+from app.scraper.rate_limiter import TokenBucketLimiter
+from app.scheduler.vinted_rate_limiter import get_vinted_rate_limiter
+from app.scheduler.adaptive_pacing import calculate_effective_monitor_intervals, PacingCalculationResult
 from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters, item_matches_monitor_filters
 from app.scraper.parser import VintedItem
 from app.scheduler.found_item_values import build_found_item_values
@@ -852,10 +856,7 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 						recovery_minutes=context.cf_worker_recovery_minutes,
 					)
 
-				rate_limiter = TokenBucketLimiter(
-					rate=float(settings.rate_limit_per_minute),
-					per=60.0,
-				)
+				rate_limiter = await get_vinted_rate_limiter()
 				client = VintedClient(rate_limiter=rate_limiter, cf_fallback=cf_fallback)
 
 			try:
@@ -1390,25 +1391,45 @@ class MonitorScheduler:
 	def __init__(self) -> None:
 		self.scheduler = AsyncIOScheduler()
 		self.job_ids: dict[int, str] = {}
+		self._pacing_result: Optional[PacingCalculationResult] = None
+		self._lock = asyncio.Lock()
+
+	async def _load_active_monitors(self) -> list[Monitor]:
+		async with _new_session() as db:
+			result = await db.execute(select(Monitor).where(Monitor.is_active == True))  # noqa: E712
+			return list(result.scalars().all())
+
+	async def recalculate_pacing(self) -> PacingCalculationResult:
+		"""
+		Recalculate adaptive pacing based on current active monitors.
+		Does not automatically reschedule jobs unless called during start or update.
+		"""
+		async with self._lock:
+			monitors = await self._load_active_monitors()
+			self._pacing_result = calculate_effective_monitor_intervals(
+				monitors,
+				global_rpm=settings.vinted_global_safe_requests_per_minute,
+				per_domain_rpm=settings.vinted_domain_safe_requests_per_minute,
+				jitter_ratio=settings.vinted_request_jitter_ratio,
+				adaptive_enabled=settings.vinted_adaptive_pacing_enabled,
+			)
+			return self._pacing_result
 
 	async def start(self) -> None:
 		"""Load active monitors from DB and start all their jobs."""
-		async with _new_session() as db:
-			result = await db.execute(select(Monitor).where(Monitor.is_active == True))  # noqa: E712
-			monitors = result.scalars().all()
-
-		for monitor in monitors:
-			effective = _get_effective_interval(monitor.interval_sec)
-			stagger = random.uniform(5.0, 30.0)
+		pacing = await self.recalculate_pacing()
+		
+		for m_info in pacing.monitors:
+			stagger = random.uniform(5.0, 30.0) + m_info.jitter_seconds
 			job = self.scheduler.add_job(
 				check_monitor,
-				trigger=IntervalTrigger(seconds=effective),
-				args=[monitor.id],
-				id=f"monitor_{monitor.id}",
+				trigger=IntervalTrigger(seconds=m_info.effective_interval_seconds),
+				args=[m_info.monitor_id],
+				id=f"monitor_{m_info.monitor_id}",
 				next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
 			)
 			if job:
-				self.job_ids[monitor.id] = job.id
+				self.job_ids[m_info.monitor_id] = job.id
 
 		if settings.pending_notifications_worker_enabled:
 			self.scheduler.add_job(
@@ -1419,25 +1440,34 @@ class MonitorScheduler:
 				id="pending_notifications_processor",
 			)
 		self.scheduler.start()
-		logger.info("Scheduler started with %d monitors", len(monitors))
+		logger.info("Scheduler started with %d monitors (adaptive=%s)", len(pacing.monitors), pacing.adaptive_enabled)
 
 	async def stop(self) -> None:
 		"""Shutdown the scheduler gracefully."""
 		self.scheduler.shutdown(wait=True)
 
-	def add_monitor(self, monitor_id: int, interval_sec: int) -> None:
-		"""Add a new job for a monitor."""
-		effective = _get_effective_interval(interval_sec)
+	async def add_monitor(self, monitor_id: int, interval_sec: int) -> None:
+		"""Add a new job for a monitor. Triggers pacing recalculation."""
+		pacing = await self.recalculate_pacing()
+		m_info = next((m for m in pacing.monitors if m.monitor_id == monitor_id), None)
+		
+		interval = m_info.effective_interval_seconds if m_info else interval_sec
+		stagger = (m_info.jitter_seconds if m_info else 0) + random.uniform(1.0, 5.0)
+
 		job = self.scheduler.add_job(
 			check_monitor,
-			trigger=IntervalTrigger(seconds=effective),
+			trigger=IntervalTrigger(seconds=interval),
 			args=[monitor_id],
 			id=f"monitor_{monitor_id}",
+			next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
 		)
 		if job:
 			self.job_ids[monitor_id] = job.id
+		
+		# If pacing significantly changed, we might want to reschedule others, 
+		# but for Phase 1 we only affect the new/updated monitor to avoid churn.
 
-	def remove_monitor(self, monitor_id: int) -> None:
+	async def remove_monitor(self, monitor_id: int) -> None:
 		"""Remove an existing monitor job."""
 		job_id = self.job_ids.pop(monitor_id, None)
 		if job_id:
@@ -1445,11 +1475,12 @@ class MonitorScheduler:
 				self.scheduler.remove_job(job_id)
 			except Exception:
 				pass
+		await self.recalculate_pacing()
 
-	def update_monitor(self, monitor_id: int, interval_sec: int) -> None:
-		"""Reschedule a monitor with a new interval."""
-		self.remove_monitor(monitor_id)
-		self.add_monitor(monitor_id, interval_sec)
+	async def update_monitor(self, monitor_id: int, interval_sec: int) -> None:
+		"""Reschedule a monitor. Triggers pacing recalculation."""
+		await self.remove_monitor(monitor_id)
+		await self.add_monitor(monitor_id, interval_sec)
 
 	def trigger_now(self, monitor_id: int) -> bool:
 		"""Manually trigger a monitor check immediately."""
@@ -1464,6 +1495,9 @@ class MonitorScheduler:
 		except Exception:
 			pass
 		return False
+
+	def get_pacing_diagnostics(self) -> Optional[PacingCalculationResult]:
+		return self._pacing_result
 
 def _public_item_path(value: object) -> str:
     if not isinstance(value, str):
@@ -1516,10 +1550,7 @@ async def run_hydration_ssr_merge_job(
         else:
             job_domains = selected_domains[:max(1, min(max_domains, 8))]
 
-        rate_limiter = TokenBucketLimiter(
-            rate=float(settings.rate_limit_per_minute),
-            per=60.0,
-        )
+        rate_limiter = await get_vinted_rate_limiter()
         client = VintedClient(rate_limiter=rate_limiter)
         try:
             effective_params = json.loads(monitor.params_json)
