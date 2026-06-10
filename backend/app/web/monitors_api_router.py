@@ -288,7 +288,7 @@ async def create_monitor(
 
     scheduler = get_scheduler(request)
     if scheduler:
-        scheduler.add_monitor(monitor.id, monitor.interval_sec)
+        await scheduler.add_monitor(monitor.id, monitor.interval_sec)
 
     return _monitor_response(monitor, items_found_count=0)
 
@@ -342,9 +342,9 @@ async def update_monitor(
     scheduler = get_scheduler(request)
     if scheduler:
         if monitor.is_active:
-            scheduler.update_monitor(monitor.id, monitor.interval_sec)
+            await scheduler.update_monitor(monitor.id, monitor.interval_sec)
         else:
-            scheduler.remove_monitor(monitor.id)
+            await scheduler.remove_monitor(monitor.id)
 
     count = await db.scalar(
         select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
@@ -420,7 +420,7 @@ async def delete_monitor(
 
     scheduler = get_scheduler(request)
     if scheduler:
-        scheduler.remove_monitor(monitor_id)
+        await scheduler.remove_monitor(monitor_id)
 
     await db.delete(monitor)
     await db.commit()
@@ -449,7 +449,7 @@ async def bulk_delete_monitors(
     scheduler = get_scheduler(request)
     for monitor in monitors:
         if scheduler:
-            scheduler.remove_monitor(monitor.id)
+            await scheduler.remove_monitor(monitor.id)
         await db.delete(monitor)
 
     await db.commit()
@@ -481,7 +481,7 @@ async def pause_monitor(
 
     scheduler = get_scheduler(request)
     if scheduler:
-        scheduler.remove_monitor(monitor_id)
+        await scheduler.remove_monitor(monitor_id)
 
     count = await db.scalar(
         select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)
@@ -510,7 +510,7 @@ async def resume_monitor(
 
     scheduler = get_scheduler(request)
     if scheduler:
-        scheduler.add_monitor(monitor.id, monitor.interval_sec)
+        await scheduler.add_monitor(monitor.id, monitor.interval_sec)
 
     count = await db.scalar(
         select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor.id)

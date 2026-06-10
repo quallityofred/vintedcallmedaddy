@@ -1496,7 +1496,8 @@ class MonitorScheduler:
 			pass
 		return False
 
-	def get_pacing_diagnostics(self) -> Optional[PacingCalculationResult]:
+	async def get_pacing_diagnostics(self) -> Optional[PacingCalculationResult]:
+		await self.recalculate_pacing()
 		return self._pacing_result
 
 def _public_item_path(value: object) -> str:

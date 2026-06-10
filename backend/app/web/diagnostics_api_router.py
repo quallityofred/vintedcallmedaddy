@@ -106,7 +106,7 @@ async def get_adaptive_vinted_pacing_diagnostics(
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    pacing = scheduler.get_pacing_diagnostics() if scheduler else None
+    pacing = await scheduler.get_pacing_diagnostics() if scheduler else None
     limiter = await get_vinted_rate_limiter()
     limiter_diag = limiter.get_diagnostics()
 
