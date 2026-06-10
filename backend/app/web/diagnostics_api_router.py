@@ -29,6 +29,7 @@ from app.scraper.monitor_filters import extract_monitor_filters
 from app.scraper.url_parser import normalize_catalog_search_params, parse_vinted_url
 from app.config import get_settings
 from app.scraper.client import VintedClient, TokenBucketLimiter
+from app.schemas.notification_diagnostics import NotificationProcessRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/diagnostics", tags=["diagnostics"])
@@ -677,17 +678,14 @@ async def post_monitor_start_with_baseline(
 
 @router.post("/notifications/process-pending", dependencies=[Depends(require_api_csrf)])
 async def process_notifications_diagnostic(
-    dry_run: bool = True,
-    monitor_id: int | None = Query(default=None, ge=1),
-    limit: int = Query(default=50, ge=1, le=200),
-    sample_limit: int = Query(default=10, ge=0, le=20),
+    req: NotificationProcessRequest,
     user: User = Depends(require_api_user),
 ):
     """Audit or process a bounded pending Telegram notification batch."""
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    if not dry_run:
+    if not req.dry_run:
         raise HTTPException(
             status_code=400,
             detail="async_notification_job_required: Use /api/v1/diagnostics/notifications/process-pending-jobs for live execution."
@@ -695,26 +693,23 @@ async def process_notifications_diagnostic(
 
     from app.scheduler.tasks import process_pending_notifications
     return await process_pending_notifications(
-        limit=limit,
-        monitor_id=monitor_id,
-        dry_run=dry_run,
-        sample_limit=sample_limit,
+        limit=req.limit,
+        monitor_id=req.monitor_id,
+        dry_run=req.dry_run,
+        sample_limit=req.sample_limit,
     )
 
 @router.post("/notifications/process-pending-jobs", dependencies=[Depends(require_api_csrf)])
 async def post_process_notifications_job(
     background_tasks: BackgroundTasks,
-    monitor_id: int | None = Query(default=None, ge=1),
-    limit: int = Query(default=50, ge=1, le=200),
-    sample_limit: int = Query(default=10, ge=0, le=20),
-    dry_run: bool = True,
+    req: NotificationProcessRequest,
     user: User = Depends(require_api_user),
 ):
     """Start an asynchronous background job for notification processing."""
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    if not dry_run and monitor_id is None:
+    if not req.dry_run and req.monitor_id is None:
         raise HTTPException(
             status_code=400,
             detail="monitor_id_required_for_live_notification_processing",
@@ -727,10 +722,10 @@ async def post_process_notifications_job(
         0,
         "pending_notifications",
         request_metadata={
-            "requested_monitor_id": monitor_id,
-            "requested_limit": limit,
-            "requested_sample_limit": sample_limit,
-            "requested_dry_run": dry_run,
+            "requested_monitor_id": req.monitor_id,
+            "requested_limit": req.limit,
+            "requested_sample_limit": req.sample_limit,
+            "requested_dry_run": req.dry_run,
             "all_monitors": False,
         },
     )
@@ -739,19 +734,19 @@ async def post_process_notifications_job(
     background_tasks.add_task(
         run_pending_notifications_job,
         job_id,
-        monitor_id=monitor_id,
-        limit=limit,
-        sample_limit=sample_limit,
-        dry_run=dry_run,
+        monitor_id=req.monitor_id,
+        limit=req.limit,
+        sample_limit=req.sample_limit,
+        dry_run=req.dry_run,
     )
 
     return {
         "job_id": job_id,
         "status": "running",
-        "requested_monitor_id": monitor_id,
-        "requested_limit": limit,
-        "requested_sample_limit": sample_limit,
-        "requested_dry_run": dry_run,
+        "requested_monitor_id": req.monitor_id,
+        "requested_limit": req.limit,
+        "requested_sample_limit": req.sample_limit,
+        "requested_dry_run": req.dry_run,
     }
 
 @router.get("/notifications/process-pending-jobs/{job_id}")

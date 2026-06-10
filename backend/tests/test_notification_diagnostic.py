@@ -99,16 +99,16 @@ def notification_session_factory(engine, monkeypatch):
     tasks.AsyncSessionLocal = None
 
 
-async def post_process(app: FastAPI, query: str):
+async def post_process(app: FastAPI, body: dict):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post(f"/api/v1/diagnostics/notifications/process-pending{query}")
+        return await client.post("/api/v1/diagnostics/notifications/process-pending", json=body)
 
 
-async def post_process_job(app: FastAPI, query: str):
+async def post_process_job(app: FastAPI, body: dict):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post(f"/api/v1/diagnostics/notifications/process-pending-jobs{query}")
+        return await client.post("/api/v1/diagnostics/notifications/process-pending-jobs", json=body)
 
 async def post_ack(app: FastAPI, query: str):
     transport = ASGITransport(app=app)
@@ -146,7 +146,7 @@ async def test_process_notifications_diagnostic_dry_run_full_shape(
 
     response = await post_process(
         create_test_app(),
-        f"?dry_run=true&monitor_id={monitors[0].id}&limit=10&sample_limit=10",
+        {"dry_run": True, "monitor_id": monitors[0].id, "limit": 10, "sample_limit": 10},
     )
 
     assert response.status_code == 200
@@ -183,7 +183,7 @@ async def test_process_notifications_diagnostic_dry_run_applies_limit(
 
     response = await post_process(
         create_test_app(),
-        f"?dry_run=true&monitor_id={monitors[0].id}&limit=1",
+        {"dry_run": True, "monitor_id": monitors[0].id, "limit": 1},
     )
 
     data = response.json()
@@ -217,7 +217,7 @@ async def test_process_notifications_diagnostic_executes_limited_successful_batc
     # 1. Assert sync endpoint rejects dry_run=false
     sync_response = await post_process(
         create_test_app(),
-        f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
+        {"dry_run": False, "monitor_id": monitors[0].id, "limit": 1},
     )
     assert sync_response.status_code == 400
     assert "async_notification_job_required" in sync_response.json()["detail"]
@@ -226,7 +226,7 @@ async def test_process_notifications_diagnostic_executes_limited_successful_batc
     app = create_test_app()
     job_response = await post_process_job(
         app,
-        f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
+        {"dry_run": False, "monitor_id": monitors[0].id, "limit": 1},
     )
     assert job_response.status_code == 200
     job_id = job_response.json()["job_id"]
@@ -274,7 +274,7 @@ async def test_process_notifications_job_is_monitor_scoped(
     app = create_test_app()
     dry_response = await post_process(
         app,
-        f"?dry_run=true&monitor_id={first_monitors[0].id}&limit=10&sample_limit=10",
+        {"dry_run": True, "monitor_id": first_monitors[0].id, "limit": 10, "sample_limit": 10},
     )
     assert dry_response.status_code == 200
     dry_selected_ids = {
@@ -282,7 +282,7 @@ async def test_process_notifications_job_is_monitor_scoped(
     }
     response = await post_process_job(
         app,
-        f"?dry_run=false&monitor_id={first_monitors[0].id}&limit=10",
+        {"dry_run": False, "monitor_id": first_monitors[0].id, "limit": 10},
     )
     assert response.status_code == 200
     result = await wait_for_job(app, response.json()["job_id"])
@@ -308,7 +308,7 @@ async def test_process_notifications_direct_live_requires_explicit_scope():
 
 @pytest.mark.asyncio
 async def test_process_notifications_job_rejects_unscoped_live():
-    response = await post_process_job(create_test_app(), "?dry_run=false&limit=1")
+    response = await post_process_job(create_test_app(), {"dry_run": False, "limit": 1})
     assert response.status_code == 400
     assert response.json()["detail"] == "monitor_id_required_for_live_notification_processing"
 
@@ -367,7 +367,7 @@ async def test_process_notifications_failure_remains_retryable(
     app = create_test_app()
     job_response = await post_process_job(
         app,
-        f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
+        {"dry_run": False, "monitor_id": monitors[0].id, "limit": 1},
     )
     assert job_response.status_code == 200
     job_id = job_response.json()["job_id"]
@@ -406,7 +406,7 @@ async def test_process_notifications_reports_fallback_text(
     app = create_test_app()
     job_response = await post_process_job(
         app,
-        f"?dry_run=false&monitor_id={monitors[0].id}&limit=1",
+        {"dry_run": False, "monitor_id": monitors[0].id, "limit": 1},
     )
     assert job_response.status_code == 200
     job_id = job_response.json()["job_id"]
@@ -416,7 +416,7 @@ async def test_process_notifications_reports_fallback_text(
 
 @pytest.mark.asyncio
 async def test_process_notifications_diagnostic_requires_admin():
-    response = await post_process(create_test_app(admin=False), "?dry_run=true")
+    response = await post_process(create_test_app(admin=False), {"dry_run": True})
     assert response.status_code == 403
 
 

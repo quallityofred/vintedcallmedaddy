@@ -1278,6 +1278,8 @@ async def process_pending_notifications(
 		marked_notified_count = 0
 		send_attempt_count = 0
 		errors_sample: list[dict[str, object]] = []
+		recreated_topic_count = 0
+		retry_after_recreate_count = 0
 
 		for candidate in candidates:
 			delivery_target: TelegramDeliveryTarget | None = None
@@ -1310,14 +1312,54 @@ async def process_pending_notifications(
 					domain=candidate.domain,
 					seller_id=candidate.seller_id,
 				)
+				
+				async def do_send(target: TelegramDeliveryTarget) -> str:
+					return await send_item_notification(
+						target.bot,
+						target.chat_id,
+						item,
+						monitor_name=monitor_name,
+						message_thread_id=target.message_thread_id,
+					)
+
 				send_attempt_count += 1
-				delivery_mode = await send_item_notification(
-					delivery_target.bot,
-					delivery_target.chat_id,
-					item,
-					monitor_name=monitor_name,
-					message_thread_id=delivery_target.message_thread_id,
-				)
+				try:
+					delivery_mode = await do_send(delivery_target)
+				except Exception as send_exc:
+					from app.telegram.topic_service import classify_telegram_topic_error
+					error_info = classify_telegram_topic_error(send_exc)
+					
+					# Retry logic for stale topics
+					if error_info.code == "message_thread_not_found" and delivery_target.topic_id:
+						logger.info(
+							"Stale Telegram topic detected for monitor_id=%s. Attempting recreation and retry.",
+							candidate.monitor_id
+						)
+						async with _new_session() as db:
+							# Mark as missing to trigger recreation
+							await record_topic_send_failure(db, topic_id=delivery_target.topic_id, exc=send_exc)
+							
+							# Re-resolve delivery target (this will trigger recreate if allowed)
+							monitor = await db.get(Monitor, candidate.monitor_id)
+							user = await db.get(User, monitor.user_id)
+							
+							# Temporarily force recreate_deleted for this specific retry attempt
+							# to ensure we actually try to fix the stale state.
+							original_recreate = user.telegram_topics_recreate_deleted
+							user.telegram_topics_recreate_deleted = True
+							
+							delivery_target = await resolve_telegram_delivery_target(db, user=user, monitor=monitor)
+							user.telegram_topics_recreate_deleted = original_recreate
+							
+						if delivery_target.ok and delivery_target.code == "topic":
+							recreated_topic_count += 1
+							retry_after_recreate_count += 1
+							delivery_mode = await do_send(delivery_target)
+						else:
+							raise send_exc # Re-raise if recreation failed or not possible
+					else:
+						raise send_exc
+
 				async with _new_session() as db:
 					found_item = await db.get(FoundItem, candidate.found_item_id)
 					if found_item is not None and not found_item.notified:

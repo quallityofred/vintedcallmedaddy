@@ -632,14 +632,19 @@ async def send_topic_test(
 async def record_topic_send_failure(
     db: AsyncSession,
     *,
-    topic: MonitorTelegramTopic,
+    topic: MonitorTelegramTopic | None = None,
+    topic_id: int | None = None,
     exc: BaseException,
 ) -> TelegramTopicErrorInfo:
+    if topic is None and topic_id is not None:
+        topic = await db.get(MonitorTelegramTopic, topic_id)
+    
     info = classify_telegram_topic_error(exc)
-    topic.status = info.status
-    topic.last_error = _safe_error_message(exc, sensitive_values=(topic.chat_id, topic.message_thread_id))
-    topic.last_error_code = info.code
-    topic.last_verified_at = utc_now()
-    await db.commit()
-    await db.refresh(topic)
+    if topic is not None:
+        topic.status = info.status
+        topic.last_error = _safe_error_message(exc, sensitive_values=(topic.chat_id, topic.message_thread_id))
+        topic.last_error_code = info.code
+        topic.last_verified_at = utc_now()
+        await db.commit()
+        await db.refresh(topic)
     return info
