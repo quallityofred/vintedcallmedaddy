@@ -206,6 +206,37 @@ async def get_monitor_source_selection(
         }
     }
 
+@router.get("/monitors/url-normalization-audit")
+async def get_url_normalization_audit(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Audit all monitors for broad/order-only feed risks."""
+    from app.scraper.url_parser import get_effective_monitor_request_params
+    from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters
+
+    result = await db.execute(select(Monitor))
+    monitors = result.scalars().all()
+    
+    audit = []
+    for m in monitors:
+        params = get_effective_monitor_request_params(m.params_json, m.original_url)
+        filters = extract_monitor_filters(params, monitor_name=m.name)
+        
+        audit.append({
+            "monitor_id": m.id,
+            "name": m.name,
+            "is_active": m.is_active,
+            "original_url": m.original_url,
+            "has_any_real_filter": has_restrictive_filters(filters),
+            "is_order_only": not has_restrictive_filters(filters),
+            "is_broad_feed_risk": not has_restrictive_filters(filters),
+            "brand_ids": sorted(list(filters.brand_ids)),
+            "filter_keys": filters.filter_keys,
+        })
+    return audit
+
+
 @router.post("/monitors/{monitor_id}/dry-run-source")
 async def post_monitor_dry_run_source(
     monitor_id: int,

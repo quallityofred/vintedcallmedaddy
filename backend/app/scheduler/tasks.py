@@ -955,13 +955,12 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 
 		# If still not restrictive, fail
 		if not has_restrictive_filters(monitor_filters):
-			if "vinted." in monitor.original_url.lower():
-				monitor.last_check_status = "failed"
-				monitor.last_error = "Monitor URL has no searchable filters; refusing unfiltered marketplace check."
-				monitor.last_check_completed_at = datetime.now(timezone.utc)
-				await db.commit()
-				logger.warning("Skipping unfiltered Vinted monitor: monitor_id=%s", monitor.id)
-				return None
+			monitor.last_check_status = "failed"
+			monitor.last_error = "Monitor URL has no searchable filters; refusing unfiltered marketplace check."
+			monitor.last_check_completed_at = datetime.now(timezone.utc)
+			await db.commit()
+			logger.warning("Skipping unfiltered monitor: monitor_id=%s", monitor.id)
+			return None
 
 		domains = json.loads(monitor.domains_json)
 		hidden_result = await db.execute(

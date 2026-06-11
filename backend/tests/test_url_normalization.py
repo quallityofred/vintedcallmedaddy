@@ -4,6 +4,7 @@ from app.scraper.monitor_filters import (
     MISSING_BRAND_ID_UNVERIFIED_SOURCE,
     extract_monitor_filters,
     item_matches_monitor_filters,
+    has_restrictive_filters,
 )
 from app.scraper.parser import VintedItem, parse_response
 from app.scraper.url_parser import parse_vinted_url, normalize_vinted_monitor_url
@@ -208,3 +209,33 @@ def test_parse_response_extracts_brand_id_from_real_nested_shape():
 
     assert len(items) == 1
     assert items[0].brand_id == 456
+
+
+def test_parse_vinted_url_normalizes_newest_first_variants():
+    # Bare newest_first
+    url1 = 'https://www.vinted.fr/catalog?newest_first'
+    params1 = parse_vinted_url(url1)
+    assert params1['order'] == 'newest_first'
+
+    # order=newest_first
+    url2 = 'https://www.vinted.fr/catalog?order=newest_first'
+    params2 = parse_vinted_url(url2)
+    assert params2['order'] == 'newest_first'
+    
+    # order[]=newest_first
+    url3 = 'https://www.vinted.fr/catalog?order[]=newest_first'
+    params3 = parse_vinted_url(url3)
+    assert params3['order'] == 'newest_first'
+
+def test_url_only_with_order_is_broad_risk():
+    params = {'order': 'newest_first'}
+    filters = extract_monitor_filters(params)
+    assert not has_restrictive_filters(filters)
+    
+    # Path-based brand URL
+    url = 'https://www.vinted.pl/brand/14217-vivienne-westwood?order=newest_first'
+    params = parse_vinted_url(url)
+    filters = extract_monitor_filters(params)
+    assert has_restrictive_filters(filters)
+    assert '14217' in filters.brand_ids
+
