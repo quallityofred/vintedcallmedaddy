@@ -25,8 +25,9 @@ from app.scraper.source_selector import (
     should_use_hydration_source,
     should_use_hydration_ssr_photo_merge,
 )
-from app.scraper.monitor_filters import extract_monitor_filters
+from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters
 from app.scraper.url_parser import normalize_catalog_search_params, parse_vinted_url, get_effective_monitor_request_params
+from app.scheduler.pending_diagnostics import run_pending_backlog_classification
 from app.config import get_settings
 from app.scraper.client import VintedClient, TokenBucketLimiter
 from app.schemas.notification_diagnostics import NotificationProcessRequest
@@ -212,29 +213,111 @@ async def get_url_normalization_audit(
     user: User = Depends(require_api_admin),
 ):
     """Audit all monitors for broad/order-only feed risks."""
-    from app.scraper.url_parser import get_effective_monitor_request_params
-    from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters
-
     result = await db.execute(select(Monitor))
     monitors = result.scalars().all()
+
+    pending_counts = dict(
+        (
+            row[0],
+            row[1],
+        )
+        for row in (
+            await db.execute(
+                select(FoundItem.monitor_id, func.count(FoundItem.id))
+                .where(FoundItem.notified == False)
+                .group_by(FoundItem.monitor_id)
+            )
+        ).all()
+    )
+    found_counts = dict(
+        (
+            row[0],
+            row[1],
+        )
+        for row in (
+            await db.execute(
+                select(FoundItem.monitor_id, func.count(FoundItem.id)).group_by(FoundItem.monitor_id)
+            )
+        ).all()
+    )
     
     audit = []
     for m in monitors:
         params = get_effective_monitor_request_params(m.params_json, m.original_url)
+        original_url_params = normalize_catalog_search_params(parse_vinted_url(m.original_url))
         filters = extract_monitor_filters(params, monitor_name=m.name)
+        has_real_filter = has_restrictive_filters(filters)
+        stored_params = {}
+        try:
+            stored_params = json.loads(m.params_json)
+        except Exception:
+            stored_params = {}
         
         audit.append({
             "monitor_id": m.id,
             "name": m.name,
+            "active": m.is_active,
             "is_active": m.is_active,
             "original_url": m.original_url,
-            "has_any_real_filter": has_restrictive_filters(filters),
-            "is_order_only": not has_restrictive_filters(filters),
-            "is_broad_feed_risk": not has_restrictive_filters(filters),
+            "stored_param_keys": sorted(key for key in stored_params if not str(key).startswith("_")),
+            "original_url_param_keys": sorted(original_url_params),
+            "effective_request_param_keys": sorted(params),
+            "canonical_effective_params": params,
+            "selected_domains": _safe_json_list(m.domains_json),
+            "has_any_real_filter": has_real_filter,
+            "is_order_only": not has_real_filter and bool(filters.order),
+            "is_broad_feed_risk": not has_real_filter,
+            "has_brand_filter": bool(filters.brand_ids),
             "brand_ids": sorted(list(filters.brand_ids)),
+            "has_catalog_filter": bool(filters.catalog_ids),
+            "catalog_ids": sorted(list(filters.catalog_ids)),
+            "has_search_filter": filters.search_text is not None,
             "filter_keys": filters.filter_keys,
+            "normalization_warnings": (
+                [] if has_real_filter else ["order_only_or_unfiltered_monitor"]
+            ),
+            "source_selection_reason": (
+                "catalog_filter_detected"
+                if filters.catalog_ids
+                else "brand_only_api_path"
+                if filters.brand_ids
+                else "broad_order_only_monitor"
+            ),
+            "last_check_status": m.last_check_status,
+            "pending_count": int(pending_counts.get(m.id, 0)),
+            "found_items_count": int(found_counts.get(m.id, 0)),
         })
-    return audit
+    return {
+        "monitors": audit,
+        "summary": {
+            "monitor_count": len(audit),
+            "broad_feed_risk_count": sum(1 for row in audit if row["is_broad_feed_risk"]),
+        },
+        "side_effects": {
+            "calls_vinted": False,
+            "writes_database": False,
+            "writes_found_items": False,
+            "writes_seen_items": False,
+            "sends_telegram": False,
+        },
+    }
+
+
+@router.get("/pending-notifications/backlog-classification")
+async def get_pending_backlog_classification(
+    monitor_ids: Optional[list[int]] = Query(default=None),
+    domains: Optional[list[str]] = Query(default=None),
+    sample_limit: int = Query(default=10, ge=0, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_admin),
+):
+    """Classify pending notification backlog by safe monitor/filter evidence."""
+    return await run_pending_backlog_classification(
+        db,
+        monitor_ids=monitor_ids,
+        domains=domains,
+        sample_limit=sample_limit,
+    )
 
 
 @router.post("/monitors/{monitor_id}/dry-run-source")

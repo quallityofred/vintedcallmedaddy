@@ -25,6 +25,15 @@ class SuspectBrandFilterBacklogAckRequest(BaseModel):
     confirm: Optional[str] = None
     extra_confirm: Optional[List[str]] = None
 
+class BadUrlBacklogAckRequest(BaseModel):
+    dry_run: bool = True
+    monitor_ids: Optional[List[int]] = None
+    domains: Optional[List[str]] = None
+    sample_limit: int = Field(default=10, ge=0, le=20)
+    reason: Optional[str] = None
+    confirm: Optional[str] = None
+    extra_confirm: Optional[List[str]] = None
+
 class RetentionCleanupRequest(BaseModel):
     dry_run: bool = True
     monitor_ids: Optional[List[int]] = None

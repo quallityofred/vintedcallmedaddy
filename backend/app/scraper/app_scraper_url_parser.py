@@ -42,6 +42,7 @@ _SCALAR_PARAMS = {
 _IGNORED_PARAMS = {
     "page",
     "time",
+    "order[]",
     "search_id",
     "search_by_image_uuid",
     "search_by_image_id",
@@ -114,7 +115,10 @@ def parse_vinted_url(url: str) -> dict:
     for key, values in qs.items():
         val = values[0] if values else ""
 
-        if key in _ARRAY_PARAMS or (key + "[]") in _ARRAY_PARAMS:
+        if key == "order[]" or key == "newest_first":
+            params["order"] = "newest_first"
+
+        elif key in _ARRAY_PARAMS or (key + "[]") in _ARRAY_PARAMS:
             array_key = key if key.endswith("[]") else key + "[]"
             # Ensure array parameters are always lists, containing ints.
             params[array_key] = _parse_int_values(values)

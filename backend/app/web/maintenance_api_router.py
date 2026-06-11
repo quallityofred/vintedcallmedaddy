@@ -18,6 +18,7 @@ from app.scheduler.pending_diagnostics import (
     run_pending_notifications_dry_run,
     run_pending_notifications_ack_no_notify,
     run_suspect_brand_filter_backlog_ack,
+    run_bad_url_backlog_ack,
 )
 from app.scheduler.cold_start_reset import run_monitor_cold_start_reset
 from app.config import get_settings
@@ -26,6 +27,7 @@ from app.schemas.pending_ack import (
     RetentionCleanupRequest,
     ColdStartResetRequest,
     SuspectBrandFilterBacklogAckRequest,
+    BadUrlBacklogAckRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,23 +54,23 @@ async def post_monitor_cold_start_reset(
         extra = request.extra_confirm or []
         if request.clear_seen_items and "CLEAR_SEEN_ITEMS_NO_NOTIFY_BASELINE" not in extra:
              raise HTTPException(status_code=400, detail="Extra confirmation CLEAR_SEEN_ITEMS_NO_NOTIFY_BASELINE required.")
-        
+
         if request.clear_found_items:
             if "CLEAR_FOUND_ITEMS_HISTORY" not in extra:
                 raise HTTPException(status_code=400, detail="Extra confirmation CLEAR_FOUND_ITEMS_HISTORY required.")
-            
+
             # Check for pending items if we want to clear found items
             # We do a quick check here or let the service return it in dry run.
             # But for live mode, we must be sure.
             # We'll run the service in dry-run mode first to check for pending items if not already checked.
             res_check = await run_monitor_cold_start_reset(
-                db=db, monitor_id=monitor_id, dry_run=True, domains=request.domains, 
+                db=db, monitor_id=monitor_id, dry_run=True, domains=request.domains,
                 clear_found_items=True, clear_seen_items=False, reset_last_checked=False
             )
             if res_check.get("pending_found_items_count", 0) > 0:
                 if "CLEAR_PENDING_FOUND_ITEMS_HISTORY_TOO" not in extra:
                     raise HTTPException(
-                        status_code=400, 
+                        status_code=400,
                         detail=f"Monitor has {res_check['pending_found_items_count']} pending items. CLEAR_PENDING_FOUND_ITEMS_HISTORY_TOO required."
                     )
 
@@ -201,6 +203,40 @@ async def post_suspect_brand_filter_backlog_ack(
         )
     except Exception as e:
         logger.exception("Failed to run suspect brand-filter backlog ack")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/pending-notifications/ack-bad-url-backlog", dependencies=[Depends(require_api_csrf)])
+async def post_bad_url_backlog_ack(
+    request: BadUrlBacklogAckRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """
+    Identify or acknowledge suspect pending rows created by broad/order-only monitors.
+    """
+    if not request.dry_run:
+        if not request.reason:
+            raise HTTPException(status_code=400, detail="Reason required for live bad URL backlog ack.")
+        if request.confirm != "ACK_BAD_URL_BACKLOG_NO_NOTIFY":
+            raise HTTPException(status_code=400, detail="Invalid confirmation string.")
+        extra = request.extra_confirm or []
+        if "I_UNDERSTAND_THIS_WILL_NOT_SEND_TELEGRAM" not in extra:
+            raise HTTPException(
+                status_code=400,
+                detail="Extra confirmation I_UNDERSTAND_THIS_WILL_NOT_SEND_TELEGRAM required.",
+            )
+
+    try:
+        return await run_bad_url_backlog_ack(
+            db=db,
+            dry_run=request.dry_run,
+            monitor_ids=request.monitor_ids,
+            domains=request.domains,
+            sample_limit=request.sample_limit,
+            reason=request.reason,
+        )
+    except Exception as e:
+        logger.exception("Failed to run bad URL backlog ack")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/history-retention/cleanup", dependencies=[Depends(require_api_csrf)])

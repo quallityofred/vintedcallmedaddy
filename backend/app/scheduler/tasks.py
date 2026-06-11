@@ -27,6 +27,7 @@ from app.scheduler.vinted_rate_limiter import get_vinted_rate_limiter
 from app.scheduler.adaptive_pacing import calculate_effective_monitor_intervals, PacingCalculationResult
 from app.scraper.monitor_filters import (
 	MISSING_BRAND_ID_UNVERIFIED_SOURCE,
+	MonitorFilters,
 	extract_monitor_filters,
 	has_restrictive_filters,
 	item_matches_monitor_filters,
@@ -127,21 +128,22 @@ class PendingNotificationCandidate:
 
 @dataclass
 class MonitorCheckContext:
-	monitor_id: int
-	user_id: int
-	monitor_name: str
-	params: dict
-	original_url: str
-	domains: list[str]
-	monitor_filters: object
-	hidden_seller_ids: set[int]
-	is_cold_start: bool
-	freshness_cutoff_at: datetime | None
-	original_interval: int
-	cf_worker_url: str
-	cf_worker_mode: str
-	cf_worker_block_threshold: int
-	cf_worker_recovery_minutes: int
+    monitor_id: int
+    user_id: int
+    monitor_name: str
+    params: dict
+    original_url: str
+    domains: list[str]
+    monitor_filters: MonitorFilters
+    hidden_seller_ids: set[int]
+    is_cold_start: bool
+    freshness_cutoff_at: datetime | None
+    original_interval: int
+    cf_worker_url: str | None
+    cf_worker_mode: str
+    cf_worker_block_threshold: float
+    cf_worker_recovery_minutes: int
+    is_broad_risk: bool = False
 
 
 @dataclass
@@ -952,15 +954,7 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 
 		params = get_effective_monitor_request_params(monitor.params_json, monitor.original_url)
 		monitor_filters = extract_monitor_filters(params, monitor_name=monitor.name)
-
-		# If still not restrictive, fail
-		if not has_restrictive_filters(monitor_filters):
-			monitor.last_check_status = "failed"
-			monitor.last_error = "Monitor URL has no searchable filters; refusing unfiltered marketplace check."
-			monitor.last_check_completed_at = datetime.now(timezone.utc)
-			await db.commit()
-			logger.warning("Skipping unfiltered monitor: monitor_id=%s", monitor.id)
-			return None
+		is_broad_risk = not has_restrictive_filters(monitor_filters)
 
 		domains = json.loads(monitor.domains_json)
 		hidden_result = await db.execute(
@@ -984,6 +978,7 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 			cf_worker_mode=user.cf_worker_mode,
 			cf_worker_block_threshold=user.cf_worker_block_threshold,
 			cf_worker_recovery_minutes=user.cf_worker_recovery_minutes,
+			is_broad_risk=is_broad_risk,
 		)
 
 
@@ -1238,14 +1233,17 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 								continue
 							found_vinted_ids.add(item.id)
 
+							is_notifiable = not context.is_broad_risk
 							found_items_to_insert.append(
 								build_found_item_values(
 									monitor_id=monitor_id,
 									item=item,
 									found_at=now,
+									notified=not is_notifiable,
 								)
 							)
-							new_items_to_notify.append(item)
+							if is_notifiable:
+								new_items_to_notify.append(item)
 
 					if seen_items_to_insert:
 						stmt = pg_insert(SeenItem).values(seen_items_to_insert).on_conflict_do_nothing(
@@ -1277,7 +1275,14 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					if new_items_to_notify:
 						asyncio.create_task(process_pending_notifications(monitor_id=monitor_id))
 
-					monitor.last_check_status = "baseline_created" if context.is_cold_start else "success_new_items" if new_items_to_notify else "success_no_new_items"
+					if context.is_cold_start:
+						monitor.last_check_status = "baseline_created"
+					elif new_items_to_notify:
+						monitor.last_check_status = "success_new_items"
+					elif context.is_broad_risk and found_vinted_ids:
+						monitor.last_check_status = "broad_order_only_monitor_no_notify"
+					else:
+						monitor.last_check_status = "success_no_new_items"
 
 					monitor.last_check_at = datetime.now(timezone.utc)
 				monitor.last_check_completed_at = datetime.now(timezone.utc)

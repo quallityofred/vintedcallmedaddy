@@ -15,6 +15,7 @@ def build_found_item_values(
     monitor_id: int,
     item: VintedItem,
     found_at: datetime,
+    notified: bool = False,
 ) -> dict[str, Any]:
     """Build values compatible with every non-null FoundItem column."""
     return {
@@ -33,7 +34,7 @@ def build_found_item_values(
         "item_url": _string_value(item.item_url),
         "seller_id": int(item.seller_id or 0),
         "found_at": found_at,
-        "notified": False,
+        "notified": notified,
     }
 
 

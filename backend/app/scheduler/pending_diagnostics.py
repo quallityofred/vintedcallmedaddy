@@ -12,6 +12,7 @@ from app.models import FoundItem, Monitor, MonitorTelegramTopic, utc_now
 from app.scraper.monitor_filters import (
     brand_text_matches_allowed,
     extract_monitor_filters,
+    has_restrictive_filters,
     has_positive_brand_text,
 )
 from app.scraper.url_parser import get_effective_monitor_request_params
@@ -240,6 +241,224 @@ def _monitor_filters_for_pending_row(monitor: Monitor):
         except Exception:
             params = {}
     return extract_monitor_filters(params, monitor_name=monitor.name)
+
+
+def _safe_monitor_params(monitor: Monitor) -> dict[str, Any]:
+    try:
+        return get_effective_monitor_request_params(monitor.params_json, monitor.original_url)
+    except Exception:
+        try:
+            return json.loads(monitor.params_json)
+        except Exception:
+            return {}
+
+
+def _classify_pending_row(item: FoundItem, monitor: Monitor) -> dict[str, Any]:
+    params = _safe_monitor_params(monitor)
+    filters = extract_monitor_filters(params, monitor_name=monitor.name)
+    has_real_filter = has_restrictive_filters(filters)
+    has_verified_brand = _item_has_verified_brand_evidence(item, filters)
+
+    if not has_real_filter:
+        likely_cause = "broad_order_only_monitor"
+    elif filters.brand_ids and not has_verified_brand:
+        likely_cause = "unknown_brand_from_unverified_source"
+    elif filters.brand_ids and has_verified_brand:
+        likely_cause = "valid_positive_brand_evidence"
+    else:
+        likely_cause = "unknown"
+
+    return {
+        "likely_cause": likely_cause,
+        "has_any_real_filter": has_real_filter,
+        "is_order_only": not has_real_filter and bool(filters.order),
+        "is_broad_feed_risk": not has_real_filter,
+        "brand_ids": sorted(filters.brand_ids),
+        "catalog_ids": sorted(filters.catalog_ids),
+        "filter_keys": filters.filter_keys,
+        "has_verified_brand_evidence": has_verified_brand,
+        "brand_title_present": has_positive_brand_text(item.brand),
+    }
+
+
+def _pending_sample(item: FoundItem, monitor: Monitor, classification: dict[str, Any]) -> dict[str, Any]:
+    found_at = item.found_at
+    if found_at is not None and found_at.tzinfo is None:
+        found_at = found_at.replace(tzinfo=timezone.utc)
+    now = utc_now()
+    age_minutes = None
+    if found_at is not None:
+        age_minutes = int((now - found_at).total_seconds() / 60)
+    return {
+        "found_item_id": item.id,
+        "monitor_id": item.monitor_id,
+        "monitor_name": monitor.name,
+        "vinted_item_id": item.vinted_item_id,
+        "domain": item.domain,
+        "title_preview": _title_preview(item.title),
+        "brand_title": item.brand if has_positive_brand_text(item.brand) else "unknown",
+        "brand_id": item.brand_id,
+        "found_at": found_at.isoformat() if found_at else None,
+        "age_minutes": age_minutes,
+        "likely_cause": classification["likely_cause"],
+        "has_any_real_filter": classification["has_any_real_filter"],
+        "is_order_only": classification["is_order_only"],
+        "is_broad_feed_risk": classification["is_broad_feed_risk"],
+        "has_verified_brand_evidence": classification["has_verified_brand_evidence"],
+    }
+
+
+async def run_pending_backlog_classification(
+    db: AsyncSession,
+    *,
+    monitor_ids: Optional[List[int]] = None,
+    domains: Optional[List[str]] = None,
+    sample_limit: int = 10,
+) -> Dict[str, Any]:
+    sample_limit = max(0, min(sample_limit, 20))
+    stmt = select(FoundItem, Monitor).join(Monitor, FoundItem.monitor_id == Monitor.id)
+    stmt = stmt.where(FoundItem.notified == False)
+    if monitor_ids:
+        stmt = stmt.where(FoundItem.monitor_id.in_(monitor_ids))
+    if domains:
+        stmt = stmt.where(FoundItem.domain.in_(domains))
+
+    rows = (await db.execute(stmt.order_by(FoundItem.found_at.asc(), FoundItem.id.asc()))).all()
+
+    by_cause: dict[str, dict[str, Any]] = {}
+    by_monitor: dict[int, dict[str, Any]] = {}
+    samples: list[dict[str, Any]] = []
+
+    for item, monitor in rows:
+        classification = _classify_pending_row(item, monitor)
+        cause = classification["likely_cause"]
+        cause_bucket = by_cause.setdefault(cause, {"likely_cause": cause, "pending_count": 0})
+        cause_bucket["pending_count"] += 1
+
+        monitor_bucket = by_monitor.setdefault(
+            item.monitor_id,
+            {
+                "monitor_id": item.monitor_id,
+                "monitor_name": monitor.name,
+                "pending_count": 0,
+                "causes": {},
+                "domains": set(),
+                "has_any_real_filter": classification["has_any_real_filter"],
+                "is_order_only": classification["is_order_only"],
+                "is_broad_feed_risk": classification["is_broad_feed_risk"],
+                "brand_ids": classification["brand_ids"],
+                "catalog_ids": classification["catalog_ids"],
+                "filter_keys": classification["filter_keys"],
+            },
+        )
+        monitor_bucket["pending_count"] += 1
+        monitor_bucket["causes"][cause] = monitor_bucket["causes"].get(cause, 0) + 1
+        monitor_bucket["domains"].add(item.domain)
+
+        if len(samples) < sample_limit:
+            samples.append(_pending_sample(item, monitor, classification))
+
+    by_monitor_list = []
+    for bucket in by_monitor.values():
+        by_monitor_list.append(
+            {
+                **bucket,
+                "domains": sorted(bucket["domains"]),
+            }
+        )
+
+    return {
+        "dry_run": True,
+        "pending_total": len(rows),
+        "by_cause": sorted(by_cause.values(), key=lambda row: row["likely_cause"]),
+        "by_monitor": sorted(by_monitor_list, key=lambda row: row["monitor_id"]),
+        "samples": samples,
+        "side_effects": {
+            "reads_database": True,
+            "writes_database": False,
+            "writes_found_items": False,
+            "marks_notified": False,
+            "deletes_found_items": False,
+            "deletes_seen_items": False,
+            "sends_telegram": False,
+            "calls_vinted": False,
+            "runs_baseline": False,
+            "runs_check": False,
+        },
+    }
+
+
+async def run_bad_url_backlog_ack(
+    db: AsyncSession,
+    *,
+    dry_run: bool = True,
+    monitor_ids: Optional[List[int]] = None,
+    domains: Optional[List[str]] = None,
+    sample_limit: int = 10,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    sample_limit = max(0, min(sample_limit, 20))
+    stmt = select(FoundItem, Monitor).join(Monitor, FoundItem.monitor_id == Monitor.id)
+    stmt = stmt.where(FoundItem.notified == False)
+    if monitor_ids:
+        stmt = stmt.where(FoundItem.monitor_id.in_(monitor_ids))
+    if domains:
+        stmt = stmt.where(FoundItem.domain.in_(domains))
+
+    rows = (await db.execute(stmt.order_by(FoundItem.found_at.asc(), FoundItem.id.asc()))).all()
+    eligible_causes = {
+        "broad_order_only_monitor",
+        "unknown_brand_from_unverified_source",
+    }
+    eligible: list[FoundItem] = []
+    samples: list[dict[str, Any]] = []
+    excluded_positive_brand_evidence_count = 0
+    excluded_other_count = 0
+
+    for item, monitor in rows:
+        classification = _classify_pending_row(item, monitor)
+        if classification["has_verified_brand_evidence"]:
+            excluded_positive_brand_evidence_count += 1
+            continue
+        if classification["likely_cause"] not in eligible_causes:
+            excluded_other_count += 1
+            continue
+        eligible.append(item)
+        if len(samples) < sample_limit:
+            samples.append(_pending_sample(item, monitor, classification))
+
+    acked_count = 0
+    if not dry_run:
+        for item in eligible:
+            item.notified = True
+            acked_count += 1
+        await db.commit()
+
+    return {
+        "dry_run": dry_run,
+        "reason": reason,
+        "monitor_ids": monitor_ids,
+        "domains": domains,
+        "scanned_pending_count": len(rows),
+        "eligible_count": len(eligible),
+        "acked_count": acked_count,
+        "excluded_positive_brand_evidence_count": excluded_positive_brand_evidence_count,
+        "excluded_other_count": excluded_other_count,
+        "eligible_causes": sorted(eligible_causes),
+        "samples": samples,
+        "side_effects": {
+            "reads_database": True,
+            "writes_database": not dry_run and acked_count > 0,
+            "writes_found_items": not dry_run and acked_count > 0,
+            "marks_notified": not dry_run and acked_count > 0,
+            "deletes_found_items": False,
+            "deletes_seen_items": False,
+            "sends_telegram": False,
+            "calls_vinted": False,
+            "runs_baseline": False,
+            "runs_check": False,
+        },
+    }
 
 
 async def run_suspect_brand_filter_backlog_ack(
