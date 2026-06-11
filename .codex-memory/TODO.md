@@ -23,4 +23,5 @@ tags:
 ## Completed Task Success Notes
 - 2026-06-11: Completed pending-resume no-notify ack implementation and production verification. Added administrator-only endpoint for safe backlog suppression with strict live-mode safety guards. Verified on commit c3c1028.
 
-- 2026-06-12: Fixed monitor bulk enable/disable UX and backend reliability. Added bulk state endpoint and UI buttons. Resolved scheduler contention issues. Verified on commit <pending>.
+- 2026-06-12: Fixed monitor bulk enable/disable UX and backend reliability. Added bulk state endpoint and UI buttons. Resolved scheduler contention issues. Verified on commit 721d494.
+
