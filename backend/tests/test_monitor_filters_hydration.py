@@ -1,6 +1,11 @@
 import pytest
 from app.scraper.parser import VintedItem
-from app.scraper.monitor_filters import MonitorFilters, item_matches_monitor_filters, extract_monitor_filters
+from app.scraper.monitor_filters import (
+    MISSING_BRAND_ID_UNVERIFIED_SOURCE,
+    MonitorFilters,
+    item_matches_monitor_filters,
+    extract_monitor_filters,
+)
 
 def test_hydration_item_missing_brand_id_matching_brand_title_passes():
     # monitor name "Nike Shoes" should allow "Nike"
@@ -87,7 +92,7 @@ def test_hydration_item_wrong_brand_id_rejected_even_with_hydration_source():
     assert matches is False
     assert reason == "wrong_brand"
 
-def test_api_item_missing_brand_id_preserves_existing_strict_behavior():
+def test_api_item_missing_brand_id_matching_brand_title_passes():
     # Nike monitor
     params = {
         "brand_ids[]": ["53"]
@@ -112,8 +117,8 @@ def test_api_item_missing_brand_id_preserves_existing_strict_behavior():
     )
     
     matches, reason = item_matches_monitor_filters(item, filters)
-    assert matches is False
-    assert reason == "missing_brand_id"
+    assert matches is True
+    assert reason is None
 
 def test_hydration_item_missing_brand_id_passes_without_monitor_name_if_search_text_matches():
     params = {
@@ -142,15 +147,12 @@ def test_hydration_item_missing_brand_id_passes_without_monitor_name_if_search_t
     assert matches is True
     assert reason is None
 
-def test_hydration_item_missing_brand_id_trusts_page_if_no_names_available():
+def test_hydration_item_missing_brand_id_rejects_without_positive_brand_evidence():
     # No search_text, no monitor_name
     params = {
         "brand_ids[]": ["53"]
     }
     filters = extract_monitor_filters(params)
-    
-    # We HAVE brand_ids filter, but NO allowed_brand_names.
-    # We must trust Vinted for hydration items because we are on a pre-filtered page.
     
     item = VintedItem(
         id=128,
@@ -169,5 +171,26 @@ def test_hydration_item_missing_brand_id_trusts_page_if_no_names_available():
     )
     
     matches, reason = item_matches_monitor_filters(item, filters)
-    assert matches is True
-    assert reason is None
+    assert matches is False
+    assert reason == MISSING_BRAND_ID_UNVERIFIED_SOURCE
+
+
+def test_brand_filtered_unknown_brand_title_is_not_trusted_from_request_params():
+    filters = extract_monitor_filters({"brand_ids[]": ["576107"]}, monitor_name="kapital")
+    item = VintedItem(
+        id=9062601700,
+        title="Dante's Inferno Xbox 360",
+        price=10.0,
+        currency="EUR",
+        brand="unknown",
+        size="M",
+        condition="Very good",
+        photo_url="p",
+        item_url="u",
+        domain="vinted.de",
+        seller_id=51023772,
+        brand_id=None,
+        raw_source="hydration",
+    )
+
+    assert item_matches_monitor_filters(item, filters) == (False, MISSING_BRAND_ID_UNVERIFIED_SOURCE)

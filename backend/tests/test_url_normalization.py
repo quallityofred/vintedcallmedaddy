@@ -1,6 +1,10 @@
 import pytest
 
-from app.scraper.monitor_filters import extract_monitor_filters, item_matches_monitor_filters
+from app.scraper.monitor_filters import (
+    MISSING_BRAND_ID_UNVERIFIED_SOURCE,
+    extract_monitor_filters,
+    item_matches_monitor_filters,
+)
 from app.scraper.parser import VintedItem, parse_response
 from app.scraper.url_parser import parse_vinted_url, normalize_vinted_monitor_url
 
@@ -158,7 +162,7 @@ def test_missing_brand_id_is_handled_safely_for_brand_monitor():
         seller_id=3,
     )
 
-    assert item_matches_monitor_filters(item, filters) == (False, "missing_brand_id")
+    assert item_matches_monitor_filters(item, filters) == (False, MISSING_BRAND_ID_UNVERIFIED_SOURCE)
 
 def test_parse_response_extracts_brand_id():
     items = parse_response(

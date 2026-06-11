@@ -25,7 +25,12 @@ from app.scraper.client import DomainSearchResult, VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 from app.scheduler.vinted_rate_limiter import get_vinted_rate_limiter
 from app.scheduler.adaptive_pacing import calculate_effective_monitor_intervals, PacingCalculationResult
-from app.scraper.monitor_filters import extract_monitor_filters, has_restrictive_filters, item_matches_monitor_filters
+from app.scraper.monitor_filters import (
+	MISSING_BRAND_ID_UNVERIFIED_SOURCE,
+	extract_monitor_filters,
+	has_restrictive_filters,
+	item_matches_monitor_filters,
+)
 from app.scraper.parser import VintedItem
 from app.scheduler.found_item_values import build_found_item_values
 from app.scraper.url_parser import (
@@ -44,7 +49,7 @@ EMPTY_THRESHOLD_FAST = 5
 EMPTY_THRESHOLD_SLOW = 15
 INTERVAL_STEP_UP = 1.3
 INTERVAL_STEP_DOWN_FAST = 0.7
-FILTER_CONTRACT_VERSION = "monitor_filter_contract_v3_missing_brand_id_request_trust"
+FILTER_CONTRACT_VERSION = "monitor_filter_contract_v4_verified_brand_evidence"
 
 _telegram_bot: Bot | None = None
 _notification_lock = asyncio.Lock()
@@ -686,7 +691,7 @@ async def _select_domain_delta_items(
 		matches_filters, skip_reason = item_matches_monitor_filters(item, context.monitor_filters)
 		if not matches_filters:
 			skipped_by_filter_count += 1
-			if skip_reason == "missing_brand_id":
+			if skip_reason in {"missing_brand_id", MISSING_BRAND_ID_UNVERIFIED_SOURCE}:
 				missing_brand_id_count += 1
 			continue
 		accepted_items.append(item)

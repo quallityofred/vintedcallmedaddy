@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 class AckNoNotifyRequest(BaseModel):
@@ -9,6 +10,17 @@ class AckNoNotifyRequest(BaseModel):
     include_inactive: bool = True
     include_active: bool = False
     sample_limit: int = 10
+    reason: Optional[str] = None
+    confirm: Optional[str] = None
+    extra_confirm: Optional[List[str]] = None
+
+class SuspectBrandFilterBacklogAckRequest(BaseModel):
+    dry_run: bool = True
+    monitor_ids: Optional[List[int]] = None
+    domains: Optional[List[str]] = None
+    created_after: Optional[datetime] = None
+    created_before: Optional[datetime] = None
+    sample_limit: int = Field(default=10, ge=0, le=20)
     reason: Optional[str] = None
     confirm: Optional[str] = None
     extra_confirm: Optional[List[str]] = None

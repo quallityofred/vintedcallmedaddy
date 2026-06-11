@@ -76,6 +76,7 @@ tags:
 - 2026-06-10: Implemented real history retention deletion logic for `FoundItem` (notified-only) and `SeenItem` (cap-only) with strict confirmation guards.
 - 2026-06-08: Production full-cycle jobs use an asynchronous background task pattern with a process-local job registry. While running, job status shows options and started time; completed status includes the full results payload (e.g., cleanup counts, baseline counts, check results, notification counts). All live operations require explicit `dry_run=False` and are protected by authentication and CSRF.
 - 2026-06-11: `issue/fixed` Stale notification flood after `4aa7696` was treated as a filter-contract baseline problem, not a notification cap problem. `check_monitor()` now persists `MonitorFilterBaseline` rows per monitor/domain and writes newly exposed timestampless missing-brand source-window items as `SeenItem` only. Source-level stale timestamps are also seen-only. FoundItem creation remains limited to genuinely new accepted candidates; all selected domains and per-domain seen boundaries remain preserved.
+- 2026-06-11: `issue/fixed` Broad brand-only source rows are no longer accepted on request-param trust. The active filter contract is `monitor_filter_contract_v4_verified_brand_evidence`; monitor checks only accept brand-filtered items with matching `brand_id` or positive matching brand title/name. Unknown-brand rows from broad API/source windows are skipped before delta decisions, so no new `FoundItem` or pending notification is created for them.
 
 
 ## History Retention (Phase B)

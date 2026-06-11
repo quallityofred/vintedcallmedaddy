@@ -8,6 +8,7 @@ tags:
 
 # Changelog
 
+- 2026-06-11: Fixed `issue/fixed` brand-only source trust after `de2c833`. Production diagnostics showed Kapital/Vivienne monitors had effective `brand_ids[]`, but broad unknown-brand source rows still passed filters because request params alone were trusted. Brand-filtered items now require explicit matching `brand_id` or positive matching brand title/name evidence; `brand_title="unknown"` no longer passes as Kapital/Vivienne. Added strict regression coverage and a dry-run-first maintenance endpoint for suspect brand-filter pending backlog quarantine.
 - 2026-06-11: Fixed `issue/fixed` stale-listing notification flood after brand-filter relaxation. Brand-filtered items with missing item-level `brand_id` and no source timestamp now seed a monitor/domain filter-fingerprint baseline as `SeenItem` without `FoundItem`; source `listed_at` older than the previous check minus grace is also marked seen-only. Added `monitor_filter_baselines` state and regression coverage for Kapital-style item `9062601700` showing Vinted UI age `1 Woche`; diagnostics remain capped at 20/20 for production dry-runs.
 - 2026-06-02: Initialized `Codex Memory/vintedbot` and verified read access to the repository and compatibility wrapper files.
 - 2026-06-02: Verified that `Projects/vintedbot` is a junction to `C:\Users\egory\vintedbot`; both paths resolve to the same git working tree.

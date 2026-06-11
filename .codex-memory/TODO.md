@@ -14,6 +14,7 @@ tags:
 
 ## Follow-up Watch Items
 
+- `issue/open` `component/notifications` `component/scraper` After deploying the strict brand-source trust fix, run read-only production verification only: health, worker diagnostics, pending dry-run, Kapital/Vivienne source-selection and dry-run-source/full-cycle with `max_items_per_domain <= 20` and `sample_limit <= 20`. If suspect backlog remains, use only the suspect backlog endpoint in `dry_run=true` first; live no-notify ack requires explicit user approval and typed confirmations.
 - `issue/open` `component/scraper` `component/scheduler` Production verification after stale-listing guard deploy: use read-only/dry-run diagnostics only with `max_items_per_domain <= 20` and `sample_limit <= 20`; locate Kapital monitor and verify item `9062601700` is already seen/no-notify, stale, or outside the capped window. Do not run live Telegram sends or production check-now without explicit approval.
 - Verify Railway remains stable after the database availability incident in [[Issues/ISS-RWY-001 Railway PostgreSQL startup failure|ISS-RWY-001]].
 - Redeploy the database session initialization fix in [[Issues/ISS-RWY-002 AsyncSessionLocal None after startup|ISS-RWY-002]] and check GET / after Application startup complete.

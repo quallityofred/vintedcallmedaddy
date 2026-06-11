@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import json
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -8,6 +9,12 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import FoundItem, Monitor, MonitorTelegramTopic, utc_now
+from app.scraper.monitor_filters import (
+    brand_text_matches_allowed,
+    extract_monitor_filters,
+    has_positive_brand_text,
+)
+from app.scraper.url_parser import get_effective_monitor_request_params
 
 logger = logging.getLogger(__name__)
 
@@ -206,4 +213,121 @@ async def run_pending_notifications_ack_no_notify(
             "runs_baseline": False,
             "runs_check": False
         }
+    }
+
+
+def _title_preview(value: str | None, limit: int = 80) -> str:
+    text = (value or "").strip()
+    return text[:limit]
+
+
+def _item_has_verified_brand_evidence(item: FoundItem, filters) -> bool:
+    if not filters.brand_ids:
+        return False
+    if item.brand_id is not None and str(item.brand_id) in filters.brand_ids:
+        return True
+    if not has_positive_brand_text(item.brand):
+        return False
+    return brand_text_matches_allowed(item.brand, filters.allowed_brand_names)
+
+
+def _monitor_filters_for_pending_row(monitor: Monitor):
+    try:
+        params = get_effective_monitor_request_params(monitor.params_json, monitor.original_url)
+    except Exception:
+        try:
+            params = json.loads(monitor.params_json)
+        except Exception:
+            params = {}
+    return extract_monitor_filters(params, monitor_name=monitor.name)
+
+
+async def run_suspect_brand_filter_backlog_ack(
+    db: AsyncSession,
+    *,
+    dry_run: bool = True,
+    monitor_ids: Optional[List[int]] = None,
+    domains: Optional[List[str]] = None,
+    created_after: Optional[datetime] = None,
+    created_before: Optional[datetime] = None,
+    sample_limit: int = 10,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    stmt = select(FoundItem, Monitor).join(Monitor, FoundItem.monitor_id == Monitor.id)
+    stmt = stmt.where(FoundItem.notified == False)
+    if monitor_ids:
+        stmt = stmt.where(FoundItem.monitor_id.in_(monitor_ids))
+    if domains:
+        stmt = stmt.where(FoundItem.domain.in_(domains))
+    if created_after is not None:
+        stmt = stmt.where(FoundItem.found_at >= created_after)
+    if created_before is not None:
+        stmt = stmt.where(FoundItem.found_at <= created_before)
+
+    result = await db.execute(stmt.order_by(FoundItem.found_at.asc(), FoundItem.id.asc()))
+    rows = result.all()
+
+    scanned_pending_count = 0
+    eligible_items: list[FoundItem] = []
+    samples: list[dict[str, Any]] = []
+    excluded_matching_brand_count = 0
+    excluded_no_brand_filter_count = 0
+
+    for item, monitor in rows:
+        scanned_pending_count += 1
+        filters = _monitor_filters_for_pending_row(monitor)
+        if not filters.brand_ids:
+            excluded_no_brand_filter_count += 1
+            continue
+        if _item_has_verified_brand_evidence(item, filters):
+            excluded_matching_brand_count += 1
+            continue
+        eligible_items.append(item)
+        if len(samples) < max(0, min(sample_limit, 20)):
+            samples.append(
+                {
+                    "found_item_id": item.id,
+                    "monitor_id": item.monitor_id,
+                    "monitor_name": monitor.name,
+                    "vinted_item_id": item.vinted_item_id,
+                    "domain": item.domain,
+                    "title_preview": _title_preview(item.title),
+                    "brand_title": item.brand if has_positive_brand_text(item.brand) else "unknown",
+                    "brand_id": item.brand_id,
+                    "found_at": item.found_at.isoformat() if item.found_at else None,
+                    "reason": "missing_verified_brand_evidence",
+                }
+            )
+
+    acked_count = 0
+    if not dry_run:
+        for item in eligible_items:
+            item.notified = True
+            acked_count += 1
+        await db.commit()
+
+    return {
+        "dry_run": dry_run,
+        "reason": reason,
+        "monitor_ids": monitor_ids,
+        "domains": domains,
+        "created_after": created_after.isoformat() if created_after else None,
+        "created_before": created_before.isoformat() if created_before else None,
+        "scanned_pending_count": scanned_pending_count,
+        "eligible_count": len(eligible_items),
+        "acked_count": acked_count,
+        "excluded_matching_brand_count": excluded_matching_brand_count,
+        "excluded_no_brand_filter_count": excluded_no_brand_filter_count,
+        "samples": samples,
+        "side_effects": {
+            "reads_database": True,
+            "writes_found_items": not dry_run and acked_count > 0,
+            "marks_notified": not dry_run and acked_count > 0,
+            "deletes_found_items": False,
+            "deletes_seen_items": False,
+            "sends_telegram": False,
+            "calls_vinted": False,
+            "runs_baseline": False,
+            "runs_check": False,
+        },
     }

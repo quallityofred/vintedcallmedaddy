@@ -14,10 +14,19 @@ from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
 from app.models import User
 from app.scheduler.retention import run_history_retention_dry_run, run_history_retention_cleanup
-from app.scheduler.pending_diagnostics import run_pending_notifications_dry_run, run_pending_notifications_ack_no_notify
+from app.scheduler.pending_diagnostics import (
+    run_pending_notifications_dry_run,
+    run_pending_notifications_ack_no_notify,
+    run_suspect_brand_filter_backlog_ack,
+)
 from app.scheduler.cold_start_reset import run_monitor_cold_start_reset
 from app.config import get_settings
-from app.schemas.pending_ack import AckNoNotifyRequest, RetentionCleanupRequest, ColdStartResetRequest
+from app.schemas.pending_ack import (
+    AckNoNotifyRequest,
+    RetentionCleanupRequest,
+    ColdStartResetRequest,
+    SuspectBrandFilterBacklogAckRequest,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -155,6 +164,43 @@ async def post_pending_notifications_dry_run(
         return result
     except Exception as e:
         logger.exception("Failed to run pending notifications dry-run")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/pending-notifications/ack-suspect-brand-filter-backlog", dependencies=[Depends(require_api_csrf)])
+async def post_suspect_brand_filter_backlog_ack(
+    request: SuspectBrandFilterBacklogAckRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """
+    Identify or acknowledge suspect pending rows created by unverified brand-filter source trust.
+    """
+    if not request.dry_run:
+        if not request.reason:
+            raise HTTPException(status_code=400, detail="Reason required for live suspect backlog ack.")
+        if request.confirm != "ACK_SUSPECT_BRAND_FILTER_BACKLOG_NO_NOTIFY":
+            raise HTTPException(status_code=400, detail="Invalid confirmation string.")
+        extra = request.extra_confirm or []
+        if "I_UNDERSTAND_THIS_WILL_NOT_SEND_TELEGRAM" not in extra:
+            raise HTTPException(
+                status_code=400,
+                detail="Extra confirmation I_UNDERSTAND_THIS_WILL_NOT_SEND_TELEGRAM required.",
+            )
+
+    try:
+        return await run_suspect_brand_filter_backlog_ack(
+            db=db,
+            dry_run=request.dry_run,
+            monitor_ids=request.monitor_ids,
+            domains=request.domains,
+            created_after=request.created_after,
+            created_before=request.created_before,
+            sample_limit=request.sample_limit,
+            reason=request.reason,
+        )
+    except Exception as e:
+        logger.exception("Failed to run suspect brand-filter backlog ack")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/history-retention/cleanup", dependencies=[Depends(require_api_csrf)])

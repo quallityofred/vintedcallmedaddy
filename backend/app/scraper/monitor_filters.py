@@ -16,6 +16,20 @@ ARRAY_PARAM_ALIASES = {
     "gender_ids": ("gender_ids[]", "gender_ids"),
 }
 
+MISSING_BRAND_ID_UNVERIFIED_SOURCE = "missing_brand_id_unverified_source"
+_UNKNOWN_BRAND_TOKENS = {
+    "",
+    "unknown",
+    "none",
+    "null",
+    "n/a",
+    "na",
+    "no brand",
+    "no-brand",
+    "unbranded",
+    "brand unknown",
+}
+
 
 @dataclass(frozen=True)
 class MonitorFilters:
@@ -91,25 +105,45 @@ def extract_monitor_filters(params: dict[str, Any], monitor_name: str | None = N
     )
 
 
+def normalize_brand_text(value: str | None) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[\W_]+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def has_positive_brand_text(value: str | None) -> bool:
+    return normalize_brand_text(value) not in _UNKNOWN_BRAND_TOKENS
+
+
+def brand_text_matches_allowed(value: str | None, allowed_names: frozenset[str]) -> bool:
+    item_brand = normalize_brand_text(value)
+    if not item_brand or not has_positive_brand_text(item_brand):
+        return False
+    for allowed in allowed_names:
+        allowed_brand = normalize_brand_text(allowed)
+        if not allowed_brand or allowed_brand in _UNKNOWN_BRAND_TOKENS:
+            continue
+        if item_brand == allowed_brand:
+            return True
+        if len(allowed_brand) >= 4 and (allowed_brand in item_brand or item_brand in allowed_brand):
+            return True
+    return False
+
+
 def item_matches_monitor_filters(item: VintedItem, filters: MonitorFilters) -> tuple[bool, str | None]:
     if filters.brand_ids:
         if item.brand_id is not None:
             if str(item.brand_id) not in filters.brand_ids:
                 return False, "wrong_brand"
-        elif item.raw_source == "hydration" or filters.brand_ids:
-            # For hydration source or brand-filtered API requests, we tolerate missing brand_id
-            # because the source is already brand-filtered.
-            # HOWEVER, if we have brand names in our filters (from search_text or monitor name),
-            # we should verify that the item's brand title matches at least one of them.
-            if filters.allowed_brand_names:
-                item_brand_lower = (item.brand or "").lower()
-                if not any(name in item_brand_lower or item_brand_lower in name for name in filters.allowed_brand_names):
-                    return False, "wrong_brand"
-            
-            # If we have no brand names to check against, we trust the source page (which was brand-filtered).
             return True, None
-        else:
-            return False, "missing_brand_id"
+
+        if not has_positive_brand_text(item.brand):
+            return False, MISSING_BRAND_ID_UNVERIFIED_SOURCE
+        if not filters.allowed_brand_names:
+            return False, MISSING_BRAND_ID_UNVERIFIED_SOURCE
+        if brand_text_matches_allowed(item.brand, filters.allowed_brand_names):
+            return True, None
+        return False, "wrong_brand"
     return True, None
 
 

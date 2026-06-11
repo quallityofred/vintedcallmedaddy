@@ -1,7 +1,11 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from app.scraper.parser import VintedItem
-from app.scraper.monitor_filters import MonitorFilters, item_matches_monitor_filters
+from app.scraper.monitor_filters import (
+    MISSING_BRAND_ID_UNVERIFIED_SOURCE,
+    MonitorFilters,
+    item_matches_monitor_filters,
+)
 
 def test_nike_brand_id_missing_is_skipped_for_brand_monitor():
     item = VintedItem(
@@ -34,7 +38,7 @@ def test_nike_brand_id_missing_is_skipped_for_brand_monitor():
     
     matches, reason = item_matches_monitor_filters(item, filters)
     assert matches is False
-    assert reason == "missing_brand_id"
+    assert reason == MISSING_BRAND_ID_UNVERIFIED_SOURCE
 
 def test_wrong_brand_id_still_filtered():
     # Item with brand_id 999 (Not Nike)
