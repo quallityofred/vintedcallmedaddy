@@ -225,11 +225,29 @@ async def perform_monitor_dry_run(
     pipeline_counts_by_domain = {}
     fetch_diagnostics_by_domain = {}
 
-    filters = extract_monitor_filters(params, monitor_name=monitor.name)
-    effective_request_params = normalize_catalog_search_params(params)
+    from app.scraper.url_parser import get_effective_monitor_request_params
+
+    # ... (existing imports)
+
+    # Determine which domains to test
+    if target_domain:
+        if target_domain not in selected_domains:
+            raise ValueError(f"Domain {target_domain} is not selected by this monitor")
+        dry_run_domains = [target_domain]
+    else:
+        dry_run_domains = selected_domains[:max_domains]
+
+    counts_by_domain = {}
+    samples_by_domain = {}
+    errors_by_domain = {}
+    pipeline_counts_by_domain = {}
+    fetch_diagnostics_by_domain = {}
+
+    effective_request_params = get_effective_monitor_request_params(monitor.params_json, monitor.original_url)
+    filters = extract_monitor_filters(effective_request_params, monitor_name=monitor.name)
     original_url_params = normalize_catalog_search_params(parse_vinted_url(monitor.original_url))
     filter_diagnostics = {
-        "stored_param_keys": sorted(key for key in params if not str(key).startswith("_")),
+        "stored_param_keys": sorted(key for key in json.loads(monitor.params_json) if not str(key).startswith("_")),
         "original_url_param_keys": sorted(original_url_params),
         "effective_request_param_keys": sorted(effective_request_params),
         "filter_keys": filters.filter_keys,

@@ -26,7 +26,7 @@ from app.scraper.source_selector import (
     should_use_hydration_ssr_photo_merge,
 )
 from app.scraper.monitor_filters import extract_monitor_filters
-from app.scraper.url_parser import normalize_catalog_search_params, parse_vinted_url
+from app.scraper.url_parser import normalize_catalog_search_params, parse_vinted_url, get_effective_monitor_request_params
 from app.config import get_settings
 from app.scraper.client import VintedClient, TokenBucketLimiter
 from app.schemas.notification_diagnostics import NotificationProcessRequest
@@ -142,10 +142,10 @@ async def get_monitor_source_selection(
     used = should_use_hydration_source(params)
     merge_used = should_use_hydration_ssr_photo_merge(params)
     original_url = monitor.original_url if isinstance(monitor.original_url, str) else ""
+    effective_request_params = get_effective_monitor_request_params(monitor.params_json, original_url)
     original_url_params = normalize_catalog_search_params(parse_vinted_url(original_url))
-    effective_request_params = normalize_catalog_search_params(params)
     monitor_name = monitor.name if isinstance(monitor.name, str) else None
-    filters = extract_monitor_filters(params, monitor_name=monitor_name)
+    filters = extract_monitor_filters(effective_request_params, monitor_name=monitor_name)
 
     # Determine reason
     reason = "api"
@@ -173,7 +173,7 @@ async def get_monitor_source_selection(
         ),
         "reason": reason,
         "has_catalog_filter": any(key in params for key in ["catalog[]", "catalog_ids[]", "catalog_ids", "catalog_id", "catalog"]),
-        "has_brand_filter": "brand_ids[]" in params or "brand_ids" in params,
+        "has_brand_filter": "brand_ids[]" in effective_request_params or "brand_ids" in effective_request_params,
         "filter_diagnostics": {
             "stored_param_keys": sorted(key for key in params if not str(key).startswith("_")),
             "original_url_param_keys": sorted(original_url_params),

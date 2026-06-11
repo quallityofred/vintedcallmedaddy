@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import json
 from urllib.parse import parse_qs, urlparse, urlsplit, urlunparse, urlunsplit, urlencode
 
 from app.scraper.domains import normalize_vinted_host, resolve_vinted_host_to_representative
@@ -143,6 +144,19 @@ def parse_vinted_url(url: str) -> dict:
     params["order"] = "newest_first"
 
     return params
+
+
+def get_effective_monitor_request_params(params_json: str, original_url: str) -> dict:
+    """Canonical monitor parameter resolution: merge stored and URL-derived filters."""
+    params = json.loads(params_json)
+    url_params = parse_vinted_url(original_url)
+
+    # Merge: URL-derived filters fill in missing ones
+    for key, value in url_params.items():
+        if key not in params or not params[key]:
+            params[key] = value
+
+    return normalize_catalog_search_params(params)
 
 
 def normalize_catalog_search_params(params: dict) -> dict:

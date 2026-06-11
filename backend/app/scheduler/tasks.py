@@ -776,22 +776,14 @@ async def _load_monitor_check_context(monitor_id: int) -> MonitorCheckContext | 
 			logger.warning("Skipping monitor with missing user", extra={"monitor_id": monitor.id})
 			return None
 
-		params = json.loads(monitor.params_json)
+		from app.scraper.url_parser import get_effective_monitor_request_params
+
+		params = get_effective_monitor_request_params(monitor.params_json, monitor.original_url)
 		monitor_filters = extract_monitor_filters(params, monitor_name=monitor.name)
-		
-		# Repair logic: if stored params are broad/not restrictive, try re-parsing from original_url
+
+		# If still not restrictive, fail
 		if not has_restrictive_filters(monitor_filters):
-			url_params = parse_vinted_url(monitor.original_url)
-			url_filters = extract_monitor_filters(url_params, monitor_name=monitor.name)
-			if has_restrictive_filters(url_filters):
-				url_params["_original_interval"] = params.get("_original_interval", monitor.interval_sec)
-				params = url_params
-				monitor_filters = url_filters
-				logger.warning(
-					"Using monitor URL-derived filters because stored params are not restrictive: monitor_id=%s",
-					monitor.id,
-				)
-			elif "vinted." in monitor.original_url.lower():
+			if "vinted." in monitor.original_url.lower():
 				monitor.last_check_status = "failed"
 				monitor.last_error = "Monitor URL has no searchable filters; refusing unfiltered marketplace check."
 				monitor.last_check_completed_at = datetime.now(timezone.utc)
