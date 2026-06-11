@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.web.api_dependencies import require_api_user
+from app.web.api_dependencies import require_api_admin
 from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
 from app.models import User
