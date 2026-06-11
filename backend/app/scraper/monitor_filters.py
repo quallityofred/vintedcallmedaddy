@@ -96,8 +96,9 @@ def item_matches_monitor_filters(item: VintedItem, filters: MonitorFilters) -> t
         if item.brand_id is not None:
             if str(item.brand_id) not in filters.brand_ids:
                 return False, "wrong_brand"
-        elif item.raw_source == "hydration":
-            # For hydration source, we tolerate missing brand_id because hydration payload doesn't have it.
+        elif item.raw_source == "hydration" or filters.brand_ids:
+            # For hydration source or brand-filtered API requests, we tolerate missing brand_id
+            # because the source is already brand-filtered.
             # HOWEVER, if we have brand names in our filters (from search_text or monitor name),
             # we should verify that the item's brand title matches at least one of them.
             if filters.allowed_brand_names:
