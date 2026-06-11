@@ -101,6 +101,13 @@ def _create_baseline_guard_response(monitor_id: int, selected_domains: list[str]
 from app.web.dependencies import get_db, get_scheduler
 from app.scheduler.vinted_rate_limiter import get_vinted_rate_limiter
 
+def _safe_json_list(val: str) -> list[str]:
+    try:
+        data = json.loads(val)
+        return [str(x) for x in data] if isinstance(data, list) else []
+    except Exception:
+        return []
+
 @router.get("/scheduler/adaptive-vinted-pacing")
 async def get_adaptive_vinted_pacing_diagnostics(
     user: User = Depends(require_api_user),
