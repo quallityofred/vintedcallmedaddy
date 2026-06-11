@@ -33,6 +33,7 @@ tags:
 - `test_notification_pipeline_v2.py` verifies the flag defaults off, the live processor remains unchanged, only successful attempts are acknowledged, failures remain retryable, and redaction omits sensitive delivery data.
 - 2026-06-08 delta repair coverage verifies Found-without-Seen history is not requeued, missing Seen memory is repaired, same-domain and cross-domain boundaries remain distinct, all domains are preserved, baseline routes write real Seen rows, and Found-to-Seen repair is read-only by default, bounded, monitor-scoped, idempotent, admin/CSRF protected, and Telegram-free. Full backend result: 395 passed.
 - 2026-06-08 filter-drift coverage verifies catalog/gender URL parsing, internal-parameter removal, restrictive stored parameters overriding a broad original query, identical effective filter URLs for every selected domain, and safe mismatch diagnostics. Full backend result: 400 passed.
+- 2026-06-11 stale-listing coverage adds `tests/test_filter_fingerprint_baseline.py`: missing-brand timestampless source windows baseline no-notify, subsequent same-fingerprint checks notify only leading items before the seen boundary, old source `listed_at` is seen-only, fresh source `listed_at` can notify, and fingerprint baseline state is domain-aware. Also updated stale route-contract tests for body-based diagnostics requests.
 
 ## Current Snapshot
 

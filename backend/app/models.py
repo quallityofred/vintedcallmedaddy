@@ -114,6 +114,30 @@ class Monitor(Base):
     found_items = relationship("FoundItem", back_populates="monitor", cascade="all, delete-orphan")
 
 
+class MonitorFilterBaseline(Base):
+    __tablename__ = "monitor_filter_baselines"
+    __table_args__ = (
+        UniqueConstraint("monitor_id", "domain", name="uq_monitor_filter_baselines_monitor_domain"),
+        Index("ix_monitor_filter_baselines_monitor_id", "monitor_id"),
+        Index("ix_monitor_filter_baselines_domain", "domain"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    monitor_id: Mapped[int] = mapped_column(ForeignKey("monitors.id", ondelete="CASCADE"), nullable=False)
+    domain: Mapped[str] = mapped_column(String, nullable=False)
+    filter_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    filter_contract_version: Mapped[str] = mapped_column(String, nullable=False)
+    source_strategy: Mapped[str] = mapped_column(String, nullable=False)
+    baselined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class MonitorTelegramTopic(Base):
     __tablename__ = "monitor_telegram_topics"
     __table_args__ = (

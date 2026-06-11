@@ -75,6 +75,7 @@ tags:
 - 2026-06-10: Added `domains` filter support to history retention cleanup. This allows scoping cleanup to specific Vinted marketplaces.
 - 2026-06-10: Implemented real history retention deletion logic for `FoundItem` (notified-only) and `SeenItem` (cap-only) with strict confirmation guards.
 - 2026-06-08: Production full-cycle jobs use an asynchronous background task pattern with a process-local job registry. While running, job status shows options and started time; completed status includes the full results payload (e.g., cleanup counts, baseline counts, check results, notification counts). All live operations require explicit `dry_run=False` and are protected by authentication and CSRF.
+- 2026-06-11: `issue/fixed` Stale notification flood after `4aa7696` was treated as a filter-contract baseline problem, not a notification cap problem. `check_monitor()` now persists `MonitorFilterBaseline` rows per monitor/domain and writes newly exposed timestampless missing-brand source-window items as `SeenItem` only. Source-level stale timestamps are also seen-only. FoundItem creation remains limited to genuinely new accepted candidates; all selected domains and per-domain seen boundaries remain preserved.
 
 
 ## History Retention (Phase B)

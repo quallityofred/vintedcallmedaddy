@@ -1,5 +1,6 @@
 # Copied implementation from app/scheduler/app_scheduler_tasks.py
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_session_factory
-from app.models import FoundItem, HiddenSeller, Monitor, MonitorTelegramTopic, SeenItem, User
+from app.models import FoundItem, HiddenSeller, Monitor, MonitorFilterBaseline, MonitorTelegramTopic, SeenItem, User
 from app.scraper.client import DomainSearchResult, VintedClient
 from app.scraper.rate_limiter import TokenBucketLimiter
 from app.scheduler.vinted_rate_limiter import get_vinted_rate_limiter
@@ -43,6 +44,7 @@ EMPTY_THRESHOLD_FAST = 5
 EMPTY_THRESHOLD_SLOW = 15
 INTERVAL_STEP_UP = 1.3
 INTERVAL_STEP_DOWN_FAST = 0.7
+FILTER_CONTRACT_VERSION = "monitor_filter_contract_v3_missing_brand_id_request_trust"
 
 _telegram_bot: Bot | None = None
 _notification_lock = asyncio.Lock()
@@ -161,6 +163,13 @@ class DomainDeltaResult:
 	wrong_category_skipped_count: int = 0
 	detail_missing_timestamp_count: int = 0
 	detail_missing_category_count: int = 0
+	source_stale_timestamp_count: int = 0
+	source_missing_timestamp_baseline_count: int = 0
+	filter_fingerprint_baseline_needed: bool = False
+	filter_fingerprint_baseline_count: int = 0
+	filter_fingerprint: str | None = None
+	filter_contract_version: str | None = None
+	source_strategy: str | None = None
 
 
 @dataclass
@@ -382,6 +391,135 @@ def _runtime_search_params(params: dict) -> dict:
 	return normalize_catalog_search_params(params)
 
 
+def _canonical_filter_value(value):
+	if isinstance(value, (list, tuple, set, frozenset)):
+		return sorted(str(item) for item in value if item not in (None, ""))
+	if value in (None, ""):
+		return None
+	return str(value)
+
+
+def _source_strategy_for_filter_fingerprint(params: dict) -> str:
+	from app.scraper.source_selector import should_use_hydration_source, should_use_hydration_ssr_photo_merge
+
+	if should_use_hydration_ssr_photo_merge(params):
+		return "hydration_ssr_photo_merge"
+	if should_use_hydration_source(params):
+		return "hydration"
+	return "api"
+
+
+def _filter_fingerprint_payload(context: MonitorCheckContext) -> dict:
+	search_params = _runtime_search_params(context.params)
+	relevant_keys = (
+		"brand_ids[]",
+		"brand_ids",
+		"catalog[]",
+		"catalog_ids[]",
+		"catalog_ids",
+		"gender_ids[]",
+		"gender_ids",
+		"size_ids[]",
+		"size_ids",
+		"status_ids[]",
+		"status_ids",
+		"color_ids[]",
+		"color_ids",
+		"material_ids[]",
+		"material_ids",
+		"price_from",
+		"price_to",
+		"search_text",
+		"order",
+	)
+	filter_params = {
+		key: _canonical_filter_value(search_params.get(key))
+		for key in relevant_keys
+		if _canonical_filter_value(search_params.get(key)) is not None
+	}
+	return {
+		"contract_version": FILTER_CONTRACT_VERSION,
+		"source_strategy": _source_strategy_for_filter_fingerprint(context.params),
+		"filters": filter_params,
+	}
+
+
+def _filter_fingerprint(context: MonitorCheckContext) -> tuple[str, str]:
+	payload = _filter_fingerprint_payload(context)
+	encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+	return hashlib.sha256(encoded).hexdigest(), str(payload["source_strategy"])
+
+
+async def _load_filter_baseline(
+	db,
+	*,
+	monitor_id: int,
+	domain: str,
+) -> MonitorFilterBaseline | None:
+	result = await db.execute(
+		select(MonitorFilterBaseline).where(
+			MonitorFilterBaseline.monitor_id == monitor_id,
+			MonitorFilterBaseline.domain == domain,
+		)
+	)
+	return result.scalar_one_or_none()
+
+
+def _source_item_is_stale(context: MonitorCheckContext, item: VintedItem) -> bool:
+	if context.is_cold_start or context.freshness_cutoff_at is None or item.listed_at is None:
+		return False
+	cutoff_source = context.freshness_cutoff_at
+	if cutoff_source.tzinfo is None:
+		cutoff_source = cutoff_source.replace(tzinfo=timezone.utc)
+	cutoff = cutoff_source.astimezone(timezone.utc) - timedelta(seconds=settings.monitor_freshness_grace_seconds)
+	listed_at = item.listed_at
+	if listed_at.tzinfo is None:
+		listed_at = listed_at.replace(tzinfo=timezone.utc)
+	return listed_at.astimezone(timezone.utc) < cutoff
+
+
+def _requires_filter_contract_baseline(context: MonitorCheckContext, item: VintedItem) -> bool:
+	"""No-notify baseline the semantic gap introduced by trusting brand-filtered source pages."""
+	return bool(context.monitor_filters.brand_ids and item.brand_id is None and item.listed_at is None)
+
+
+async def _upsert_filter_baselines(
+	db,
+	*,
+	context: MonitorCheckContext,
+	domain_deltas: list[DomainDeltaResult],
+	now: datetime,
+) -> None:
+	for delta in domain_deltas:
+		if not delta.filter_fingerprint or not delta.source_strategy:
+			continue
+		baseline = await _load_filter_baseline(
+			db,
+			monitor_id=context.monitor_id,
+			domain=delta.domain,
+		)
+		if baseline is None:
+			db.add(
+				MonitorFilterBaseline(
+					monitor_id=context.monitor_id,
+					domain=delta.domain,
+					filter_fingerprint=delta.filter_fingerprint,
+					filter_contract_version=delta.filter_contract_version or FILTER_CONTRACT_VERSION,
+					source_strategy=delta.source_strategy,
+					baselined_at=now,
+					created_at=now,
+					updated_at=now,
+				)
+			)
+			continue
+		if baseline.filter_fingerprint != delta.filter_fingerprint:
+			baseline.baselined_at = now
+		baseline.filter_fingerprint = delta.filter_fingerprint
+		baseline.filter_contract_version = delta.filter_contract_version or FILTER_CONTRACT_VERSION
+		baseline.source_strategy = delta.source_strategy
+		baseline.updated_at = now
+
+
 async def _load_seen_item_ids(db, monitor_id: int, domain: str, item_ids: set[int]) -> set[int]:
 	if not item_ids:
 		return set()
@@ -561,12 +699,25 @@ async def _select_domain_delta_items(
 		result.domain,
 		accepted_ids,
 	)
+	filter_fingerprint, source_strategy = _filter_fingerprint(context)
+	filter_baseline = await _load_filter_baseline(
+		db,
+		monitor_id=context.monitor_id,
+		domain=result.domain,
+	)
+	filter_fingerprint_baseline_needed = (
+		filter_baseline is None
+		or filter_baseline.filter_fingerprint != filter_fingerprint
+	)
 	known_ids = seen_ids | found_ids
 	new_items: list[VintedItem] = []
 	baseline_items: list[VintedItem] = []
 	seen_only_items: list[VintedItem] = []
 	seen_boundary_hit = False
 	stopped_at_seen_item_id: int | None = None
+	source_stale_timestamp_count = 0
+	source_missing_timestamp_baseline_count = 0
+	filter_fingerprint_baseline_count = 0
 	defer_summary_seen_boundary = (
 		settings.monitor_detail_guard_enabled
 		and settings.monitor_detail_category_guard_enabled
@@ -588,6 +739,15 @@ async def _select_domain_delta_items(
 			seen_boundary_hit = True
 			stopped_at_seen_item_id = item.id
 			break
+		if _source_item_is_stale(context, item):
+			source_stale_timestamp_count += 1
+			seen_only_items.append(item)
+			continue
+		if filter_fingerprint_baseline_needed and _requires_filter_contract_baseline(context, item):
+			source_missing_timestamp_baseline_count += 1
+			filter_fingerprint_baseline_count += 1
+			baseline_items.append(item)
+			continue
 		new_items.append(item)
 
 	return DomainDeltaResult(
@@ -605,6 +765,13 @@ async def _select_domain_delta_items(
 		new_items=new_items,
 		baseline_items=baseline_items,
 		seen_only_items=seen_only_items,
+		source_stale_timestamp_count=source_stale_timestamp_count,
+		source_missing_timestamp_baseline_count=source_missing_timestamp_baseline_count,
+		filter_fingerprint_baseline_needed=filter_fingerprint_baseline_needed,
+		filter_fingerprint_baseline_count=filter_fingerprint_baseline_count,
+		filter_fingerprint=filter_fingerprint,
+		filter_contract_version=FILTER_CONTRACT_VERSION,
+		source_strategy=source_strategy,
 	)
 
 
@@ -947,6 +1114,16 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 					wrong_category_skipped_count = sum(delta.wrong_category_skipped_count for delta in domain_deltas)
 					detail_missing_timestamp_count = sum(delta.detail_missing_timestamp_count for delta in domain_deltas)
 					detail_missing_category_count = sum(delta.detail_missing_category_count for delta in domain_deltas)
+					source_stale_timestamp_count = sum(delta.source_stale_timestamp_count for delta in domain_deltas)
+					source_missing_timestamp_baseline_count = sum(
+						delta.source_missing_timestamp_baseline_count for delta in domain_deltas
+					)
+					filter_fingerprint_baseline_count = sum(
+						delta.filter_fingerprint_baseline_count for delta in domain_deltas
+					)
+					filter_fingerprint_baseline_domains = sum(
+						1 for delta in domain_deltas if delta.filter_fingerprint_baseline_count > 0
+					)
 
 					logger.info(
 						"Monitor delta check results: monitor_id=%s user_id=%s monitor_name=%s filter_keys=%s "
@@ -955,7 +1132,9 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 						"missing_brand_id_count=%s detail_requests_count=%s detail_success_count=%s "
 						"detail_failed_count=%s detail_cap_exceeded_count=%s stale_skipped_count=%s "
 						"wrong_category_skipped_count=%s detail_missing_timestamp_count=%s "
-						"detail_missing_category_count=%s cold_start=%s",
+						"detail_missing_category_count=%s source_stale_timestamp_count=%s "
+						"source_missing_timestamp_baseline_count=%s filter_fingerprint_baseline_count=%s "
+						"filter_fingerprint_baseline_domains=%s cold_start=%s",
 						monitor.id,
 						context.user_id,
 						monitor.name,
@@ -977,6 +1156,10 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 						wrong_category_skipped_count,
 						detail_missing_timestamp_count,
 						detail_missing_category_count,
+						source_stale_timestamp_count,
+						source_missing_timestamp_baseline_count,
+						filter_fingerprint_baseline_count,
+						filter_fingerprint_baseline_domains,
 						context.is_cold_start,
 					)
 					for delta in domain_deltas:
@@ -986,7 +1169,9 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 							"skipped_by_filter_count=%s missing_brand_id_count=%s request_count=%s duration_ms=%s "
 							"detail_requests_count=%s detail_success_count=%s detail_failed_count=%s "
 							"detail_cap_exceeded_count=%s stale_skipped_count=%s wrong_category_skipped_count=%s "
-							"detail_missing_timestamp_count=%s detail_missing_category_count=%s error=%s",
+							"detail_missing_timestamp_count=%s detail_missing_category_count=%s "
+							"source_stale_timestamp_count=%s source_missing_timestamp_baseline_count=%s "
+							"filter_fingerprint_baseline_needed=%s filter_fingerprint_baseline_count=%s error=%s",
 							monitor.id,
 							delta.domain,
 							delta.raw_count,
@@ -1006,6 +1191,10 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 							delta.wrong_category_skipped_count,
 							delta.detail_missing_timestamp_count,
 							delta.detail_missing_category_count,
+							delta.source_stale_timestamp_count,
+							delta.source_missing_timestamp_baseline_count,
+							delta.filter_fingerprint_baseline_needed,
+							delta.filter_fingerprint_baseline_count,
 							delta.error,
 						)
 
@@ -1018,7 +1207,9 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 
 					now = datetime.now(timezone.utc)
 					for delta in domain_deltas:
-						delta_items = delta.baseline_items if context.is_cold_start else delta.new_items
+						delta_items = list(delta.baseline_items)
+						if not context.is_cold_start:
+							delta_items.extend(delta.new_items)
 						seen_source_items = list(delta_items) + list(delta.seen_only_items)
 						seen_source_ids: set[int] = set()
 						for item in seen_source_items:
@@ -1063,6 +1254,13 @@ async def check_monitor(monitor_id: int, scraper_client: VintedClient | None = N
 							index_elements=["monitor_id", "vinted_item_id"]
 						)
 						await db.execute(found_stmt)
+
+					await _upsert_filter_baselines(
+						db,
+						context=context,
+						domain_deltas=domain_deltas,
+						now=now,
+					)
 
 					await _update_monitor_interval(
 						db,

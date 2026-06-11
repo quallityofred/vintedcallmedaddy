@@ -97,7 +97,7 @@ async def test_post_monitor_dry_run_source_calls_hydration_and_returns_samples()
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.post("/api/v1/diagnostics/monitors/22/dry-run-source")
+            response = await client.post("/api/v1/diagnostics/monitors/22/dry-run-source", json={})
             assert response.status_code == 200
             data = response.json()
             assert data["selected_source"] == "hydration"

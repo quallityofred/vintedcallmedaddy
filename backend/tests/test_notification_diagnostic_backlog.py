@@ -94,7 +94,15 @@ async def test_notification_dry_run_large_backlog(db_session, engine, monkeypatc
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Call process-pending with dry_run=true
         start_time = asyncio.get_event_loop().time()
-        response = await client.post(f"/api/v1/diagnostics/notifications/process-pending?monitor_id={monitor.id}&limit=20&sample_limit=10&dry_run=true")
+        response = await client.post(
+            "/api/v1/diagnostics/notifications/process-pending",
+            json={
+                "monitor_id": monitor.id,
+                "limit": 20,
+                "sample_limit": 10,
+                "dry_run": True,
+            },
+        )
         duration = asyncio.get_event_loop().time() - start_time
         
     assert response.status_code == 200

@@ -8,6 +8,7 @@ tags:
 
 # Changelog
 
+- 2026-06-11: Fixed `issue/fixed` stale-listing notification flood after brand-filter relaxation. Brand-filtered items with missing item-level `brand_id` and no source timestamp now seed a monitor/domain filter-fingerprint baseline as `SeenItem` without `FoundItem`; source `listed_at` older than the previous check minus grace is also marked seen-only. Added `monitor_filter_baselines` state and regression coverage for Kapital-style item `9062601700` showing Vinted UI age `1 Woche`; diagnostics remain capped at 20/20 for production dry-runs.
 - 2026-06-02: Initialized `Codex Memory/vintedbot` and verified read access to the repository and compatibility wrapper files.
 - 2026-06-02: Verified that `Projects/vintedbot` is a junction to `C:\Users\egory\vintedbot`; both paths resolve to the same git working tree.
 - 2026-06-02: Built a graph-friendly memory structure with component notes, audit notes, issue records, and linked decision notes after auditing `Projects/vintedbot`.
