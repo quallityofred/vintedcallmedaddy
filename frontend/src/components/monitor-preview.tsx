@@ -413,6 +413,12 @@ export function MonitorPreview() {
   const hasMonitors = monitors && monitors.length > 0;
   const isSubmitting = isPending(editingMonitor ? `monitor:${editingMonitor.id}:save` : "monitor:create");
   const bulkDeleting = isPending("monitors:bulk-delete");
+  const bulkPausing = isPending("monitors:bulk-pause");
+  const bulkResuming = isPending("monitors:bulk-resume");
+  const bulkBusy = bulkDeleting || bulkPausing || bulkResuming;
+
+  const activeCount = monitors?.filter((m) => m.is_active).length || 0;
+  const pausedCount = (monitors?.length || 0) - activeCount;
 
   return (
     <Card className="glass-panel min-w-0 overflow-hidden">
