@@ -12,7 +12,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Optional
 
-from app.web.api_dependencies import require_api_user
+from app.web.api_dependencies import require_api_user, require_api_admin
 from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
 from app.models import User, Monitor, FoundItem, SeenItem
@@ -209,7 +209,7 @@ async def get_monitor_source_selection(
 @router.get("/monitors/url-normalization-audit")
 async def get_url_normalization_audit(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_api_admin),
 ):
     """Audit all monitors for broad/order-only feed risks."""
     from app.scraper.url_parser import get_effective_monitor_request_params
