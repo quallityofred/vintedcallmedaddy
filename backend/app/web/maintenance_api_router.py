@@ -37,7 +37,7 @@ async def post_monitor_cold_start_reset(
     monitor_id: int,
     request: ColdStartResetRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_user),
+    user: User = Depends(require_api_admin),
 ):
     """
     Safely reset a monitor to a cold-start state.
@@ -95,7 +95,7 @@ async def post_monitor_cold_start_reset(
 async def post_pending_notifications_ack_no_notify(
     request: AckNoNotifyRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_user),
+    user: User = Depends(require_api_admin),
 ):
     """
     Perform a safe acknowledgement of pending FoundItems without notification.
@@ -140,7 +140,7 @@ async def post_pending_notifications_dry_run(
     sample_limit: int = Query(default=10, ge=0, le=20),
     dry_run: bool = Query(default=True),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_user),
+    user: User = Depends(require_api_admin),
 ):
     """
     Perform a dry-run pending notification analysis.
@@ -171,7 +171,7 @@ async def post_pending_notifications_dry_run(
 async def post_suspect_brand_filter_backlog_ack(
     request: SuspectBrandFilterBacklogAckRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_user),
+    user: User = Depends(require_api_admin),
 ):
     """
     Identify or acknowledge suspect pending rows created by unverified brand-filter source trust.
@@ -207,7 +207,7 @@ async def post_suspect_brand_filter_backlog_ack(
 async def post_bad_url_backlog_ack(
     request: BadUrlBacklogAckRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_user),
+    user: User = Depends(require_api_admin),
 ):
     """
     Identify or acknowledge suspect pending rows created by broad/order-only monitors.
@@ -241,7 +241,7 @@ async def post_bad_url_backlog_ack(
 async def post_ack_pending_before_resume(
     request: AckPendingBeforeResumeRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_user),
+    user: User = Depends(require_api_admin),
 ):
     """
     Mark pending FoundItems as no-notify before Telegram is re-enabled.
@@ -288,7 +288,7 @@ async def post_ack_pending_before_resume(
 async def post_history_retention_cleanup(
     request: RetentionCleanupRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_api_user),
+    user: User = Depends(require_api_admin),
 ):
     """
     Perform history retention cleanup.
