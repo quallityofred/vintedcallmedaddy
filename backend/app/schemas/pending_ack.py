@@ -34,6 +34,18 @@ class BadUrlBacklogAckRequest(BaseModel):
     confirm: Optional[str] = None
     extra_confirm: Optional[List[str]] = None
 
+class AckPendingBeforeResumeRequest(BaseModel):
+    dry_run: bool = True
+    cutoff_found_before: Optional[datetime] = None
+    cutoff_created_before: Optional[datetime] = None
+    monitor_ids: Optional[List[int]] = None
+    user_ids: Optional[List[int]] = None
+    include_valid_positive_brand_evidence: bool = False
+    include_unknown_cause: bool = False
+    sample_limit: int = Field(default=20, ge=0, le=50)
+    reason: str
+    confirmations: List[str] = Field(default_factory=list)
+
 class RetentionCleanupRequest(BaseModel):
     dry_run: bool = True
     monitor_ids: Optional[List[int]] = None

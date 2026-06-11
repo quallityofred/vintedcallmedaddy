@@ -550,3 +550,110 @@ async def run_suspect_brand_filter_backlog_ack(
             "runs_check": False,
         },
     }
+
+
+async def run_ack_pending_before_resume(
+    db: AsyncSession,
+    *,
+    dry_run: bool = True,
+    cutoff_found_before: Optional[datetime] = None,
+    cutoff_created_before: Optional[datetime] = None,
+    monitor_ids: Optional[List[int]] = None,
+    user_ids: Optional[List[int]] = None,
+    include_valid_positive_brand_evidence: bool = False,
+    include_unknown_cause: bool = False,
+    sample_limit: int = 20,
+    reason: str,
+) -> Dict[str, Any]:
+    now = utc_now()
+    stmt = select(FoundItem, Monitor).join(Monitor, FoundItem.monitor_id == Monitor.id)
+    stmt = stmt.where(FoundItem.notified == False)
+
+    if monitor_ids:
+        stmt = stmt.where(FoundItem.monitor_id.in_(monitor_ids))
+    if user_ids:
+        stmt = stmt.where(Monitor.user_id.in_(user_ids))
+
+    # Apply cutoff filters
+    if cutoff_found_before:
+        if cutoff_found_before.tzinfo is None:
+            cutoff_found_before = cutoff_found_before.replace(tzinfo=timezone.utc)
+        stmt = stmt.where(FoundItem.found_at < cutoff_found_before)
+    
+    # We use found_at for created_before as well if specific created_at field is missing
+    if cutoff_created_before:
+        if cutoff_created_before.tzinfo is None:
+            cutoff_created_before = cutoff_created_before.replace(tzinfo=timezone.utc)
+        stmt = stmt.where(FoundItem.found_at < cutoff_created_before)
+
+    rows = (await db.execute(stmt.order_by(FoundItem.found_at.asc(), FoundItem.id.asc()))).all()
+
+    eligible: list[FoundItem] = []
+    samples: list[dict[str, Any]] = []
+    
+    counts = {
+        "matched_pending_count": len(rows),
+        "excluded_valid_positive_brand_evidence_count": 0,
+        "excluded_unknown_cause_count": 0,
+        "excluded_after_cutoff_count": 0, # Placeholder if we decide to fetch more and filter in python
+    }
+    
+    by_monitor = {}
+    by_cause = {}
+    by_domain = {}
+
+    for item, monitor in rows:
+        classification = _classify_pending_row(item, monitor)
+        cause = classification["likely_cause"]
+        
+        # Eligibility checks
+        is_eligible = True
+        
+        if cause == "valid_positive_brand_evidence" and not include_valid_positive_brand_evidence:
+            counts["excluded_valid_positive_brand_evidence_count"] += 1
+            is_eligible = False
+        elif cause == "unknown" and not include_unknown_cause:
+            counts["excluded_unknown_cause_count"] += 1
+            is_eligible = False
+            
+        if is_eligible:
+            eligible.append(item)
+            if len(samples) < sample_limit:
+                samples.append(_pending_sample(item, monitor, classification))
+        
+        # Always track stats
+        by_monitor[item.monitor_id] = by_monitor.get(item.monitor_id, 0) + 1
+        by_cause[cause] = by_cause.get(cause, 0) + 1
+        by_domain[item.domain] = by_domain.get(item.domain, 0) + 1
+
+    acked_count = 0
+    if not dry_run and eligible:
+        for item in eligible:
+            item.notified = True
+            acked_count += 1
+        await db.commit()
+
+    return {
+        "dry_run": dry_run,
+        "reason": reason,
+        "recommended_cutoff_found_before": now.isoformat(),
+        "recommended_cutoff_created_before": now.isoformat(),
+        "server_now": now.isoformat(),
+        "matched_pending_count": counts["matched_pending_count"],
+        "eligible_count": len(eligible),
+        "acked_count": acked_count,
+        "excluded_valid_positive_brand_evidence_count": counts["excluded_valid_positive_brand_evidence_count"],
+        "excluded_unknown_cause_count": counts["excluded_unknown_cause_count"],
+        "counts_by_monitor": by_monitor,
+        "counts_by_cause": by_cause,
+        "counts_by_domain": by_domain,
+        "samples": samples,
+        "side_effects": {
+            "reads_database": True,
+            "writes_database": not dry_run and acked_count > 0,
+            "marks_notified": not dry_run and acked_count > 0,
+            "sends_telegram": False,
+            "calls_vinted": False,
+        },
+        "warning": "This endpoint intentionally suppresses currently pending notifications. It should be used only before resuming Telegram after downtime/debugging."
+    }

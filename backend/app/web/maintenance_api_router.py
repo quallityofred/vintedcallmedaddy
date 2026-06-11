@@ -1,14 +1,10 @@
 from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.web.api_dependencies import require_api_user
-from app.web.csrf import require_api_csrf
-from app.web.dependencies import get_db
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from app.web.api_dependencies import require_api_user
 from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
@@ -19,6 +15,7 @@ from app.scheduler.pending_diagnostics import (
     run_pending_notifications_ack_no_notify,
     run_suspect_brand_filter_backlog_ack,
     run_bad_url_backlog_ack,
+    run_ack_pending_before_resume,
 )
 from app.scheduler.cold_start_reset import run_monitor_cold_start_reset
 from app.config import get_settings
@@ -28,6 +25,7 @@ from app.schemas.pending_ack import (
     ColdStartResetRequest,
     SuspectBrandFilterBacklogAckRequest,
     BadUrlBacklogAckRequest,
+    AckPendingBeforeResumeRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -237,6 +235,53 @@ async def post_bad_url_backlog_ack(
         )
     except Exception as e:
         logger.exception("Failed to run bad URL backlog ack")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/pending-notifications/ack-pending-before-resume", dependencies=[Depends(require_api_csrf)])
+async def post_ack_pending_before_resume(
+    request: AckPendingBeforeResumeRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """
+    Mark pending FoundItems as no-notify before Telegram is re-enabled.
+    """
+    if not request.dry_run:
+        if not request.reason:
+            raise HTTPException(status_code=400, detail="Reason required for live ack.")
+        
+        # Cutoff safety
+        if not request.cutoff_found_before and not request.cutoff_created_before:
+            raise HTTPException(
+                status_code=400, 
+                detail="Explicit cutoff required for live mode (cutoff_found_before or cutoff_created_before)."
+            )
+
+        # Confirmations
+        required = [
+            "ACK_PENDING_BEFORE_RESUME_NO_NOTIFY",
+            "I_UNDERSTAND_VALID_PENDING_ITEMS_WILL_NOT_BE_SENT",
+            "I_UNDERSTAND_THIS_WILL_NOT_SEND_TELEGRAM",
+        ]
+        missing = [c for c in required if c not in request.confirmations]
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Missing required confirmations: {', '.join(missing)}")
+
+    try:
+        return await run_ack_pending_before_resume(
+            db=db,
+            dry_run=request.dry_run,
+            cutoff_found_before=request.cutoff_found_before,
+            cutoff_created_before=request.cutoff_created_before,
+            monitor_ids=request.monitor_ids,
+            user_ids=request.user_ids,
+            include_valid_positive_brand_evidence=request.include_valid_positive_brand_evidence,
+            include_unknown_cause=request.include_unknown_cause,
+            sample_limit=request.sample_limit,
+            reason=request.reason,
+        )
+    except Exception as e:
+        logger.exception("Failed to run ack pending before resume")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/history-retention/cleanup", dependencies=[Depends(require_api_csrf)])
