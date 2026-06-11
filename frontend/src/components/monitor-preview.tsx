@@ -290,6 +290,35 @@ export function MonitorPreview() {
     });
   };
 
+  const handleBulkState = async (action: "pause" | "resume") => {
+    const activeCount = monitors?.filter((m) => m.is_active).length || 0;
+    const pausedCount = (monitors?.length || 0) - activeCount;
+
+    const confirmationMessage =
+      action === "pause"
+        ? `Disable all ${activeCount} currently enabled monitors? This will stop new checks until re-enabled.`
+        : `Enable all ${pausedCount} currently disabled monitors?`;
+
+    if (!confirm(confirmationMessage)) return;
+
+    await runAction(`monitors:bulk-${action}`, async () => {
+      const response = await csrfFetch("/api/v1/monitors/bulk-state", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action, dry_run: false }),
+      });
+
+      const result = (await response.json()) as { changed_count: number };
+      toast.success(`${action === "pause" ? "Paused" : "Resumed"} ${result.changed_count} monitors`);
+      void fetchMonitors();
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : `Bulk ${action} failed`;
+      toast.error(message);
+    });
+  };
+
   const handleCreateOrUpdate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (draft.domains.length === 0) {
@@ -541,8 +570,8 @@ export function MonitorPreview() {
               {hasSelection ? (
                 <Button
                   aria-label={`Delete ${selectedIds.length} selected monitors`}
-                  className="w-full sm:w-auto"
-                  disabled={bulkDeleting}
+                  className="h-8 text-[11px]"
+                  disabled={bulkBusy}
                   onClick={handleBulkDelete}
                   size="sm"
                   variant="destructive"
@@ -551,7 +580,29 @@ export function MonitorPreview() {
                   Delete selected ({selectedIds.length})
                 </Button>
               ) : (
-                <p className="text-xs text-muted-foreground">{monitors?.length || 0} monitor records</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    disabled={activeCount === 0 || bulkBusy}
+                    onClick={() => handleBulkState("pause")}
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-[11px]"
+                  >
+                    {bulkPausing ? <Loader2 className="size-3 animate-spin" /> : <Pause className="size-3" />}
+                    Disable all enabled ({activeCount})
+                  </Button>
+                  <Button
+                    disabled={pausedCount === 0 || bulkBusy}
+                    onClick={() => handleBulkState("resume")}
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-[11px]"
+                  >
+                    {bulkResuming ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />}
+                    Enable all paused ({pausedCount})
+                  </Button>
+                  <p className="ml-2 text-xs text-muted-foreground">{monitors?.length || 0} monitors</p>
+                </div>
               )}
             </div>
 

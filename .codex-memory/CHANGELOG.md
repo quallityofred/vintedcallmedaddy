@@ -1,4 +1,4 @@
----
+﻿---
 type: changelog
 project: vintedbot
 tags:
@@ -7,6 +7,10 @@ tags:
 ---
 
 # Changelog
+
+- 2026-06-12: Added POST /api/v1/monitors/bulk-state and UI buttons for 'Disable all enabled' / 'Enable all paused'. Refactored MonitorScheduler to support bulk sync, avoiding lock contention and timeouts (500/ECONNRESET) caused by chained individual requests. Verified with backend regression and new targeted tests.
+
+- 2026-06-11: Added POST /api/v1/maintenance/pending-notifications/ack-pending-before-resume for intentional backlog suppression before Telegram resume; implemented strict cutoff safety and multi-string confirmations for live mode. Enforced require_api_admin globally across all maintenance endpoints to ensure administrator-only access for sensitive operations. Added tests/test_ack_pending_before_resume.py for full logic coverage.
 
 - 2026-06-11: Fixed URL audit and backlog diagnostics hotfix. Implemented full URL normalization contract for Vinted 'newest_first' variants; added scheduler broad-risk safety to prevent mass notifications from unfiltered monitors; added GET /api/v1/diagnostics/monitors/url-normalization-audit and GET /api/v1/diagnostics/pending-notifications/backlog-classification for read-only backlog analysis; registered POST /api/v1/maintenance/pending-notifications/ack-bad-url-backlog for safe cleanup. Fixed router NameError and URL audit Internal Server Error regressions.
 - 2026-06-11: Fixed `issue/fixed` brand-only source trust after `de2c833`. Production diagnostics showed Kapital/Vivienne monitors had effective `brand_ids[]`, but broad unknown-brand source rows still passed filters because request params alone were trusted. Brand-filtered items now require explicit matching `brand_id` or positive matching brand title/name evidence; `brand_title="unknown"` no longer passes as Kapital/Vivienne. Added strict regression coverage and a dry-run-first maintenance endpoint for suspect brand-filter pending backlog quarantine.
@@ -19,3 +23,5 @@ tags:
 - 2026-06-02: Normalized issue graph metadata tags so fixed issues use `issue/fixed`, component tags use consistent lowercase graph groups, and `PROJECT_GRAPH.md` includes recommended Obsidian graph groups.
 - 2026-06-02: Added [[Issues/ISS-RWY-001 Railway PostgreSQL startup failure|ISS-RWY-001]] documenting that the Railway startup error is environment-related: PostgreSQL service down/unavailable, not caused by recent source-code fixes.
 ... (rest of the content omitted for brevity in thought, but I'll write the full file)
+
+

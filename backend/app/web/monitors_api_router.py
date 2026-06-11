@@ -69,6 +69,29 @@ class BulkDeleteResponse(BaseModel):
     not_found_or_forbidden_ids: List[int]
 
 
+class BulkStateRequest(BaseModel):
+    action: str = Field(..., pattern="^(pause|resume)$")
+    monitor_ids: Optional[List[int]] = Field(None, max_length=100)
+    only_current_state: bool = True
+    dry_run: bool = False
+
+
+class BulkStateResponse(BaseModel):
+    dry_run: bool
+    action: str
+    matched_count: int
+    changed_count: int
+    skipped_count: int
+    not_found_or_not_allowed_count: int
+    changed_monitor_ids: List[int]
+    skipped_monitor_ids: List[int]
+    not_found_or_not_allowed_monitor_ids: List[int]
+    before: dict[str, int]
+    after: dict[str, int]
+    scheduler: dict[str, object]
+    side_effects: dict[str, bool]
+
+
 async def require_api_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -457,6 +480,115 @@ async def bulk_delete_monitors(
     return {
         "deleted_count": len(monitors),
         "not_found_or_forbidden_ids": not_found_or_forbidden_ids
+    }
+
+
+@router.post("/bulk-state", response_model=BulkStateResponse, dependencies=[Depends(require_csrf)])
+async def post_monitors_bulk_state(
+    request: Request,
+    data: BulkStateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_user),
+):
+    """
+    Bulk pause or resume monitors.
+    """
+    stmt = select(Monitor).where(Monitor.user_id == user.id)
+    if data.monitor_ids is not None:
+        stmt = stmt.where(Monitor.id.in_(data.monitor_ids))
+    
+    result = await db.execute(stmt)
+    all_selected = result.scalars().all()
+    
+    found_ids = {m.id for m in all_selected}
+    not_found_or_not_allowed_ids = []
+    if data.monitor_ids is not None:
+        not_found_or_not_allowed_ids = [id for id in data.monitor_ids if id not in found_ids]
+
+    target_active = (data.action == "resume")
+    
+    to_change = []
+    skipped = []
+    
+    before_active = 0
+    before_inactive = 0
+    
+    for m in all_selected:
+        if m.is_active:
+            before_active += 1
+        else:
+            before_inactive += 1
+            
+        if m.is_active == target_active:
+            skipped.append(m)
+        else:
+            to_change.append(m)
+
+    changed_ids = [m.id for m in to_change]
+    skipped_ids = [m.id for m in skipped]
+    
+    after_active = before_active
+    after_inactive = before_inactive
+    
+    if not data.dry_run and to_change:
+        for m in to_change:
+            m.is_active = target_active
+            if target_active:
+                after_active += 1
+                after_inactive -= 1
+            else:
+                after_active -= 1
+                after_inactive += 1
+        
+        await db.commit()
+        
+        scheduler = get_scheduler(request)
+        if scheduler:
+            try:
+                await scheduler.bulk_sync_monitors(changed_ids, is_active=target_active)
+                scheduler_updated = True
+                scheduler_errors = []
+            except Exception as e:
+                logger.exception("Scheduler bulk sync failed after DB commit")
+                scheduler_updated = False
+                scheduler_errors = [str(e)]
+        else:
+            scheduler_updated = False
+            scheduler_errors = ["scheduler_not_available"]
+    else:
+        scheduler_updated = False
+        scheduler_errors = []
+
+    return {
+        "dry_run": data.dry_run,
+        "action": data.action,
+        "matched_count": len(all_selected),
+        "changed_count": len(to_change),
+        "skipped_count": len(skipped),
+        "not_found_or_not_allowed_count": len(not_found_or_not_allowed_ids),
+        "changed_monitor_ids": changed_ids,
+        "skipped_monitor_ids": skipped_ids,
+        "not_found_or_not_allowed_monitor_ids": not_found_or_not_allowed_ids,
+        "before": {
+            "active_count": before_active,
+            "inactive_count": before_inactive
+        },
+        "after": {
+            "active_count": after_active,
+            "inactive_count": after_inactive
+        },
+        "scheduler": {
+            "updated": scheduler_updated,
+            "strategy": "bulk_sync",
+            "errors": scheduler_errors
+        },
+        "side_effects": {
+            "writes_database": not data.dry_run and len(to_change) > 0,
+            "updates_scheduler_jobs": scheduler_updated,
+            "runs_check": False,
+            "calls_vinted": False,
+            "sends_telegram": False
+        }
     }
 
 

@@ -1699,46 +1699,51 @@ class MonitorScheduler:
 			result = await db.execute(select(Monitor).where(Monitor.is_active == True))  # noqa: E712
 			return list(result.scalars().all())
 
+	async def _recalculate_pacing_internal(self) -> PacingCalculationResult:
+		"""Internal recalculation, assumes lock is held."""
+		monitors = await self._load_active_monitors()
+		self._pacing_result = calculate_effective_monitor_intervals(
+			monitors,
+			global_rpm=settings.vinted_global_safe_requests_per_minute,
+			per_domain_rpm=settings.vinted_domain_safe_requests_per_minute,
+			jitter_ratio=settings.vinted_request_jitter_ratio,
+			adaptive_enabled=settings.vinted_adaptive_pacing_enabled,
+		)
+		return self._pacing_result
+
 	async def recalculate_pacing(self) -> PacingCalculationResult:
 		"""
 		Recalculate adaptive pacing based on current active monitors.
 		Does not automatically reschedule jobs unless called during start or update.
 		"""
 		async with self._lock:
-			monitors = await self._load_active_monitors()
-			self._pacing_result = calculate_effective_monitor_intervals(
-				monitors,
-				global_rpm=settings.vinted_global_safe_requests_per_minute,
-				per_domain_rpm=settings.vinted_domain_safe_requests_per_minute,
-				jitter_ratio=settings.vinted_request_jitter_ratio,
-				adaptive_enabled=settings.vinted_adaptive_pacing_enabled,
-			)
-			return self._pacing_result
+			return await self._recalculate_pacing_internal()
 
 	async def start(self) -> None:
 		"""Load active monitors from DB and start all their jobs."""
-		pacing = await self.recalculate_pacing()
-		
-		for m_info in pacing.monitors:
-			stagger = random.uniform(5.0, 30.0) + m_info.jitter_seconds
-			job = self.scheduler.add_job(
-				check_monitor,
-				trigger=IntervalTrigger(seconds=m_info.effective_interval_seconds),
-				args=[m_info.monitor_id],
-				id=f"monitor_{m_info.monitor_id}",
-				next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
-			)
-			if job:
-				self.job_ids[m_info.monitor_id] = job.id
+		async with self._lock:
+			pacing = await self._recalculate_pacing_internal()
+			
+			for m_info in pacing.monitors:
+				stagger = random.uniform(5.0, 30.0) + m_info.jitter_seconds
+				job = self.scheduler.add_job(
+					check_monitor,
+					trigger=IntervalTrigger(seconds=m_info.effective_interval_seconds),
+					args=[m_info.monitor_id],
+					id=f"monitor_{m_info.monitor_id}",
+					next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
+				)
+				if job:
+					self.job_ids[m_info.monitor_id] = job.id
 
-		if settings.pending_notifications_worker_enabled:
-			self.scheduler.add_job(
-				run_pending_notifications_worker,
-				trigger=IntervalTrigger(seconds=settings.pending_notifications_worker_interval_seconds),
-				id="pending_notifications_processor",
-			)
-		self.scheduler.start()
-		logger.info("Scheduler started with %d monitors (adaptive=%s)", len(pacing.monitors), pacing.adaptive_enabled)
+			if settings.pending_notifications_worker_enabled:
+				self.scheduler.add_job(
+					run_pending_notifications_worker,
+					trigger=IntervalTrigger(seconds=settings.pending_notifications_worker_interval_seconds),
+					id="pending_notifications_processor",
+				)
+			self.scheduler.start()
+			logger.info("Scheduler started with %d monitors (adaptive=%s)", len(pacing.monitors), pacing.adaptive_enabled)
 
 	async def stop(self) -> None:
 		"""Shutdown the scheduler gracefully."""
@@ -1746,37 +1751,84 @@ class MonitorScheduler:
 
 	async def add_monitor(self, monitor_id: int, interval_sec: int) -> None:
 		"""Add a new job for a monitor. Triggers pacing recalculation."""
-		pacing = await self.recalculate_pacing()
-		m_info = next((m for m in pacing.monitors if m.monitor_id == monitor_id), None)
-		
-		interval = m_info.effective_interval_seconds if m_info else interval_sec
-		stagger = (m_info.jitter_seconds if m_info else 0) + random.uniform(1.0, 5.0)
+		async with self._lock:
+			pacing = await self._recalculate_pacing_internal()
+			m_info = next((m for m in pacing.monitors if m.monitor_id == monitor_id), None)
+			
+			interval = m_info.effective_interval_seconds if m_info else interval_sec
+			stagger = (m_info.jitter_seconds if m_info else 0) + random.uniform(1.0, 5.0)
 
-		job = self.scheduler.add_job(
-			check_monitor,
-			trigger=IntervalTrigger(seconds=interval),
-			args=[monitor_id],
-			id=f"monitor_{monitor_id}",
-			next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
-		)
-		if job:
-			self.job_ids[monitor_id] = job.id
-		
-		# If pacing significantly changed, we might want to reschedule others, 
-		# but for Phase 1 we only affect the new/updated monitor to avoid churn.
+			job = self.scheduler.add_job(
+				check_monitor,
+				trigger=IntervalTrigger(seconds=interval),
+				args=[monitor_id],
+				id=f"monitor_{monitor_id}",
+				next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
+			)
+			if job:
+				self.job_ids[monitor_id] = job.id
 
 	async def remove_monitor(self, monitor_id: int) -> None:
 		"""Remove an existing monitor job."""
-		job_id = self.job_ids.pop(monitor_id, None)
-		if job_id:
-			try:
-				self.scheduler.remove_job(job_id)
-			except Exception:
-				pass
-		await self.recalculate_pacing()
+		async with self._lock:
+			job_id = self.job_ids.pop(monitor_id, None)
+			if job_id:
+				try:
+					self.scheduler.remove_job(job_id)
+				except Exception:
+					pass
+			await self._recalculate_pacing_internal()
+
+	async def bulk_sync_monitors(self, monitor_ids: list[int], is_active: bool) -> None:
+		"""
+		Synchronize multiple monitors at once.
+		Acquires the lock once and recalculates pacing once.
+		"""
+		async with self._lock:
+			if not is_active:
+				# Remove jobs
+				for m_id in monitor_ids:
+					job_id = self.job_ids.pop(m_id, None)
+					if job_id:
+						try:
+							self.scheduler.remove_job(job_id)
+						except Exception:
+							pass
+			
+			# Recalculate pacing for all active monitors
+			pacing = await self._recalculate_pacing_internal()
+			
+			if is_active:
+				# Add jobs for the resumed monitors
+				# They should now be in the pacing result because they are active in DB
+				for m_id in monitor_ids:
+					# Check if job already exists to avoid duplication
+					if m_id in self.job_ids:
+						continue
+						
+					m_info = next((m for m in pacing.monitors if m.monitor_id == m_id), None)
+					if m_info:
+						stagger = random.uniform(5.0, 30.0) + m_info.jitter_seconds
+						job = self.scheduler.add_job(
+							check_monitor,
+							trigger=IntervalTrigger(seconds=m_info.effective_interval_seconds),
+							args=[m_id],
+							id=f"monitor_{m_id}",
+							next_run_time=datetime.now(timezone.utc) + timedelta(seconds=stagger),
+						)
+						if job:
+							self.job_ids[m_id] = job.id
+			
+			logger.info(
+				"Bulk sync complete: action=%s count=%d total_active=%d",
+				"resume" if is_active else "pause",
+				len(monitor_ids),
+				len(pacing.monitors)
+			)
 
 	async def update_monitor(self, monitor_id: int, interval_sec: int) -> None:
 		"""Reschedule a monitor. Triggers pacing recalculation."""
+		# Note: We don't acquire lock here because add/remove handle it
 		await self.remove_monitor(monitor_id)
 		await self.add_monitor(monitor_id, interval_sec)
 
