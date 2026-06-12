@@ -128,6 +128,7 @@ class MonitorFilterBaseline(Base):
     filter_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
     filter_contract_version: Mapped[str] = mapped_column(String, nullable=False)
     source_strategy: Mapped[str] = mapped_column(String, nullable=False)
+    max_vinted_item_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     baselined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

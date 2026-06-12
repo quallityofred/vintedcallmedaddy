@@ -177,6 +177,7 @@ class DomainDeltaResult:
 	filter_fingerprint: str | None = None
 	filter_contract_version: str | None = None
 	source_strategy: str | None = None
+	max_vinted_item_id: int | None = None
 
 
 @dataclass
@@ -525,6 +526,7 @@ async def _upsert_filter_baselines(
 					filter_fingerprint=delta.filter_fingerprint,
 					filter_contract_version=delta.filter_contract_version or FILTER_CONTRACT_VERSION,
 					source_strategy=delta.source_strategy,
+					max_vinted_item_id=delta.max_vinted_item_id,
 					baselined_at=now,
 					created_at=now,
 					updated_at=now,
@@ -533,6 +535,11 @@ async def _upsert_filter_baselines(
 			continue
 		if baseline.filter_fingerprint != delta.filter_fingerprint:
 			baseline.baselined_at = now
+			
+		if delta.max_vinted_item_id is not None:
+			if baseline.max_vinted_item_id is None or delta.max_vinted_item_id > baseline.max_vinted_item_id:
+				baseline.max_vinted_item_id = delta.max_vinted_item_id
+				
 		baseline.filter_fingerprint = delta.filter_fingerprint
 		baseline.filter_contract_version = delta.filter_contract_version or FILTER_CONTRACT_VERSION
 		baseline.source_strategy = delta.source_strategy
@@ -767,7 +774,16 @@ async def _select_domain_delta_items(
 			filter_fingerprint_baseline_count += 1
 			baseline_items.append(item)
 			continue
+		
+		# Newness gate: if item is untrusted (no timestamp), check high-watermark
+		if item.listed_at is None and filter_baseline and filter_baseline.max_vinted_item_id is not None:
+			if item.id <= filter_baseline.max_vinted_item_id:
+				seen_only_items.append(item)
+				continue
+				
 		new_items.append(item)
+
+	max_vinted_item_id = max((item.id for item in accepted_items), default=None)
 
 	return DomainDeltaResult(
 		domain=result.domain,
@@ -791,6 +807,7 @@ async def _select_domain_delta_items(
 		filter_fingerprint=filter_fingerprint,
 		filter_contract_version=FILTER_CONTRACT_VERSION,
 		source_strategy=source_strategy,
+		max_vinted_item_id=max_vinted_item_id,
 	)
 
 
