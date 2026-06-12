@@ -1,4 +1,4 @@
----
+﻿---
 type: component
 project: vintedbot
 tags:
@@ -287,3 +287,5 @@ tags:
 
 - \	ests/test_history_retention_dry_run.py\: Verifies FoundItem and SeenItem retention planning (TTL, caps, preservation of pending items) and strict dry-run behavior.
 
+
+- 2026-06-11: Added 	ests/test_ack_pending_before_resume.py covering the safe suppression of valid pending items. Verifies dry-run safety, live mode cutoff/confirmation requirements, valid brand evidence exclusion by default, and correct monitor/user scoping.

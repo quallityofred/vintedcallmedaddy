@@ -77,15 +77,16 @@ tags:
 - 2026-06-08: Production full-cycle jobs use an asynchronous background task pattern with a process-local job registry. While running, job status shows options and started time; completed status includes the full results payload (e.g., cleanup counts, baseline counts, check results, notification counts). All live operations require explicit `dry_run=False` and are protected by authentication and CSRF.
 - 2026-06-11: `issue/fixed` Stale notification flood after `4aa7696` was treated as a filter-contract baseline problem, not a notification cap problem. `check_monitor()` now persists `MonitorFilterBaseline` rows per monitor/domain and writes newly exposed timestampless missing-brand source-window items as `SeenItem` only. Source-level stale timestamps are also seen-only. FoundItem creation remains limited to genuinely new accepted candidates; all selected domains and per-domain seen boundaries remain preserved.
 - 2026-06-11: `issue/fixed` Broad brand-only source rows are no longer accepted on request-param trust. The active filter contract is `monitor_filter_contract_v4_verified_brand_evidence`; monitor checks only accept brand-filtered items with matching `brand_id` or positive matching brand title/name. Unknown-brand rows from broad API/source windows are skipped before delta decisions, so no new `FoundItem` or pending notification is created for them.
-
+- 2026-06-12: `issue/fixed` Cold-start baseline protection. Fixed issue where old items were sent as new after monitor reset. Updated 'run_monitor_cold_start_reset' to clear 'MonitorFilterBaseline' table; fixed 'check_monitor' to skip baseline updates for failed domains; strengthened fingerprint baseline guard to include all items without timestamps during fingerprint changes.
 
 ## History Retention (Phase B)
 
-- **Service**: \un_history_retention_dry_run\ in \pp/scheduler/retention.py\.
-- **Endpoint**: \POST /api/v1/maintenance/history-retention/dry-run\.
-- **Invariants**: 
+- **Service**: `run_history_retention_dry_run` in `app/scheduler/retention.py`.
+- **Endpoint**: `POST /api/v1/maintenance/history-retention/dry-run`.
+- **Invariants**:
   - Dry-run only: No database mutation in Phase B.
   - FoundItem: Prunes notified=True rows older than 14 days or beyond cap (default 288 per monitor/domain). Always preserves notified=False rows.
   - SeenItem: Prunes rows beyond cap (default 288 per monitor/domain). No TTL pruning in Phase B.
   - Side Effects: No Telegram, no Vinted calls, no baseline runs.
 
+- 2026-06-11: Added `run_ack_pending_before_resume` service for intentional suppression of accumulated valid pending items before re-enabling Telegram. Requires at least one explicit cutoff (cutoff_found_before or cutoff_created_before) and multiple confirmation strings in live mode. Admin-only access enforced via `require_api_admin`.

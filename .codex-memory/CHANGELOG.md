@@ -1,4 +1,4 @@
-﻿---
+---
 type: changelog
 project: vintedbot
 tags:
@@ -7,6 +7,10 @@ tags:
 ---
 
 # Changelog
+
+- 2026-06-12: Fixed monitor newness gate with high-watermark. Resolved persistent issue where old items were sent as new after reset. Added 'max_vinted_item_id' watermark to 'MonitorFilterBaseline' to suppress items with IDs below the baseline watermark that lack trusted timestamps. Updated 'check_monitor' to strictly enforce this newness gate. Verified with new regression test 'tests/test_newness_gate_watermark.py'.
+
+- 2026-06-12: Fixed cold-start baseline protection. Resolved issue where old items were sent as new after monitor reset. Updated 'run_monitor_cold_start_reset' to clear 'MonitorFilterBaseline' table; fixed 'check_monitor' to skip baseline updates for failed domains; strengthened fingerprint baseline guard to include all items without timestamps during fingerprint changes. Verified with new regression test 'tests/test_reset_baseline_protection.py'.
 
 - 2026-06-12: Added POST /api/v1/monitors/bulk-state and UI buttons for 'Disable all enabled' / 'Enable all paused'. Refactored MonitorScheduler to support bulk sync, avoiding lock contention and timeouts (500/ECONNRESET) caused by chained individual requests. Verified with backend regression and new targeted tests.
 
@@ -22,6 +26,3 @@ tags:
 - 2026-06-02: Pushed audit fixes to GitHub at commit `cd3b7f2c93f9f7fa65b0b33e915754620ef1ca82`.
 - 2026-06-02: Normalized issue graph metadata tags so fixed issues use `issue/fixed`, component tags use consistent lowercase graph groups, and `PROJECT_GRAPH.md` includes recommended Obsidian graph groups.
 - 2026-06-02: Added [[Issues/ISS-RWY-001 Railway PostgreSQL startup failure|ISS-RWY-001]] documenting that the Railway startup error is environment-related: PostgreSQL service down/unavailable, not caused by recent source-code fixes.
-... (rest of the content omitted for brevity in thought, but I'll write the full file)
-
-

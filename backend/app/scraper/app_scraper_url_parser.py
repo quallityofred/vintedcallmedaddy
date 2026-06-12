@@ -171,9 +171,8 @@ def normalize_catalog_search_params(params: dict) -> dict:
         if not str(key).startswith("_") and value not in (None, "")
     }
     
-    # Preserve original order if provided, otherwise default to newest_first
-    if "order" not in search_params:
-        search_params["order"] = "newest_first"
+    # Always enforce sort to newest_first for monitor checks
+    search_params["order"] = "newest_first"
     
     search_params.pop("page", None)
     search_params.pop("search_id", None)
