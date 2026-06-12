@@ -486,8 +486,14 @@ def _source_item_is_stale(context: MonitorCheckContext, item: VintedItem) -> boo
 
 
 def _requires_filter_contract_baseline(context: MonitorCheckContext, item: VintedItem) -> bool:
-	"""No-notify baseline the semantic gap introduced by trusting brand-filtered source pages."""
-	return bool(context.monitor_filters.brand_ids and item.brand_id is None and item.listed_at is None)
+	"""
+	No-notify baseline items during fingerprint changes or first-time domain checks.
+	We baseline anything that lacks a trusted timestamp because it might be an old item
+	that just appeared on the first page.
+	"""
+	if item.listed_at is None:
+		return True
+	return bool(context.monitor_filters.brand_ids and item.brand_id is None)
 
 
 async def _upsert_filter_baselines(
@@ -499,6 +505,12 @@ async def _upsert_filter_baselines(
 ) -> None:
 	for delta in domain_deltas:
 		if not delta.filter_fingerprint or not delta.source_strategy:
+			continue
+		if delta.error:
+			logger.info(
+				"Skipping filter baseline update for monitor_id=%s domain=%s due to error: %s",
+				context.monitor_id, delta.domain, delta.error
+			)
 			continue
 		baseline = await _load_filter_baseline(
 			db,

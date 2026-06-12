@@ -190,9 +190,13 @@ async def test_cold_start_reset_endpoint_guards(db_session, client):
     db_session.add(monitor)
     await db_session.commit()
 
-    from app.web.api_dependencies import require_api_user
+    from app.web.api_dependencies import require_api_user, require_api_admin
     from app.web.csrf import require_api_csrf
+    user.is_admin = True
+    await db_session.commit()
+    
     app.dependency_overrides[require_api_user] = lambda: user
+    app.dependency_overrides[require_api_admin] = lambda: user
     app.dependency_overrides[require_api_csrf] = lambda: None
 
     # 1. No reason

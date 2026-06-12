@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Monitor, SeenItem, FoundItem
+from app.models import Monitor, SeenItem, FoundItem, MonitorFilterBaseline
 from app.scheduler.tasks import is_monitor_check_running
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ async def run_monitor_cold_start_reset(
     domains: Optional[List[str]] = None,
     clear_seen_items: bool = True,
     clear_found_items: bool = False,
+    clear_filter_baselines: bool = True,
     reset_last_checked: bool = True,
     require_monitor_inactive: bool = True,
     sample_limit: int = 10
@@ -45,6 +46,8 @@ async def run_monitor_cold_start_reset(
         "deleted_seen_items": 0,
         "would_delete_found_items": 0,
         "deleted_found_items": 0,
+        "would_delete_filter_baselines": 0,
+        "deleted_filter_baselines": 0,
         "pending_found_items_count": 0,
         "would_reset_last_checked": False,
         "reset_last_checked": False,
@@ -54,6 +57,7 @@ async def run_monitor_cold_start_reset(
         "side_effects": {
             "deletes_seen_items": False,
             "deletes_found_items": False,
+            "deletes_filter_baselines": False,
             "sends_telegram": False,
             "calls_vinted": False,
             "runs_baseline": False,
@@ -101,6 +105,12 @@ async def run_monitor_cold_start_reset(
                 "seen_at": s.seen_at.isoformat() if s.seen_at else None
             })
 
+    if clear_filter_baselines:
+        stmt = select(func.count(MonitorFilterBaseline.id)).where(MonitorFilterBaseline.monitor_id == monitor_id)
+        if target_domains:
+            stmt = stmt.where(MonitorFilterBaseline.domain.in_(target_domains))
+        result["would_delete_filter_baselines"] = await db.scalar(stmt) or 0
+
     if clear_found_items:
         stmt = select(func.count(FoundItem.id)).where(FoundItem.monitor_id == monitor_id)
         if target_domains:
@@ -132,6 +142,14 @@ async def run_monitor_cold_start_reset(
             del_res = await db.execute(del_stmt)
             result["deleted_seen_items"] = del_res.rowcount
             result["side_effects"]["deletes_seen_items"] = del_res.rowcount > 0
+
+        if clear_filter_baselines:
+            del_stmt = delete(MonitorFilterBaseline).where(MonitorFilterBaseline.monitor_id == monitor_id)
+            if target_domains:
+                del_stmt = del_stmt.where(MonitorFilterBaseline.domain.in_(target_domains))
+            del_res = await db.execute(del_stmt)
+            result["deleted_filter_baselines"] = del_res.rowcount
+            result["side_effects"]["deletes_filter_baselines"] = del_res.rowcount > 0
 
         if clear_found_items:
             # We already expect confirmations to be handled in the router
