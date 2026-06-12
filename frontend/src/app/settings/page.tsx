@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { AlertTriangle, CheckCircle2, Cog, Globe, KeyRound, Loader2, Send } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { getTelegramTopicSettings, patchTelegramTopicSettings, verifyTelegramTopicGroup, TelegramTopicSettings } from "@/lib/telegram-topics";
 
@@ -14,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAsyncActions } from "@/hooks/use-async-actions";
+import { cn } from "@/lib/utils";
 import { 
     Select, 
     SelectContent, 
@@ -317,15 +319,54 @@ function SettingsContent() {
       <AnimatedSection className="grid gap-5">
         <Card className="glass-panel">
           <CardHeader className="border-b border-white/10 p-4 sm:p-6">
-            <CardTitle className="flex items-center gap-2">
-              <Send className="size-4 text-emerald-200" />
-              Telegram Topics
-            </CardTitle>
-            <CardDescription>Send each monitor’s notifications into a separate Telegram group topic.</CardDescription>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-2">
+                <CardTitle className="flex items-center gap-2">
+                  <Send className="size-4 text-emerald-200" />
+                  Telegram Topics
+                </CardTitle>
+                <CardDescription>Send each monitor’s notifications into a separate Telegram group topic.</CardDescription>
+              </div>
+              {topicSettings && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "w-fit",
+                    topicSettings.chat_configured
+                      ? "border-emerald-300/20 text-emerald-200"
+                      : "border-white/15 text-muted-foreground",
+                  )}
+                >
+                  {topicSettings.chat_configured ? topicSettings.chat_id_masked || "Configured" : "Not configured"}
+                </Badge>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="space-y-5 p-4 sm:p-6">
               {topicSettings ? (
                   <>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Target group</p>
+                        <p className="mt-2 text-sm font-medium">
+                          {topicSettings.chat_configured ? topicSettings.chat_id_masked || "Configured" : "Not configured"}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Status</p>
+                        <p className="mt-2 inline-flex items-center gap-2 text-sm font-medium">
+                          {topicSettings.enabled ? (
+                            <>
+                              <CheckCircle2 className="size-4 text-emerald-200" />
+                              Enabled
+                            </>
+                          ) : (
+                            "Disabled"
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
                     <div className="flex items-center space-x-2">
                         <Checkbox 
                             id="topicsEnabled" 

@@ -3,6 +3,8 @@ export interface TelegramTopicSettings {
   enabled: boolean;
   telegram_topics_enabled?: boolean;
   chat_id?: string;
+  chat_configured: boolean;
+  chat_id_masked: string;
   auto_create: boolean;
   recreate_deleted: boolean;
   fallback_to_main_chat: boolean;

@@ -49,6 +49,9 @@ export function FoundItemsList() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchItems();
+
+    const interval = setInterval(fetchItems, 30 * 1000);
+    return () => clearInterval(interval);
   }, [fetchItems]);
 
   const getCsrfToken = async () => {

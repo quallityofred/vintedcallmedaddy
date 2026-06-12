@@ -46,6 +46,9 @@ export function DashboardStats() {
       }
     }
     void fetchStats();
+
+    const interval = setInterval(fetchStats, 30 * 1000);
+    return () => clearInterval(interval);
   }, [pathname, router]);
 
   const cards = [

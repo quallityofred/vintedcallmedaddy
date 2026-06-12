@@ -91,8 +91,11 @@ export function BackendHealthCard() {
 
     void loadHealth();
 
+    const interval = setInterval(loadHealth, 15 * 1000);
+
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [fetchHealth]);
 

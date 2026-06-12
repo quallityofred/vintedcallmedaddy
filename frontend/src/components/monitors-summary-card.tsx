@@ -47,8 +47,12 @@ export function MonitorsSummaryCard() {
     }
 
     void loadStats();
+
+    const interval = setInterval(loadStats, 30 * 1000);
+
     return () => {
       active = false;
+      clearInterval(interval);
     };
   }, []);
 

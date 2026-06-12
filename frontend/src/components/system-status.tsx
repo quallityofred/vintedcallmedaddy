@@ -34,6 +34,9 @@ export function SystemStatusCard() {
       }
     }
     void fetchStatus();
+
+    const interval = setInterval(fetchStatus, 15 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) {
