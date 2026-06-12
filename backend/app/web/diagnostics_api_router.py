@@ -1216,9 +1216,16 @@ async def audit_monitor_baseline(
     }
 
 
-@router.get("/ping")
-async def ping_diag(user: User = Depends(require_api_admin)):
-    return {"ok": True, "user_id": user.id, "username": user.username}
+@router.get("/schema/{table_name}")
+async def inspect_table(
+    table_name: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_api_admin),
+):
+    """Inspect table schema in production."""
+    result = await db.execute(text(f"SELECT column_name FROM information_schema.columns WHERE table_name = :table_name"), {"table_name": table_name})
+    columns = [row[0] for row in result.fetchall()]
+    return {"table": table_name, "columns": columns}
 
 
 @router.get("/monitors/{monitor_id}/scrape-baseline-audit")
