@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     peak_end_hour: int = 23
     offpeak_interval_multiplier: float = 2.5
     night_interval_multiplier: float = 5.0
+    diagnostic_api_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
