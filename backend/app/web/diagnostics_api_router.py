@@ -1223,9 +1223,13 @@ async def inspect_table(
     user: User = Depends(require_api_admin),
 ):
     """Inspect table schema in production."""
-    result = await db.execute(text(f"SELECT column_name FROM information_schema.columns WHERE table_name = :table_name"), {"table_name": table_name})
-    columns = [row[0] for row in result.fetchall()]
-    return {"table": table_name, "columns": columns}
+    try:
+        result = await db.execute(text(f"SELECT column_name FROM information_schema.columns WHERE table_name = :table_name"), {"table_name": table_name})
+        columns = [row[0] for row in result.fetchall()]
+        return {"table": table_name, "columns": columns}
+    except Exception as exc:
+        logger.exception("inspect_table failed for table=%s", table_name)
+        return {"error": str(exc), "type": type(exc).__name__}
 
 
 @router.get("/monitors/{monitor_id}/scrape-baseline-audit")
