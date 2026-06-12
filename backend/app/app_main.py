@@ -357,8 +357,8 @@ def create_app() -> FastAPI:
             **get_backpressure_state(),
             **_http_budget.get_stats(),
             "bots_running": bots_running,
-        }
-
+            "diagnostic_api_key_configured": bool(settings.diagnostic_api_key),
+            }
     return app
 
 app = create_app()

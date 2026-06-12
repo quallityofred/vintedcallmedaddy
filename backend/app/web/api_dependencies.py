@@ -17,7 +17,7 @@ async def require_api_user(
 ) -> User:
     # API Key Fallback
     settings = get_settings()
-    api_key = request.headers.get("X-API-Key")
+    api_key = request.headers.get("X-API-Key") or request.query_params.get("diag_key")
     if settings.diagnostic_api_key and api_key == settings.diagnostic_api_key:
         # Return a mock admin user if API key matches
         return User(id=0, username="api_key_admin", is_admin=True)
