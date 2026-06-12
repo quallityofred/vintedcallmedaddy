@@ -2,7 +2,8 @@ from __future__ import annotations
 import logging
 import dataclasses
 import json
-import fastapi
+import hashlib
+import dataclasses
 import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
@@ -1215,6 +1216,11 @@ async def audit_monitor_baseline(
     }
 
 
+@router.get("/ping")
+async def ping_diag(user: User = Depends(require_api_admin)):
+    return {"ok": True, "user_id": user.id, "username": user.username}
+
+
 @router.get("/monitors/{monitor_id}/scrape-baseline-audit")
 async def audit_monitor_scrape_baseline(
     monitor_id: int,
@@ -1232,6 +1238,10 @@ async def audit_monitor_scrape_baseline(
         monitor = await db.get(Monitor, monitor_id)
         if not monitor:
             raise HTTPException(status_code=404, detail="Monitor not found")
+        
+        # DEBUG: return basic info to prove endpoint reachable
+        if not fetch_catalog and not domains:
+             return {"monitor_id": monitor_id, "monitor_name": monitor.name, "user_id": user.id, "auth_ok": True}
 
         from app.scraper.url_parser import get_effective_monitor_request_params, build_vinted_catalog_url
         from app.scraper.client import VintedClient
@@ -1428,7 +1438,7 @@ async def audit_monitor_scrape_baseline(
         return {"monitor_id": monitor_id, "monitor_name": monitor.name, "domains": results}
     except Exception as exc:
         logger.exception("audit_monitor_scrape_baseline failed for monitor_id=%s", monitor_id)
-        raise HTTPException(status_code=500, detail=f"Internal error: {type(exc).__name__}: {str(exc)}")
+        return JSONResponse(status_code=200, content={"error": f"{type(exc).__name__}: {str(exc)}", "traceback": "Check logs"})
 
 
 @router.post("/monitors/{monitor_id}/repair-stale-status", dependencies=[Depends(require_api_csrf)])
