@@ -15,7 +15,7 @@ from typing import Any, Optional
 from app.web.api_dependencies import require_api_user, require_api_admin
 from app.web.csrf import require_api_csrf
 from app.web.dependencies import get_db
-from app.models import User, Monitor, FoundItem, SeenItem
+from app.models import User, Monitor, FoundItem, SeenItem, MonitorFilterBaseline
 from app.scheduler.diagnostics import registry
 from app.scheduler.dry_run import (
     perform_monitor_baseline_seen,
@@ -1228,197 +1228,207 @@ async def audit_monitor_scrape_baseline(
     user: User = Depends(require_api_admin),
 ):
     """Read-only diagnostic: bounded scrape and baseline state audit."""
-    monitor = await db.get(Monitor, monitor_id)
-    if not monitor:
-        raise HTTPException(status_code=404, detail="Monitor not found")
-
-    from app.scraper.url_parser import get_effective_monitor_request_params, build_vinted_catalog_url
-    from app.scraper.client import VintedClient
-    from app.scheduler.tasks import (
-        _load_filter_baseline, 
-        _filter_fingerprint, 
-        _load_seen_item_ids, 
-        _load_found_item_ids,
-        _source_item_is_stale,
-        _requires_filter_contract_baseline
-    )
-    from app.scraper.monitor_filters import extract_monitor_filters
-    from app.scheduler.vinted_rate_limiter import VintedRateLimiter
-    from app.scheduler.tasks import MonitorCheckContext
-
-    # Resolve domains
-    selected_domains = json.loads(monitor.domains_json or "[]")
-    if domains:
-        target_domains = [d.strip() for d in domains.split(",")]
-        selected_domains = [d for d in selected_domains if d in target_domains]
-
-    if not selected_domains:
-        return {"monitor_id": monitor_id, "monitor_name": monitor.name, "domains": {}, "warning": "No domains selected or matched"}
-
-    effective_params = get_effective_monitor_request_params(monitor.params_json or "{}", monitor.original_url)
-    monitor_filters = extract_monitor_filters(effective_params)
-    
-    # Context required for fingerprinter and stale check
-    context = MonitorCheckContext(
-        monitor_id=monitor_id,
-        user_id=monitor.user_id,
-        monitor_name=monitor.name,
-        params=json.loads(monitor.params_json or "{}"),
-        original_url=monitor.original_url,
-        domains=selected_domains,
-        monitor_filters=monitor_filters,
-        hidden_seller_ids=set(),
-        is_cold_start=False,
-        freshness_cutoff_at=datetime.now(timezone.utc) - timedelta(hours=24),
-        original_interval=0,
-        cf_worker_url=None,
-        cf_worker_mode="auto",
-        cf_worker_block_threshold=2.0,
-        cf_worker_recovery_minutes=10
-    )
-
-    filter_fingerprint, source_strategy = _filter_fingerprint(context)
-
-    results = {}
-    
-    # We need a client to fetch. Use a dummy rate limiter to avoid blocking production
-    limiter = VintedRateLimiter(global_rpm=60, domain_rpm=60)
-    client = VintedClient(rate_limiter=limiter)
-
     try:
-        for domain in selected_domains:
-            domain_res = {
-                "monitor_id": monitor_id,
-                "monitor_name": monitor.name,
-                "domain": domain,
-                "effective_url": build_vinted_catalog_url(monitor.original_url, domain, effective_params),
-                "filter_fingerprint": filter_fingerprint,
-                "fetch_catalog": fetch_catalog,
-                "fetch_cap": max_items_per_domain,
-            }
+        monitor = await db.get(Monitor, monitor_id)
+        if not monitor:
+            raise HTTPException(status_code=404, detail="Monitor not found")
 
-            # Baseline state
-            baseline = await _load_filter_baseline(db, monitor_id=monitor_id, domain=domain)
-            domain_res["current_baseline_exists"] = baseline is not None
-            domain_res["current_baseline_max_vinted_item_id"] = baseline.max_vinted_item_id if baseline else None
-            domain_res["current_baseline_baselined_at"] = baseline.baselined_at.isoformat() if baseline else None
-            domain_res["current_baseline_updated_at"] = baseline.updated_at.isoformat() if baseline else None
+        from app.scraper.url_parser import get_effective_monitor_request_params, build_vinted_catalog_url
+        from app.scraper.client import VintedClient
+        from app.scheduler.tasks import (
+            _load_filter_baseline, 
+            _filter_fingerprint, 
+            _load_seen_item_ids, 
+            _load_found_item_ids,
+            _source_item_is_stale,
+            _requires_filter_contract_baseline,
+            MonitorCheckContext
+        )
+        from app.scraper.monitor_filters import extract_monitor_filters
+        from app.scheduler.vinted_rate_limiter import VintedRateLimiter
 
-            if fetch_catalog:
-                # Scrape (bounded)
-                search_params = dict(effective_params)
-                search_params["per_page"] = max_items_per_domain
-                
-                domain_url = build_vinted_catalog_url(monitor.original_url, domain, search_params)
-                from app.scraper.hydration_parser import hydration_record_to_vinted_item
-                
-                try:
-                    hydration_items = await client.fetch_catalog_hydration_items(domain_url, domain=domain)
-                    items = [hydration_record_to_vinted_item(i, domain) for i in hydration_items]
-                    # Respect cap if scraper returns more
-                    items = items[:max_items_per_domain]
-                    domain_res["fetch_status"] = "success"
-                    logger.debug("Diag fetched %s items from %s", len(items), domain)
-                except Exception as exc:
-                    logger.exception("Diag fetch failed for %s", domain)
-                    items = []
-                    domain_res["fetch_status"] = f"error: {type(exc).__name__}"
+        # Resolve domains
+        selected_domains = json.loads(monitor.domains_json or "[]")
+        if domains:
+            target_domains = [d.strip() for d in domains.split(",")]
+            selected_domains = [d for d in selected_domains if d in target_domains]
 
-                domain_res["raw_item_count"] = len(items)
-                
-                # Check IDs order
-                ids = [item.id for item in items]
-                domain_res["item_ids_sample"] = ids[:sample_limit]
-                domain_res["item_ids_numeric_count"] = sum(1 for id in ids if isinstance(id, int))
-                
-                inversions = 0
-                for i in range(len(ids) - 1):
-                    if ids[i] < ids[i+1]:
-                        inversions += 1
-                domain_res["ids_strictly_descending"] = (inversions == 0)
-                domain_res["ids_inversions_count"] = inversions
-                domain_res["max_fetched_item_id"] = max(ids, default=None)
-                domain_res["min_fetched_item_id"] = min(ids, default=None)
+        if not selected_domains:
+            return {"monitor_id": monitor_id, "monitor_name": monitor.name, "domains": {}, "warning": "No domains selected or matched"}
 
-                # Simulate gating
-                seen_lookup_ids = set(ids)
-                seen_ids = set()
-                if include_seen_lookup:
-                    seen_ids = await _load_seen_item_ids(db, monitor_id, domain, seen_lookup_ids)
-                
-                found_ids = set()
-                if include_found_lookup:
-                    # _load_found_item_ids returns (global_found, domain_found)
-                    found_ids_tuple = await _load_found_item_ids(db, monitor_id, domain, seen_lookup_ids)
-                    found_ids = found_ids_tuple[0]
-                
-                known_ids = seen_ids | found_ids
-                domain_res["seen_existing_count"] = len(seen_ids)
-                domain_res["found_existing_count"] = len(found_ids)
-                domain_res["seen_missing_count"] = len(seen_lookup_ids - seen_ids)
+        try:
+            params_dict = json.loads(monitor.params_json or "{}")
+            if not isinstance(params_dict, dict):
+                params_dict = {}
+        except Exception:
+            params_dict = {}
 
-                would_send = []
-                would_suppress = []
-                suppress_reasons = {}
+        effective_params = get_effective_monitor_request_params(monitor.params_json or "{}", monitor.original_url)
+        monitor_filters = extract_monitor_filters(effective_params)
+        
+        # Context required for fingerprinter and stale check
+        context = MonitorCheckContext(
+            monitor_id=monitor_id,
+            user_id=monitor.user_id,
+            monitor_name=monitor.name,
+            params=params_dict,
+            original_url=monitor.original_url,
+            domains=selected_domains,
+            monitor_filters=monitor_filters,
+            hidden_seller_ids=set(),
+            is_cold_start=False,
+            freshness_cutoff_at=datetime.now(timezone.utc) - timedelta(hours=24),
+            original_interval=0,
+            cf_worker_url=None,
+            cf_worker_mode="auto",
+            cf_worker_block_threshold=2.0,
+            cf_worker_recovery_minutes=10
+        )
 
-                def record_suppress(reason, item_id):
-                    would_suppress.append(item_id)
-                    suppress_reasons[reason] = suppress_reasons.get(reason, 0) + 1
+        filter_fingerprint, source_strategy = _filter_fingerprint(context)
 
-                first_seen_pos = None
-                for idx, item in enumerate(items):
-                    suppressed = False
-                    if item.id in known_ids:
-                        if first_seen_pos is None:
-                            first_seen_pos = idx
-                        record_suppress("already_seen", item.id)
-                        # Match tasks.py stop-at-first-seen logic
-                        break
+        results = {}
+        
+        # We need a client to fetch. Use a dummy rate limiter to avoid blocking production
+        limiter = VintedRateLimiter(global_rpm=60, domain_rpm=60)
+        client = VintedClient(rate_limiter=limiter)
+
+        try:
+            for domain in selected_domains:
+                domain_res = {
+                    "monitor_id": monitor_id,
+                    "monitor_name": monitor.name,
+                    "domain": domain,
+                    "effective_url": build_vinted_catalog_url(monitor.original_url, domain, effective_params),
+                    "filter_fingerprint": filter_fingerprint,
+                    "fetch_catalog": fetch_catalog,
+                    "fetch_cap": max_items_per_domain,
+                }
+
+                # Baseline state
+                baseline = await _load_filter_baseline(db, monitor_id=monitor_id, domain=domain)
+                domain_res["current_baseline_exists"] = baseline is not None
+                domain_res["current_baseline_max_vinted_item_id"] = baseline.max_vinted_item_id if baseline else None
+                domain_res["current_baseline_baselined_at"] = baseline.baselined_at.isoformat() if baseline and baseline.baselined_at else None
+                domain_res["current_baseline_updated_at"] = baseline.updated_at.isoformat() if baseline and baseline.updated_at else None
+
+                if fetch_catalog:
+                    # Scrape (bounded)
+                    search_params = dict(effective_params)
+                    search_params["per_page"] = max_items_per_domain
                     
-                    if _source_item_is_stale(context, item):
-                        record_suppress("untrusted_timestamp_old_or_unknown", item.id)
-                        suppressed = True
+                    domain_url = build_vinted_catalog_url(monitor.original_url, domain, search_params)
+                    from app.scraper.hydration_parser import hydration_record_to_vinted_item
+                    
+                    try:
+                        hydration_items = await client.fetch_catalog_hydration_items(domain_url, domain=domain)
+                        items = [hydration_record_to_vinted_item(i, domain) for i in hydration_items]
+                        # Respect cap if scraper returns more
+                        items = items[:max_items_per_domain]
+                        domain_res["fetch_status"] = "success"
+                    except Exception as exc:
+                        logger.warning("Diag fetch failed for domain=%s: %s", domain, exc)
+                        items = []
+                        domain_res["fetch_status"] = f"error: {type(exc).__name__}"
+
+                    domain_res["raw_item_count"] = len(items)
+                    
+                    # Check IDs order
+                    ids = [item.id for item in items]
+                    domain_res["item_ids_sample"] = ids[:sample_limit]
+                    domain_res["item_ids_numeric_count"] = sum(1 for id in ids if isinstance(id, int))
+                    
+                    inversions = 0
+                    for i in range(len(ids) - 1):
+                        if ids[i] < ids[i+1]:
+                            inversions += 1
+                    domain_res["ids_strictly_descending"] = (inversions == 0)
+                    domain_res["ids_inversions_count"] = inversions
+                    domain_res["max_fetched_item_id"] = max(ids, default=None)
+                    domain_res["min_fetched_item_id"] = min(ids, default=None)
+
+                    # Simulate gating
+                    seen_lookup_ids = set(ids)
+                    seen_ids = set()
+                    if include_seen_lookup:
+                        seen_ids = await _load_seen_item_ids(db, monitor_id, domain, seen_lookup_ids)
+                    
+                    found_ids = set()
+                    if include_found_lookup:
+                        # _load_found_item_ids returns (global_found, domain_found)
+                        found_ids_tuple = await _load_found_item_ids(db, monitor_id, domain, seen_lookup_ids)
+                        found_ids = found_ids_tuple[0]
+                    
+                    known_ids = seen_ids | found_ids
+                    domain_res["seen_existing_count"] = len(seen_ids)
+                    domain_res["found_existing_count"] = len(found_ids)
+                    domain_res["seen_missing_count"] = len(seen_lookup_ids - seen_ids)
+
+                    would_send = []
+                    would_suppress = []
+                    suppress_reasons = {}
+
+                    def record_suppress(reason, item_id):
+                        would_suppress.append(item_id)
+                        suppress_reasons[reason] = suppress_reasons.get(reason, 0) + 1
+
+                    first_seen_pos = None
+                    for idx, item in enumerate(items):
+                        suppressed = False
+                        if item.id in known_ids:
+                            if first_seen_pos is None:
+                                first_seen_pos = idx
+                            record_suppress("already_seen", item.id)
+                            # Match tasks.py stop-at-first-seen logic
+                            break
                         
-                    if not suppressed and (baseline is None or baseline.filter_fingerprint != filter_fingerprint):
-                         if _requires_filter_contract_baseline(context, item):
-                             record_suppress("baseline_pending", item.id)
-                             suppressed = True
-                    
-                    if not suppressed and item.listed_at is None and baseline and baseline.max_vinted_item_id is not None:
-                        if item.id <= baseline.max_vinted_item_id:
-                            record_suppress("below_or_equal_watermark", item.id)
+                        if _source_item_is_stale(context, item):
+                            record_suppress("untrusted_timestamp_old_or_unknown", item.id)
                             suppressed = True
+                            
+                        if not suppressed and (baseline is None or baseline.filter_fingerprint != filter_fingerprint):
+                             if _requires_filter_contract_baseline(context, item):
+                                 record_suppress("baseline_pending", item.id)
+                                 suppressed = True
+                        
+                        if not suppressed and item.listed_at is None and baseline and baseline.max_vinted_item_id is not None:
+                            if item.id <= baseline.max_vinted_item_id:
+                                record_suppress("below_or_equal_watermark", item.id)
+                                suppressed = True
 
-                    if not suppressed:
-                        would_send.append(item.id)
+                        if not suppressed:
+                            would_send.append(item.id)
 
-                domain_res["would_create_sendable_found_count"] = len(would_send)
-                domain_res["would_suppress_count"] = len(would_suppress)
-                domain_res["would_suppress_by_reason"] = suppress_reasons
-                domain_res["would_send_candidates_sample"] = would_send[:sample_limit]
-                domain_res["would_suppress_sample"] = would_suppress[:sample_limit]
-                domain_res["first_seen_position"] = first_seen_pos
-                domain_res["first_seen_item_id"] = items[first_seen_pos].id if first_seen_pos is not None else None
+                    domain_res["would_create_sendable_found_count"] = len(would_send)
+                    domain_res["would_suppress_count"] = len(would_suppress)
+                    domain_res["would_suppress_by_reason"] = suppress_reasons
+                    domain_res["would_send_candidates_sample"] = would_send[:sample_limit]
+                    domain_res["would_suppress_sample"] = would_suppress[:sample_limit]
+                    domain_res["first_seen_position"] = first_seen_pos
+                    domain_res["first_seen_item_id"] = items[first_seen_pos].id if (first_seen_pos is not None and first_seen_pos < len(items)) else None
 
-                # Gate Status
-                domain_res["watermark_gate_status"] = "implemented_and_active" if baseline and baseline.max_vinted_item_id else "implemented_but_no_baseline_watermark"
-                
-                # Newness safety check
-                untrusted_sendable = [sid for sid in would_send if next((it for it in items if it.id == sid), None).listed_at is None]
-                if untrusted_sendable and not (baseline and baseline.max_vinted_item_id):
-                    domain_res["newness_gate_status"] = "unsafe_no_watermark"
-                else:
-                    domain_res["newness_gate_status"] = "safe"
+                    # Gate Status
+                    domain_res["watermark_gate_status"] = "implemented_and_active" if baseline and baseline.max_vinted_item_id else "implemented_but_no_baseline_watermark"
+                    
+                    # Newness safety check
+                    untrusted_sendable = [sid for sid in would_send if next((it for it in items if it.id == sid), None).listed_at is None]
+                    if untrusted_sendable and not (baseline and baseline.max_vinted_item_id):
+                        domain_res["newness_gate_status"] = "unsafe_no_watermark"
+                    else:
+                        domain_res["newness_gate_status"] = "safe"
 
-                if not (baseline and baseline.max_vinted_item_id):
-                    domain_res.setdefault("warnings", []).append("NO_WATERMARK_FOR_UNTRUSTED_TIMESTAMP_ITEMS")
+                    if not (baseline and baseline.max_vinted_item_id):
+                        domain_res.setdefault("warnings", []).append("NO_WATERMARK_FOR_UNTRUSTED_TIMESTAMP_ITEMS")
 
-            results[domain] = domain_res
+                results[domain] = domain_res
 
-    finally:
-        await client.close()
+        finally:
+            await client.close()
 
-    return {"monitor_id": monitor_id, "monitor_name": monitor.name, "domains": results}
+        return {"monitor_id": monitor_id, "monitor_name": monitor.name, "domains": results}
+    except Exception as exc:
+        logger.exception("audit_monitor_scrape_baseline failed for monitor_id=%s", monitor_id)
+        raise HTTPException(status_code=500, detail=f"Internal error: {type(exc).__name__}: {str(exc)}")
 
 
 @router.post("/monitors/{monitor_id}/repair-stale-status", dependencies=[Depends(require_api_csrf)])
