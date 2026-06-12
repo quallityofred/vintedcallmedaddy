@@ -391,6 +391,7 @@ async def validate_and_migrate_db(conn) -> None:
         await conn.execute(text("ALTER TABLE monitor_filter_baselines ADD COLUMN max_vinted_item_id BIGINT"))
         logger.info("Added 'max_vinted_item_id' to 'monitor_filter_baselines'")
 
+    columns_seen = await conn.run_sync(get_columns, "seen_items")
     if "user_id" not in columns_seen:
         logger.warning("Migration: adding 'user_id' to 'seen_items'")
         await conn.execute(
