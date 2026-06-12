@@ -385,7 +385,11 @@ async def validate_and_migrate_db(conn) -> None:
     except Exception as e:
         logger.warning("Note: Could not ensure auth lookup indexes: %s", e)
 
-    columns_seen = await conn.run_sync(get_columns, "seen_items")
+    columns_baseline = await conn.run_sync(get_columns, "monitor_filter_baselines")
+    if "max_vinted_item_id" not in columns_baseline:
+        logger.warning("Migration: adding 'max_vinted_item_id' to 'monitor_filter_baselines'")
+        await conn.execute(text("ALTER TABLE monitor_filter_baselines ADD COLUMN max_vinted_item_id BIGINT"))
+        logger.info("Added 'max_vinted_item_id' to 'monitor_filter_baselines'")
 
     if "user_id" not in columns_seen:
         logger.warning("Migration: adding 'user_id' to 'seen_items'")
